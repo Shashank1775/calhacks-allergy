@@ -18,6 +18,7 @@ from kitchen.interactions.settings import InteractionSettings
 from kitchen.interactions.tests.scenes import KNIFE, SCENES, ZONES
 from kitchen.shared.contract_tests import contract_fixture
 from kitchen.shared.models import CONTRACTS_DIR, schema_validator, validate
+from kitchen.vision.common import VisionSettings
 
 SETTINGS = InteractionSettings()
 KINDS = zone_kinds(ZONES)
@@ -123,6 +124,30 @@ def test_dwell_survives_a_short_detector_miss_and_restarts_after_a_long_one():
     assert dwell_at(100) == 100
     assert dwell_at(100 + SETTINGS.pair_gap_ms) == 100 + SETTINGS.pair_gap_ms  # missed for pair_gap_ms: kept
     assert dwell_at(200 + 2 * SETTINGS.pair_gap_ms) == 0  # missed for longer: starts over
+
+
+@pytest.mark.safety
+def test_a_self_pair_in_the_sink_bridges_a_loss_as_long_as_the_tracker_keeps_its_id_without_counting_it():
+    """One rinse must stay one wash (two would clean twice): a knife unseen in the sink for up to wash_gap_ms keeps
+    its dwell. The unseen time isn't counted as rinsing, though, since the knife may not have been under the water."""
+    tracker = FeatureTracker(KINDS, SETTINGS, ASPECT)
+    knife = {"entity_id": KNIFE, "kind": "tool", "box": [0.15, 0.78, 0.18, 0.86], "zone": "wash"}
+
+    def dwell_at(t_ms: int) -> int:
+        frame = {"frame_id": t_ms, "t_ms": t_ms, "detections": [knife]}
+        return tracker.update(frame, [(knife, knife)])[0]["dwell_ms"]
+
+    gap = SETTINGS.wash_gap_ms
+    assert dwell_at(0) == 0
+    assert dwell_at(100) == 100
+    assert dwell_at(100 + gap) == 100  # unseen for wash_gap_ms: kept, but not counted
+    assert dwell_at(200 + gap) == 200
+    assert dwell_at(201 + 2 * gap) == 0  # unseen for longer: starts over
+
+
+def test_the_wash_gap_covers_the_vision_trackers_lost_track_horizon():
+    """Vision keeps an entity's ID through a loss of up to track_lost_ms; a wash must bridge at least that long."""
+    assert SETTINGS.wash_gap_ms >= VisionSettings().track_lost_ms
 
 
 def test_wrist_proximity_is_a_distance_near_a_wrist_and_null_otherwise():

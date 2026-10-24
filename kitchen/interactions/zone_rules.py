@@ -8,13 +8,16 @@ Rules: 7 always available, the fallback for everything else; 6 reads only allerg
        wash zone, a long dwell and a high probability, and only a self pair (a_id == b_id) can be a wash
 
 The rules, newest feature row first:
-- clean.wash: a self pair (a tool or hand paired with itself) in a wash zone for wash_min_dwell_ms.
+- clean.wash: a self pair (a tool or hand paired with itself) in a wash zone for wash_min_dwell_ms. The Segmenter
+  (events.py) also needs that long since a transfer last touched it.
 - transfer.scoop: a tool overlapping a bin, inside that bin's slot, for scoop_min_ms.
 - transfer.contact: any pair overlapping for contact_min_ms. A scoop is a contact too, so both are returned: the scoop
   moves food bin to tool, and the contact lets a dirty tool dirty the bin (allergens move both ways).
+Both durations count from one frame interval before the overlap was first seen, so they don't depend on the frame rate.
 - unimportant otherwise: hovering near, or passing over without staying.
 """
 
+import math
 from collections.abc import Sequence
 
 from kitchen.interactions.candidates import WASHABLE_KINDS
@@ -23,21 +26,33 @@ from kitchen.shared.interfaces import PairWindow
 from kitchen.shared.models import Action, InteractionFeatures
 
 # Bumped when a rule changes; the settings digest after it changes whenever a constant does.
-RULES_VERSION = "1.0.0"
+RULES_VERSION = "1.1.0"
 
 NOTHING: list[tuple[Action, float]] = [("unimportant", 1.0)]
+
+
+def frame_interval_ms(rows: Sequence[InteractionFeatures]) -> int:
+    """The window's typical time between rows, in whole milliseconds rounded up; 0 for a single row.
+
+    Rounded up because timestamps are whole milliseconds: rounding down could lose a touch that lasted exactly a
+    threshold, and a false contact only holds a plate.
+    """
+    if len(rows) < 2:
+        return 0
+    return math.ceil((rows[-1]["t_ms"] - rows[0]["t_ms"]) / (len(rows) - 1))
 
 
 def overlap_ms(rows: Sequence[InteractionFeatures], min_overlap: float) -> int:
     """How long the pair has been overlapping, up to the newest row: 0 unless the newest row overlaps.
 
-    Measured from the first overlapping row in the window, so one jittery frame doesn't restart the count, and in
-    milliseconds, so it means the same at any FPS.
+    Measured from the first overlapping row in the window, so one jittery frame doesn't restart the count, plus one
+    frame interval, because the overlap began somewhere in the interval before that row. Without it a touch measures
+    up to two frame intervals short, which loses a real tap at 10 or 15 FPS that 60 FPS would keep.
     """
     if not rows or rows[-1]["overlap"] < min_overlap:
         return 0
     first = next(row for row in rows if row["overlap"] >= min_overlap)
-    return rows[-1]["t_ms"] - first["t_ms"]
+    return rows[-1]["t_ms"] - first["t_ms"] + frame_interval_ms(rows)
 
 
 class ZoneRules:

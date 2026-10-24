@@ -67,7 +67,7 @@ def call_in_thread(classifier: InteractionClassifier, window: PairWindow, timeou
     def run() -> None:
         try:
             result["labels"] = classifier.classify(window)
-        except Exception as error:  # any failure of the primary means zone rules judge this window
+        except BaseException as error:  # even SystemExit from inside the model means zone rules judge this window
             result["error"] = error
 
     thread = threading.Thread(target=run, name="interactions-primary", daemon=True)
@@ -105,8 +105,9 @@ class FallbackClassifier:
         if thread.is_alive():
             self._hung = thread
             return self.fall_back(window, f"the primary took longer than {self.timeout_ms} ms")
-        if "error" in result:
-            return self.fall_back(window, f"the primary raised {result['error']!r}")
+        if "labels" not in result:
+            # It raised (any BaseException, even SystemExit), or its thread ended with no answer: zone rules judge.
+            return self.fall_back(window, f"the primary gave no answer: {result.get('error')!r}")
         try:
             labels = checked_labels(result["labels"])
         except ValueError as error:
