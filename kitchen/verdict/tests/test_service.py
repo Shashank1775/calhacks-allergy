@@ -474,27 +474,28 @@ def test_an_edge_before_any_verdict_judges_nothing():
 
 
 @pytest.mark.safety
-def test_a_late_edge_is_retried_when_the_verdicts_cant_be_listed():
-    """Late changes recheck everything: if the plates' verdicts can't be read, the edge waits for the next retry."""
+def test_a_recheck_the_database_refused_is_retried_and_lands():
+    """Late changes recheck everything: a HOLD from a late edge that couldn't be written waits in pending, and isn't
+    counted as said, so it lands once the database is back."""
     state, clock, service = late_edge_kitchen()
     move(state, clock, "plate-t1", "pass", 3000)
-    list_verdicts = state.list_verdicts
+    record_verdict = state.record_verdict
 
-    def unavailable(ticket_id=None):
+    def unavailable(verdict):
         raise StateUnavailable("database down (test)")
 
-    state.list_verdicts = unavailable
+    state.record_verdict = unavailable
     clock.set(3500)
     state.record_interaction(edge("e-late", "tool-knife-1", "plate-t1", 2000))
-    assert len(service.late_edges) == 1
+    assert len(service.pending) == 1
 
-    state.list_verdicts = list_verdicts
+    state.record_verdict = record_verdict
     service.retry()
     assert [(v["trigger"], v["decision"]) for v in state.list_verdicts()] == [
         ("plate_at_pass", "pass"),
         ("late_edge", "hold"),
     ]
-    assert service.late_edges == []
+    assert service.pending == []
 
 
 @pytest.mark.safety
@@ -511,18 +512,119 @@ def test_a_recheck_in_the_same_millisecond_is_not_dropped_as_a_duplicate():
 
 @pytest.mark.safety
 def test_rechecks_for_two_edges_in_the_same_millisecond_all_land():
-    """Each edge triggers its own recheck; the second one (the only one that sees the plate contact) must not be
-    dropped as a duplicate of the first, or the plate would keep the first recheck's PASS."""
+    """Each edge triggers its own recheck; the one that sees the plate contact must not be lost as a duplicate of an
+    earlier one in the same millisecond, or the plate would keep its PASS."""
     state, clock, _ = late_edge_kitchen()
     move(state, clock, "plate-t1", "pass", 3000)
     clock.set(3500)
     state.record_interaction(edge("e-scoop", "tool-knife-1", "bin-1", 1000))
     state.record_interaction(edge("e-touch", "tool-knife-1", "plate-t1", 2000))
 
+    # The scoop-only recheck still passes, which the plate's PASS already says, so only the HOLD is written.
     verdicts = state.list_verdicts()
-    assert [(v["trigger"], v["decision"]) for v in verdicts] == [
-        ("plate_at_pass", "pass"),
-        ("late_edge", "pass"),
-        ("late_edge", "hold"),
-    ]
-    assert len({v["verdict_id"] for v in verdicts}) == 3
+    assert [(v["trigger"], v["decision"]) for v in verdicts] == [("plate_at_pass", "pass"), ("late_edge", "hold")]
+    assert len({v["verdict_id"] for v in verdicts}) == 2
+
+
+# From the review of #186 (the runner's live-mode session): rechecks must stop once nothing new can reach the plate.
+
+
+class LateEdgeGraph(CountingGraph):
+    """FakeProvenanceGraph's answers, plus peanut at the plate once any edge named late-* is in the database."""
+
+    def __init__(self, graph, state):
+        super().__init__(graph)
+        self.state = state
+
+    def reach(self, plate_id, as_of_t_ms):
+        reach = super().reach(plate_id, as_of_t_ms)
+        if any(event["event_id"].startswith("late-") for event in self.state.list_interactions()):
+            reach = reach + [{"allergen_unit_id": "peanut", "probability": 1.0, "chain": []}]
+        return reach
+
+
+def clean_plate_kitchen():
+    """clean-plate-from-stack (plate-t6 passes for t6, which forbids peanut), over a graph that learns of late edges."""
+    state = FakeStateClient()
+    scenario = load_scenario(state, SCENARIOS["clean-plate-from-stack"])
+    state.set_zones([PASS_ZONE, PLATING])
+    clock = FakeClock()
+    graph = LateEdgeGraph(FakeProvenanceGraph(scenario), state)
+    VerdictService(state, graph, FakeLayaCheck(), clock).start()
+    return state, clock, graph
+
+
+def short_edge(event_id, a_id, b_id, t_start_ms, action="transfer.contact"):
+    """A 100 ms edge."""
+    return {
+        "event_id": event_id,
+        "t_start_ms": t_start_ms,
+        "t_end_ms": t_start_ms + 100,
+        "a_id": a_id,
+        "b_id": b_id,
+        "action": action,
+        "probability": 0.9,
+        "direction": "both",
+        "classifier": {"name": "zone_rules", "version": "test"},
+    }
+
+
+def test_edges_that_cant_reach_a_judged_plate_dont_rejudge_it():
+    """An edge after the verdict between other entities, or an unimportant one, can't change the plate's answer."""
+    state, clock, graph = clean_plate_kitchen()
+    move(state, clock, "plate-t6", "pass", 3000)
+    calls = graph.reach_calls
+
+    clock.set(4000)
+    state.record_interaction(short_edge("late-after", "tool-knife-9", "bin-1", 3500, action="transfer.scoop"))
+    state.record_interaction(short_edge("late-nothing", "hand-p1-left", "plate-t6", 2900, action="unimportant"))
+
+    assert len(state.list_verdicts()) == 1
+    assert graph.reach_calls == calls
+
+
+@pytest.mark.safety
+def test_a_recheck_that_changes_nothing_writes_nothing():
+    """A plate that already holds for the same reasons gets no new row per touch, so its hold is spoken once."""
+    state, clock, graph = clean_plate_kitchen()
+    move(state, clock, "plate-t6", "pass", 3000)
+    clock.set(3600)
+    state.record_interaction(short_edge("late-touch", "hand-p1-left", "plate-t6", 2900))
+    calls = graph.reach_calls
+
+    clock.set(3900)
+    state.record_interaction(short_edge("late-again", "hand-p1-left", "plate-t6", 3800))
+
+    assert graph.reach_calls == calls + 1  # judged again from full history...
+    assert [verdict["decision"] for verdict in state.list_verdicts()] == ["pass", "hold"]  # ...with nothing new to say
+
+
+def test_edges_after_the_plates_last_touch_stop_rejudging_it():
+    """Rechecks don't widen the window: once the plate's last touch is in, other edges in the kitchen leave it alone."""
+    state, clock, graph = clean_plate_kitchen()
+    move(state, clock, "plate-t6", "pass", 3000)
+    clock.set(3600)
+    state.record_interaction(short_edge("late-touch", "hand-p1-left", "plate-t6", 2900))  # ends at 3000
+    calls = graph.reach_calls
+
+    for n, written in enumerate(range(3900, 9000, 300)):
+        clock.set(written)
+        state.record_interaction(short_edge(f"late-busy-{n}", "hand-p2-left", "bin-1", written - 500))
+
+    assert graph.reach_calls == calls
+
+
+@pytest.mark.safety
+def test_a_restarted_service_still_rechecks_a_plate_judged_before_it():
+    """The reach cutoffs come back from the verdicts in the database, so a late edge after a restart still rechecks."""
+    state, clock, first = late_edge_kitchen()
+    move(state, clock, "plate-t1", "pass", 3000)
+    first.stop()
+    restarted = VerdictService(state, EdgeAwareGraph(state), QuietLaya(), clock)
+    restarted.start()
+
+    clock.set(3500)
+    state.record_interaction(edge("e-late", "tool-knife-1", "bin-1", 1000))
+    state.record_interaction(edge("e-touch", "tool-knife-1", "plate-t1", 2000))
+
+    assert [v["decision"] for v in state.list_verdicts()][-1] == "hold"

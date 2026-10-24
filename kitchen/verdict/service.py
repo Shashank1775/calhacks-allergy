@@ -44,27 +44,26 @@ def error_reason(error: Exception) -> dict:
     return {"code": "error", "detail": f"{type(error).__name__}: {error}"}
 
 
-def plates_to_recheck(edges: list[dict], latest: dict[str, int], at_pass: set[str]) -> set[str]:
-    """The plates whose latest verdict didn't account for one of `edges`.
-
-    That's every judged plate whose latest verdict was decided at or after an edge's start (the edge was written
-    late, so the verdict may have missed it), and every plate at the pass that an edge touches directly (it was
-    contaminated after its verdict). An edge that starts after a plate's verdict and doesn't touch it can't change it.
-    """
-    plates = set()
-    for edge in edges:
-        plates |= {plate_id for plate_id, decided in latest.items() if edge["t_start_ms"] <= decided}
-        plates |= {plate_id for plate_id in at_pass if plate_id in (edge["a_id"], edge["b_id"])}
-    return plates
+def answer(verdict: dict) -> tuple:
+    """What a verdict tells the kitchen: its ticket and revision, its decision, and which reasons (by code and
+    allergen). Two verdicts with the same answer show and say the same thing on the gate and the expo board."""
+    reasons = sorted((reason["code"], reason.get("allergen_unit_id", "")) for reason in verdict["reasons"])
+    return (verdict["ticket_id"], verdict["ticket_revision"], verdict["decision"], tuple(reasons))
 
 
 class VerdictService:
     """Judges plates as they reach the pass, and again when their ticket is amended.
 
-    Call start() to subscribe. Verdicts the database refused (StateUnavailable) wait in `pending`, amended tickets whose
-    plates couldn't be listed wait in `amended`, and late edges whose plates couldn't be listed wait in `late_edges`;
-    retry() handles all three, and every trigger runs it, so a HOLD made while the database was down still lands. A
-    service loop should also call retry() now and then.
+    Call start() to subscribe. Verdicts the database refused (StateUnavailable) wait in `pending`, and amended tickets
+    whose plates couldn't be listed wait in `amended`; retry() handles both, and every trigger runs it, so a HOLD made
+    while the database was down still lands. A service loop should also call retry() now and then.
+
+    Late edges: each judged plate has a reach cutoff, the later of its last plate_at_pass or ticket_amended judgment
+    and the end of the last edge touching it. A new edge rechecks the plate if it touches it, or if it starts at or
+    before the cutoff. That's enough: an edge that doesn't touch the plate can only reach it through a later edge into
+    it, and whichever of the two lands last triggers a recheck that reads the full history. A recheck whose answer
+    matches the plate's latest recorded verdict writes nothing, so a held plate isn't recorded and spoken again on every
+    touch.
     """
 
     def __init__(self, state, graph, plate_check, clock, settings: VerdictSettings | None = None):
@@ -75,13 +74,24 @@ class VerdictService:
         self.settings = settings or VerdictSettings()
         self.pending: list[dict] = []
         self.amended: set[str] = set()
-        self.late_edges: list[dict] = []
+        self._reach_cutoff_t_ms: dict[str, int] = {}  # per judged plate, see the class docstring
+        self._recorded_answer: dict[str, tuple] = {}  # per plate, answer() of its latest recorded verdict
         self._late_rechecks = 0  # numbers each late-edge verdict_id
         self._at_pass: set[str] = set()
         self._unsubscribe = []
 
     def start(self) -> None:
-        """Subscribe to entity_state, ticket and interaction changes. The callbacks never raise into the writer."""
+        """Subscribe to entity_state, ticket and interaction changes. The callbacks never raise into the writer.
+
+        Verdicts already in the database (a restarted service) seed each plate's reach cutoff and recorded answer, so a
+        late edge still rechecks a plate judged before the restart.
+        """
+        for verdict in sorted(self.state.list_verdicts(), key=lambda verdict: verdict["decided_t_ms"]):
+            plate_id = verdict["plate_id"]
+            if verdict["trigger"] != "late_edge":
+                cutoff = max(self._reach_cutoff_t_ms.get(plate_id, verdict["decided_t_ms"]), verdict["decided_t_ms"])
+                self._reach_cutoff_t_ms[plate_id] = cutoff
+            self._recorded_answer[plate_id] = answer(verdict)
         self._unsubscribe = [
             self.state.subscribe("entity_state", self.on_entity_state),
             self.state.subscribe("ticket", self.on_ticket),
@@ -120,17 +130,31 @@ class VerdictService:
         self.retry()
 
     def on_interaction(self, change) -> None:
-        """Queue a new edge: retry() rejudges every plate whose latest verdict it could change."""
+        """Rejudge every plate a new edge could reach that its latest verdict didn't account for (trigger late_edge)."""
         try:
             if change.kind == "insert":
-                self.late_edges.append(change.row)
+                for plate_id in self.plates_reached_late(change.row):
+                    self.judge(plate_id, "late_edge")
         except Exception:
             logger.exception("verdict trigger failed on interaction %s", change.row)
         self.retry()
 
+    def plates_reached_late(self, edge: dict) -> list[str]:
+        """The judged plates `edge` touches, or starts at or before the reach cutoff of. Moves the cutoff of each plate
+        it touches to the edge's end. An unimportant edge carries nothing, so it reaches no plate."""
+        if edge["action"] == "unimportant":
+            return []
+        touched = {edge["a_id"], edge["b_id"]}
+        for plate_id in touched & self._reach_cutoff_t_ms.keys():
+            self._reach_cutoff_t_ms[plate_id] = max(self._reach_cutoff_t_ms[plate_id], edge["t_end_ms"])
+        return sorted(
+            plate_id
+            for plate_id, cutoff_t_ms in self._reach_cutoff_t_ms.items()
+            if plate_id in touched or edge["t_start_ms"] <= cutoff_t_ms
+        )
+
     def retry(self) -> None:
-        """Recheck amended tickets and plates with late edges not yet rechecked, then write pending verdicts. Never
-        raises."""
+        """Recheck amended tickets not yet rechecked, then write pending verdicts. Never raises."""
         for ticket_id in sorted(self.amended):
             try:
                 judged = {verdict["plate_id"] for verdict in self.state.list_verdicts(ticket_id)}
@@ -140,36 +164,13 @@ class VerdictService:
             self.amended.discard(ticket_id)
             for plate_id in sorted(judged):
                 self.judge(plate_id, "ticket_amended")
-        if self.late_edges:
-            self.recheck_late_edges()
         self.flush()
-
-    def recheck_late_edges(self) -> None:
-        """Rejudge every plate a queued edge could change, then clear the queue.
-
-        If the plates' latest verdicts can't be read, the edges stay queued for the next retry: a late change is never
-        dropped (late changes recheck everything).
-        """
-        try:
-            latest = self.latest_verdict_times()
-        except Exception:
-            logger.exception("couldn't list verdicts for %s late edges, will retry", len(self.late_edges))
-            return
-        edges, self.late_edges = self.late_edges, []
-        for plate_id in sorted(plates_to_recheck(edges, latest, self._at_pass)):
-            self.judge(plate_id, "late_edge")
-
-    def latest_verdict_times(self) -> dict[str, int]:
-        """Each judged plate's latest decided_t_ms, counting verdicts still waiting to be written."""
-        latest: dict[str, int] = {}
-        for verdict in self.state.list_verdicts() + self.pending:
-            plate_id = verdict["plate_id"]
-            latest[plate_id] = max(latest.get(plate_id, verdict["decided_t_ms"]), verdict["decided_t_ms"])
-        return latest
 
     def judge(self, plate_id: str, trigger: str) -> dict:
         """Read everything decide() needs, decide, and record the verdict. Returns the verdict."""
         now = self.clock.now_ms()
+        if trigger != "late_edge":
+            self._reach_cutoff_t_ms[plate_id] = max(self._reach_cutoff_t_ms.get(plate_id, now), now)
         try:
             inputs = self.read_inputs(plate_id, now)
         except Exception as error:  # fail closed: read_inputs guards its own reads; this catches anything it missed
@@ -196,6 +197,8 @@ class VerdictService:
             graph=inputs["graph"],
             laya=inputs["laya"],
         )
+        if trigger == "late_edge" and self._recorded_answer.get(plate_id) == answer(verdict):
+            return verdict  # nothing new to show or say
         if verdict["decision"] == "hold":
             logger.warning("HOLD %s for %s: %s", plate_id, verdict["ticket_id"], verdict["reasons"])
         self.pending.append(verdict)
@@ -284,6 +287,9 @@ class VerdictService:
                 return
             except Exception:
                 logger.exception("verdict %s can't be recorded, dropping it so later verdicts still land", verdict_id)
+            else:
+                # Only a verdict that landed counts as said, so a dropped one can't silence a later recheck.
+                self._recorded_answer[self.pending[0]["plate_id"]] = answer(self.pending[0])
             self.pending.pop(0)
 
 

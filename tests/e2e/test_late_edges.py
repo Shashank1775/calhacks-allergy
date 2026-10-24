@@ -34,10 +34,18 @@ def test_a_contact_written_after_the_plate_passed_turns_the_gate_to_hold(kitchen
         shift.state.record_interaction(edge)
     assert shift.tick() == "hold"
 
-    # One recheck per edge: after the scoop alone the plate is still clean; after the contact it holds.
-    first, *rechecks = shift.state.list_verdicts()
+    # One recheck per edge: after the scoop alone the plate is still clean, which its PASS already says, so only the
+    # recheck after the contact is written.
+    first, recheck = shift.state.list_verdicts()
     assert (first["trigger"], first["decision"]) == ("plate_at_pass", "pass")
-    assert [verdict["trigger"] for verdict in rechecks] == ["late_edge", "late_edge"]
-    assert rechecks[-1]["decision"] == "hold"
-    assert [step["event_id"] for step in rechecks[-1]["chain"]] == ["e1", "e2"]
+    assert (recheck["trigger"], recheck["decision"]) == ("late_edge", "hold")
+    assert [step["event_id"] for step in recheck["chain"]] == ["e1", "e2"]
+    assert shift.speaker.lines == ["Hold one, peanut"]
+
+    # Another touch on the held plate changes nothing, so it's neither written nor spoken again.
+    shift.at(4000)
+    touch = {**KNIFE_SCENARIO["events"][1], "event_id": "e3", "t_start_ms": 3800, "t_end_ms": 3900}
+    shift.state.record_interaction(touch)
+    assert shift.tick() == "hold"
+    assert len(shift.state.list_verdicts()) == 2
     assert shift.speaker.lines == ["Hold one, peanut"]

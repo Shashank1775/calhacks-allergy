@@ -7,6 +7,9 @@ When a plate reaches the pass, or its ticket is amended, decide PASS or HOLD in 
 ## What happens here
 
 - A bound plate enters the `pass` zone, or its ticket gets a new revision, or an interaction edge lands that its latest verdict didn't account for. That's an edge starting at or before the verdict (interactions writes edges after classifying them), or one touching the plate while it waits at the pass. The service wakes up. The third trigger is `late_edge` (#183).
+  - It uses a reach cutoff per judged plate: the later of the plate's last real judgment and the end of its last touch.
+  - An edge rechecks a plate only if it touches the plate or starts by that cutoff, so rechecks stop once nothing new can reach the plate.
+  - A recheck that would say the same thing as the plate's latest recorded verdict (same decision and reasons) writes nothing, so a held plate isn't recorded and spoken again on every touch.
 - It asks the partner's graph for exact reachability (`reach`), the plate's unknown-history ancestors (`unknown_ancestors`) and the plate's subgraph (`subgraph`).
 - **Laya's final plate check** (`laya_check.py`) reads that subgraph and gives P(reached the plate) for each forbidden allergen. Each one at P ≥ 1 − `pass_threshold` adds a `laya_flagged` reason; if Laya can't answer, `laya_unavailable`. Laya can only add holds, never remove one.
 - `decide()` combines that with the ticket: **HOLD** if a forbidden allergen is flagged (by the graph's numbers or by Laya), if an unknown ancestor exists, if clean-confidence is below the pass threshold, or if anything failed.
@@ -65,7 +68,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
 | Plain-code verdict | Anything but `decide()` makes the call, confidence rises with more evidence, or Laya removes a hold | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence; now: `laya_hold_reasons` only ever returns `laya_flagged` reasons for forbidden allergens, and every model failure raises `LayaCheckUnavailable`; with `decide()`: a property test that no Laya answer removes a reason and that a Laya failure holds |
 | Allergens, not contacts | The policy reads anything but the ticket's forbidden allergens | The policy reads only `ticket.forbidden` and the reach probabilities |
 | Known-clean source | An unknown ancestor is ignored | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` and `clean-plate-from-stack` |
-| Late changes recheck everything | An amendment reuses the previous verdict, or an edge written after the plate passed never reaches it | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy`. Late-edge tests in `test_service.py`: a late edge, an edge at the pass, retry while the database is down, rechecks in the same millisecond. The real graph end to end: `tests/e2e/test_late_edges.py` |
+| Late changes recheck everything | An amendment reuses the previous verdict, or an edge written after the plate passed never reaches it | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy`. Late-edge tests in `test_service.py`: a late edge, an edge at the pass, a refused write that's retried, rechecks in the same millisecond, no recheck once nothing can reach the plate, no repeat write when the answer hasn't changed, and a restarted service. The real graph end to end: `tests/e2e/test_late_edges.py` |
 
 Time running forward belongs to the partner's graph; we check it end to end by running the golden scenarios against the real graph once it lands (`needs-partner`). `trace_sensitive: false` is treated as `true` for now.
 
