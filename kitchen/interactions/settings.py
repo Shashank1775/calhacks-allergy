@@ -72,13 +72,11 @@ class InteractionSettings:
     # a wash lowers risk, so it needs to be sure.
     event_floor: float = 0.5
     wash_floor: float = 0.9
-    # Hits on the same pair and action this close together are one touch; a longer gap ends it. A touch's first hit
-    # is written as an event the frame it is seen, so a plate carried to the pass by a dirty hand already has its
-    # edge when it arrives; the rest follows as events written merge_gap_ms after the touch ends.
+    # Hits on the same pair and action this close together are one touch; a longer gap ends it. A touch is one edge,
+    # written the frame its first hit is seen, so a plate carried to the pass by a dirty hand already has its edge
+    # when it arrives. The graph counts every edge as another chance to move allergens, so a touch held for a few
+    # seconds is still one chance; it writes again only to carry news across (events.py).
     merge_gap_ms: int = 300
-    # A transfer still going after this long is written and a new event starts, so a long touch keeps reaching the
-    # database while it lasts.
-    max_event_ms: int = 1000
     # After a failed database write, wait this long before trying the buffered events again.
     retry_ms: int = 250
 

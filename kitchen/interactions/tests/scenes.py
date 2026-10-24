@@ -15,7 +15,6 @@ unseen for a while (a hand over it), keeping its ID, as vision's tracker does th
 
 from dataclasses import dataclass
 
-from kitchen.interactions.settings import InteractionSettings
 from kitchen.shared.models import Zone, validate
 
 
@@ -119,7 +118,10 @@ def render(tracks: list[Track], length_ms: int, fps: float = 30.0) -> list[dict]
 
 @dataclass(frozen=True)
 class Scene:
-    """A scene's tracks and length, and the events it should produce (action, a_id, b_id, direction, start, end)."""
+    """A scene's tracks and length, and the events it should produce (action, a_id, b_id, direction, start, end).
+
+    A transfer is one edge at its touch's first hit, so its start and end are the same; a wash spans its rinse.
+    """
 
     tracks: list[Track]
     length_ms: int
@@ -135,8 +137,8 @@ KNIFE = "tool-knife-1"
 SCENES = {
     # The knife dips into the bin (overlapping from about 175 ms) and sits there until 1100, then moves onto the
     # plate (overlapping from about 1395 ms) and rests there until 2000, then leaves (overlap ends about 2140).
-    # Contact needs 200 ms of overlap and a scoop 300 ms, so: contact with the bin from about 375, a scoop from about
-    # 475, both until the knife leaves the bin at about 1190; then contact with the plate from about 1595.
+    # Contact needs 200 ms of overlap and a scoop 300 ms, so one edge each: contact with the bin at about 375 and a
+    # scoop at about 475 (the knife leaves the bin at about 1190), then contact with the plate at about 1595.
     "scoop_then_plate": Scene(
         tracks=[
             still("bin-1", "bin", BIN_AT, 2600),
@@ -157,9 +159,9 @@ SCENES = {
         ],
         length_ms=2600,
         expected=[
-            ("transfer.contact", KNIFE, "bin-1", "both", 375, 1190),
-            ("transfer.scoop", KNIFE, "bin-1", "b_to_a", 475, 1190),
-            ("transfer.contact", KNIFE, "plate-t1", "both", 1595, 2140),
+            ("transfer.contact", KNIFE, "bin-1", "both", 375, 375),
+            ("transfer.scoop", KNIFE, "bin-1", "b_to_a", 475, 475),
+            ("transfer.contact", KNIFE, "plate-t1", "both", 1595, 1595),
         ],
     ),
     # The knife stops 0.02 widths right of the plate for a second: near enough to be a candidate, never touching.
@@ -247,7 +249,8 @@ SCENES = {
         length_ms=1600,
         expected=[],
     ),
-    # A hand comes down onto the plate (overlapping from about 230 ms) and lifts off at about 970.
+    # A hand comes down onto the plate (overlapping from about 230 ms, so a contact at about 430) and lifts off at
+    # about 970.
     "hand_touches_plate": Scene(
         tracks=[
             still("plate-t1", "plate", PLATE_AT, 1500),
@@ -258,38 +261,15 @@ SCENES = {
             ),
         ],
         length_ms=1500,
-        expected=[("transfer.contact", "hand-p1-right", "plate-t1", "both", 430, 970)],
+        expected=[("transfer.contact", "hand-p1-right", "plate-t1", "both", 430, 430)],
     ),
 }
 
 
-def spans(events: list[dict]) -> list[dict]:
-    """Events with the pieces of one interaction joined: a transfer is written in pieces (its first hit at once, then
-    cuts), and pieces of the same pair, action and direction at most merge_gap_ms apart are one touch."""
-    gap_ms = InteractionSettings().merge_gap_ms
-    joined: list[dict] = []
-    for event in sorted(events, key=lambda event: (event["t_start_ms"], event["t_end_ms"])):
-        same = (event["action"], event["a_id"], event["b_id"], event["direction"])
-        earlier = next(
-            (
-                span
-                for span in joined
-                if (span["action"], span["a_id"], span["b_id"], span["direction"]) == same
-                and event["t_start_ms"] - span["t_end_ms"] <= gap_ms
-            ),
-            None,
-        )
-        if earlier is None:
-            joined.append(dict(event))
-        else:
-            earlier["t_end_ms"] = max(earlier["t_end_ms"], event["t_end_ms"])
-    return joined
-
-
 def unmatched(events: list[dict], expected: list[tuple], tolerance_ms: int = 200) -> list:
     """What doesn't line up between events and the expected ones; empty when every expected event is matched by one
-    real interaction (its pieces joined by spans()) within tolerance_ms on both ends, and none is left over."""
-    left = spans(events)
+    event within tolerance_ms on both ends, and none is left over."""
+    left = list(events)
     missing = []
     for action, a_id, b_id, direction, start_ms, end_ms in expected:
         match = next(

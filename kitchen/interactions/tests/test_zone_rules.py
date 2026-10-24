@@ -20,7 +20,6 @@ from kitchen.interactions.tests.scenes import (
     ZONES,
     Track,
     render,
-    spans,
     still,
     unmatched,
 )
@@ -78,7 +77,7 @@ def test_a_tap_just_over_contact_min_ms_is_a_contact_at_any_frame_rate(fps):
     for start_ms in tap_phases(fps):
         frames = render([still("plate-t1", "plate", PLATE_AT, 2000), tap(PLATE_AT, start_ms, 220)], 2000, fps)
 
-        touches = [span for span in spans(replay(frames, ZONES, SETTINGS)) if span["action"] == "transfer.contact"]
+        touches = [event for event in replay(frames, ZONES, SETTINGS) if event["action"] == "transfer.contact"]
 
         assert len(touches) == 1, (fps, start_ms)
 
@@ -90,7 +89,7 @@ def test_a_dip_just_over_scoop_min_ms_is_a_scoop_at_any_frame_rate(fps):
     for start_ms in tap_phases(fps):
         frames = render([still("bin-1", "bin", BIN_AT, 2000), tap(BIN_AT, start_ms, 340)], 2000, fps)
 
-        scoops = [span for span in spans(replay(frames, ZONES, SETTINGS)) if span["action"] == "transfer.scoop"]
+        scoops = [event for event in replay(frames, ZONES, SETTINGS) if event["action"] == "transfer.scoop"]
 
         assert len(scoops) == 1, (fps, start_ms)
 
