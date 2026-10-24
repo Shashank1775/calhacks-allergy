@@ -10,7 +10,7 @@ Jev is the model role behind [`JevClient`](../../contracts/apis.md#jevclient). I
 
 **What we found.** "Jev" is a real product, not only a placeholder name. TypeSafe AI's Jev is a "System One" decision model, in early access since September 2026 [S1][S3]. It fits the role: you send some text (the *state*) and typed questions, and get back typed answers with probabilities. It does not write free text. `.env.example` still calls the name a placeholder, so question 1 below asks the owner to confirm this is the Jev they meant.
 
-**How this was checked.** We read the vendor docs and secondary sources on 2026-10-23. We made **no API calls**: we have no key, and agents never call paid APIs. "Unverified" below means we didn't measure it ourselves: it's either a vendor claim or comes from a secondary source.
+**How this was checked.** We read the vendor docs and secondary sources on 2026-10-23. We made **no API calls**: we have no key, and agents never call paid APIs. So everything here comes from documentation, and we measured nothing. "Unverified" marks figures we couldn't confirm in the primary docs: the vendor's own measurements, secondary sources, values only the console shows, and our own estimates.
 
 **Scope notes.**
 - The issue asked for `kitchen/orders/docs/jev-spike.md`. The dispatch scope for this task is this ADR, so the full spike answer lives here.
@@ -33,7 +33,7 @@ Jev is the model role behind [`JevClient`](../../contracts/apis.md#jevclient). I
 | Latency | **Vendor claim, unverified:** 70 to 500 ms end to end, measured "from our laptops on the West Coast"; one homepage demo shows 0.114 s. A secondary source reports a hosted p50 of 236 to 276 ms (unverified). Our budget is 3 s per online parse (orders README, M2), so even the slow end leaves room | [S3][S12][S15] |
 | Determinism | The API has no temperature or seed setting, and the docs don't promise the same answer for the same input. So the parse cache matters, and eval scores only hold for one pinned version | [S5] |
 | Offline | Hosted only. The docs mention no self-hosted or on-prem option. The offline choices are in the next table | [S3][S5] |
-| Image input for bin labels | **It works, but isn't ready.** Jev 1.13 and 1.14 accept PNG or JPEG behind the `TypeSafe-Danger-Zone-Images: true` header: 280 to 1568 px per side, up to 16 MiB per image, billed as input tokens. The vendor says images have "way too much jaggedness" for production. The docs make no OCR claim, and the models page lists input as text only, so the docs disagree with each other | [S2][S8][S9] |
+| Image input for bin labels | **It works, but isn't ready.** Jev 1.13 and 1.14 accept PNG or JPEG behind the `TypeSafe-Danger-Zone-Images: true` header: 280 to 1568 px per side, up to 16 MiB per image, billed as input tokens. The images page says images "aren't yet up to our standards to call ready for production" [S8]. The 1.14 post says all the "danger zone" features, images included, still have "way too much jaggedness" for production use [S9]. The docs make no OCR claim, and the models page lists input as text only, so the docs disagree with each other | [S2][S8][S9] |
 | Data handling | Per the legal page, the privacy policy promises not to train on user data. The DPA says data is kept "as long as necessary" and doesn't name a processing region. Zero data retention is available only to enterprise customers | [S10] |
 | Known weak spots | From the vendor's own list: reads scoping words and negations literally, and handles double negatives less well; doesn't count reliably; leans toward the first option in a choice; doesn't treat the state as hostile, so injected text can shift answers; can't generate strings | [S9] |
 
@@ -53,7 +53,7 @@ This is proposed and becomes binding only when the owner answers OQ-5.
 2. **`JevClient` stays exactly as written.** The real adapter goes in `kitchen/orders/jev.py`, as below. `FakeJev` remains what tests and CI use, and no test reaches the network.
 3. **Offline story for M4: parse cache plus manual entry.** Self-hosted Laya is a fallback we won't build unless the owner asks for offline parsing of new notes.
 4. **Bin labels: text first.** Photos sit behind a config flag that is off by default. A profile made from a photo always goes to the chef for confirmation.
-5. **Model confidence can only add questions, never remove one.** A deterministic keyword floor keeps the "never drop a mention" rule even if Jev misses an allergen.
+5. **Model confidence can only add questions, never remove one.** A deterministic keyword floor, on both notes and bin labels, keeps the "never drop a mention" rule even if Jev misses an allergen.
 
 ### Real adapter design (`kitchen/orders/jev.py`, a later PR)
 
@@ -76,27 +76,30 @@ Each method is three plain steps: build the questions (a pure function), make on
 | Question name | Type | What it asks | Fills |
 |---|---|---|---|
 | `avoid_<unit>` (one per allergen unit, 9) | `noul` | Does this note say the guest must avoid `<unit name>`, or foods made with it? | whether a constraint exists, and `confidence.allergen_unit_id` |
-| `severity_<unit>` (9) | `choice`: `anaphylactic`, `allergy`, `intolerance`, `preference`, `not_stated` | How serious does the note say the reaction to `<unit name>` is? | `severity` |
+| `severity_<unit>` (9) | `choice`: `anaphylactic`, `allergy`, `intolerance`, `preference`, `not_stated` | How serious does the note say the reaction to `<unit name>` is? | `severity` (`not_stated` is only a Jev option, never written; see the mapping table) |
 | `traces_<unit>` (9) | `noul` | Does the note say that even traces or cross-contact of `<unit name>` matter? | `trace_sensitive` |
-| `exception_<unit>` (only units with candidate words) | `choice`: candidate spans from the note, plus `none` | Which of these does the note say is fine to serve despite the `<unit name>` restriction? | `exceptions[].ingredient` |
+| `exception_<unit>` (only units with candidate words) | `choice`: `none` first, then the candidate spans from the note | Which of these does the note say is fine to serve despite the `<unit name>` restriction? | `exceptions[].ingredient` |
 
 - The note goes only in `state`. Instructions are fixed strings in our code, so a note can't rewrite the questions. Injected text could still lower a probability, which the keyword floor and question threshold catch, and the eval set should include such notes.
 - Jev can't write strings, so the exception ingredient is a word copied from the note. Code finds candidate spans (words after "fine", "ok" or "except"), and Jev only picks one or `none`. This is the vendor's pre-parsed extraction pattern [S6].
-- Severity options run from most to least severe, so Jev's lean toward the first option [S9] errs toward the stricter severity and a higher `pass_threshold`.
+- Option order is set so Jev's lean toward the first option [S9] always errs strict. Severity options run from most to least severe, so the lean pushes toward a higher `pass_threshold`. The exception options put `none` first, so the lean pushes toward keeping the whole constraint, because granting an exception narrows it.
+- The eval set includes severity and exception notes with the options reordered. The vendor suggests reordering to check that the answer stays the same [S9], and this shows us how much the order moves the answers.
 
 **Per-field confidence signal Jev can give, and how we map it:**
 
 | Field | Value | Confidence written to `ParseResult` | Why |
 |---|---|---|---|
 | `allergen_unit_id` | A constraint exists if the `avoid_<unit>` probability ≥ `mention_floor`, **or** the keyword matcher finds the unit | The `noul` probability itself | `noul` has no separate confidence [S8]; its probability *is* how likely the constraint is to be real. A keyword hit with a low probability gets that low confidence, so it becomes a question |
-| `severity` | The chosen option | `choice.confidence`, which is 0 when probability is spread evenly and never above the top probability [S8]. `not_stated` gets confidence 0 | Severity sets `pass_threshold` (OQ-4), so a guessed severity could loosen the gate. If the note doesn't say, we ask |
+| `severity` | The chosen option. If Jev picks `not_stated`, we write the unit's `default_severity` from `contracts/allergen_units.json` (`allergy` until OQ-3 is answered), because `not_stated` isn't a contract severity | `choice.confidence`, which is 0 when probability is spread evenly and never above the top probability [S8]. A `not_stated` answer gets confidence 0 | Severity sets `pass_threshold` (OQ-4), so a guessed severity could loosen the gate. Confidence 0 means a note that doesn't say always gets a question, and the field always holds a valid value, so the schema check doesn't turn it into `JevUnavailable` |
 | `trace_sensitive` | `true` if the probability ≥ 0.5 | `abs(2 * p - 1)`, the vendor's suggested confidence for a yes/no answer [S8] | A probability near 0.5 means Jev is unsure, and that becomes a question |
 | `exceptions[].ingredient` | The chosen span; `none` means no exception | `choice.confidence` | Exceptions narrow only on explicit words. Below the threshold, they become a question (team rule) |
-| `profile_bin` probabilities | For each unit, the larger of the label-level `contains_<unit>` probability and the highest per-ingredient probability | Not a field. Unclear ingredients go to the chef instead | Taking the larger value leans toward "carries the allergen" |
+| `profile_bin` probabilities | For each unit, the larger of the label-level `contains_<unit>` probability and the highest per-ingredient probability. A unit the keyword matcher finds on the label is always kept (keyword floor, below) | Not a field. Unclear ingredients go to the chef instead | Taking the larger value leans toward "carries the allergen" |
 
 The vendor doesn't show that these probabilities are calibrated [S8]. So `question_threshold` comes from the orders eval set (orders-02, where `wrong_without_question` must be 0), not from vendor guidance.
 
-**Keyword floor.** The adapter also runs the deterministic keyword matcher that `FakeJev` uses. Any unit it finds becomes a constraint even when Jev scores it below `mention_floor`, and its confidence is Jev's probability, so it becomes a question. Jev can add constraints the keywords miss. It can never remove one they found.
+**Keyword floor.** The adapter also runs the deterministic keyword matcher that `FakeJev` uses, on both methods. Jev can add what the keywords miss. It can never remove what they found.
+- `parse_note`: any unit the matcher finds becomes a constraint even when Jev scores it below `mention_floor`. Its confidence is Jev's probability, so it becomes a question.
+- `profile_bin`: any unit the matcher finds in the label or prep-sheet text gets probability 1.0 in `probabilities`, even if Jev answers `none` for that ingredient. So a confident `none` for "whey" can't drop milk from a bin. If Jev disagrees with the keyword, the ingredient also goes into `unclear_ingredients`, and only the chef can lower the value. We use 1.0, not `mention_floor`, because a bin profile has no question step: a low value would flow straight into the plate's clean confidence, and could let the plate pass.
 
 **`profile_bin`.**
 - Code splits label or prep-sheet text into ingredients, on commas, semicolons, and "Contains:" or "May contain:" lines.
@@ -109,7 +112,7 @@ The vendor doesn't show that these probabilities are calibrated [S8]. So `questi
 - Any of these raises `JevUnavailable`, with the cause chained: a transport error, a timeout, a non-200 status, a response missing any question we asked, or output that fails the `parse_result` or `allergen_profile` schema.
 - The adapter never returns a partial parse.
 - One attempt, plus one retry on `429` or `529`, all inside a 2.5 s total budget, so `/v1/parse` stays under 3 s. The SDK's default 30 s retry budget [S5] is too long for us.
-- A missing key fails at startup with a message naming `JEV_API_KEY`, and the issue goes to `status:needs-human` (AGENTS.md §6, data and secrets).
+- A missing key fails only when the real adapter is selected. The orders service then refuses to start, with a message naming `JEV_API_KEY`, and the issue goes to `status:needs-human` (AGENTS.md §6, data and secrets). Demo and CI runs use `FakeJev` and never need the key.
 
 **Config.**
 - The key comes from `JEV_API_KEY`, which is already in `.env.example`.
@@ -121,7 +124,8 @@ The vendor doesn't show that these probabilities are calibrated [S8]. So `questi
 **Tests for that PR.**
 - Recorded responses with no keys in them, replayed through `httpx.MockTransport`, so no test touches the network.
 - `safety` tests: timeout, `5xx`, malformed body and a missing answer each raise `JevUnavailable`.
-- A `hypothesis` property: for any Jev answers, every unit the keyword matcher finds ends up as a constraint or a question.
+- `hypothesis` properties: for any Jev answers, every unit the keyword matcher finds in a note ends up as a constraint or a question, and every unit it finds on a label is at 1.0 in the bin's `probabilities`.
+- A unit test: a note with no stated severity gets the unit's `default_severity` with confidence 0, and a question.
 - The eval scorer (orders-02) runs against real Jev only once the owner provides a key, and its output is posted on the PR.
 
 **Switching to Laya later** means the same adapter with `ORDERS_JEV_BASE_URL` pointed at `laya-serve`, after fine-tuning, and with thresholds re-tuned because its confidence formula differs.
