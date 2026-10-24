@@ -130,13 +130,12 @@ def make_state(config):
     return FakeStateClient()
 
 
-def make_graph(config, scenario):
-    """The ProvenanceGraph for this run: FakeProvenanceGraph, or the partner's once it's wired in here.
-
-    `real` fails rather than skips until then, for the same reason as make_state().
-    """
+def make_graph(config, scenario, state):
+    """The ProvenanceGraph for this run: FakeProvenanceGraph, or with `--graph real` the partner's, reading `state`."""
     if config.getoption("--graph", default="fake") == "real":
-        pytest.fail("--graph real: the partner's ProvenanceGraph isn't wired in yet (kitchen/graph is a skeleton)")
+        from kitchen.graph import ProvenanceGraph
+
+        return ProvenanceGraph(state)
     return FakeProvenanceGraph(scenario)
 
 
@@ -155,7 +154,7 @@ def kitchen(request):
             scenario = dict(scenario, tickets=[], amendments=[])
         state = make_state(request.config)
         load_scenario(state, scenario)
-        graph = make_graph(request.config, scenario)
+        graph = make_graph(request.config, scenario, state)
         return Kitchen(state=state, graph=graph, scenario=scenario, parser=parser or FakeLayaParser())
 
     return build

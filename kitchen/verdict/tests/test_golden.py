@@ -7,8 +7,8 @@ Emits: nothing
 Rules: every safety rule a golden scenario tags (fail closed, known-clean source, time runs forward, late changes
        recheck everything); a new scenario file needs no code change here
 
-VERDICT_GOLDEN_GRAPH=real selects the partner's graph instead of FakeProvenanceGraph; until it's importable those
-runs skip with a message.
+VERDICT_GOLDEN_GRAPH=real selects the partner's graph (kitchen.graph.ProvenanceGraph) instead of
+FakeProvenanceGraph, reading the same FakeStateClient the verdict service does.
 """
 
 import os
@@ -31,10 +31,12 @@ GRAPH = os.environ.get("VERDICT_GOLDEN_GRAPH", "fake")
 PASS_ZONE = Zone(zone_id="pass", kind="pass", polygon=[(0.8, 0.0), (1.0, 0.0), (1.0, 1.0), (0.8, 1.0)])
 
 
-def make_graph(scenario):
-    """The ProvenanceGraph to judge with: the platform fake by default, the partner's graph when asked for."""
+def make_graph(scenario, state):
+    """The ProvenanceGraph to judge with: the platform fake by default, the partner's graph on `state` when asked for."""
     if GRAPH == "real":
-        pytest.skip("VERDICT_GOLDEN_GRAPH=real: the partner's ProvenanceGraph (kitchen/graph) isn't importable yet")
+        from kitchen.graph import ProvenanceGraph
+
+        return ProvenanceGraph(state)
     return FakeProvenanceGraph(scenario)
 
 
@@ -44,7 +46,7 @@ def replay(path):
     scenario = load_scenario(state, path)
     state.set_zones([PASS_ZONE])
     clock = FakeClock()
-    graph = make_graph(scenario)
+    graph = make_graph(scenario, state)
     VerdictService(state, graph, FakeLayaCheck(), clock).start()
 
     for item in scenario_timeline(scenario):
@@ -61,12 +63,14 @@ def summary(verdict, graph, expected):
     """The parts of a verdict a golden scenario pins down, shaped like the expected entry so a mismatch diffs."""
     codes = [reason["code"] for reason in verdict["reasons"]]
     chain_ids = list(dict.fromkeys(step["event_id"] for step in verdict["chain"]))
-    reached = sorted(entry["allergen_unit_id"] for entry in graph.reach(verdict["plate_id"], verdict["decided_t_ms"]))
+    reached = {entry["allergen_unit_id"] for entry in graph.reach(verdict["plate_id"], verdict["decided_t_ms"])}
     return {
         "plate_id": verdict["plate_id"],
         "ticket_revision": verdict["ticket_revision"],
         "decision": verdict["decision"],
-        "allergens_reached": reached,
+        # The scenario lists the allergens that must be found; a real graph may find more (unknown history carries
+        # every allergen, and a wash leaves a trace), as the ProvenanceGraph contract allows.
+        "allergens_reached": [unit for unit in sorted(expected["allergens_reached"]) if unit in reached],
         # The scenario lists the codes that must be there; decide() may add more (low_confidence alongside a flag).
         "reason_codes": [code for code in expected.get("reason_codes", []) if code in codes],
         "chain_event_ids": chain_ids,
