@@ -3,7 +3,7 @@
 Owner: partner (human). First version written by an agent at the owner's request (2026-10-24).
 Step:  provenance graph
 Reads: entity, bin_profile, interaction_event (StateClient)
-Emits: ProvenanceGraph (reach, subgraph, unknown_ancestors, version)
+Emits: ProvenanceGraph (reach, subgraph, unknown_ancestors, version); LiveRisk (entity_state rows for the overlays)
 Rules: fail closed: failures raise GraphUnavailable; time runs forward: time-forward paths only; known-clean source:
        unknown history is never clean
 
@@ -11,9 +11,12 @@ Rules: fail closed: failures raise GraphUnavailable; time runs forward: time-for
     graph = ProvenanceGraph(state)          # any StateClient
     graph.reach("plate-t1", as_of_t_ms)
 
-Live per-entity risk for the overlays (risk.py) isn't built yet.
+    from kitchen.graph import LiveRisk
+    risk = LiveRisk(state, clock)           # writes each tool, hand and plate's live allergens for the camera overlays
+    risk.start()                            # in the background, whenever an edge lands
 """
 
 from kitchen.graph.graph import ProvenanceGraph
+from kitchen.graph.risk import LiveRisk
 
-__all__ = ["ProvenanceGraph"]
+__all__ = ["LiveRisk", "ProvenanceGraph"]
