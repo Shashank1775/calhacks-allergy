@@ -24,7 +24,7 @@ It turns tracked entity pairs into time-stamped, classified interactions: the ed
 | `classifier.py`: `FallbackClassifier` | Built. `classify_window(window)` returns `(labels, {"name", "version"})`; `fallback_count` for health |
 | `events.py`: `Segmenter`, `EventWriter`, `InteractionStep`, the CLI | Built |
 | `labels.py`, `benchmark.py` | Not built (labeled real clips, and the adoption benchmark) |
-| Wiring into vision's frame loop on the Pi | Not yet: see "Running it live" |
+| `events.py`: `live_consumer(state, clock)` | Built: the slot the local runner's live mode plugs into vision's frame loop. See "Running it live" |
 
 ### Zone rules
 
@@ -76,15 +76,19 @@ uv run python -m kitchen.interactions.events --frames data/recordings/run1/frame
 
 ### Running it live
 
-In-process on the Pi, one `InteractionStep` per camera, fed by a vision consumer:
+`live_consumer(state, clock)` is a vision consumer: call it with each `FrameOutput`. It does the following:
+- Builds one `InteractionStep` at the first frame, from the zones in `state` and the frame size, so the calibration has to be written before the loop starts.
+- Writes each event it closes with `state.record_interaction`.
+- Raises any error instead of swallowing it, so live mode can hold every plate.
+- While the database is down, keeps the unsent events and raises `StateUnavailable` on every frame until they land.
 
 ```python
-step = InteractionStep(state.list_zones(), settings=load_interaction_settings(), source_size=(width, height))
-writer = EventWriter(state, clock, step.settings.retry_ms)
+from kitchen.interactions.events import live_consumer
 
-def interactions_consumer(output):            # vision's FrameOutput
-    writer.write(step.process(output.observation, output.change_mask))
+consumers = [entity_store_consumer(store), live_consumer(state, clock)]
 ```
+
+Zone rules answer unless you pass `classifier=FallbackClassifier(rules, primary)`, which is for after a primary has been adopted.
 
 Pass `with_clips=True` (and a `classifier=FallbackClassifier(rules, primary)`) only once a primary is adopted: drawing a clip per pair per frame costs about 1 ms on a laptop, several times that on the Pi, and zone rules never read them.
 

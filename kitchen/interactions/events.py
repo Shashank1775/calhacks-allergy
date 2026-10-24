@@ -277,6 +277,38 @@ class InteractionStep:
         return self.segmenter.close_all()
 
 
+def live_consumer(state: StateClient, clock: Clock, classifier: FallbackClassifier | None = None):
+    """The vision frame loop's consumer for live mode: each FrameOutput runs through the step, and the events it
+    closes are written with state.record_interaction.
+
+    Zone rules answer unless `classifier` brings an adopted primary (safety rule 7: never the ConvLSTM by default).
+    The step is built at the first frame, from the zones in `state` and the camera's frame size, so calibration has
+    to land before the loop starts. Errors are raised, never swallowed, so live mode can hold every plate when this
+    step stops working. A write the database refuses (StateUnavailable) leaves its events buffered for the next
+    frame and still raises: nothing is dropped (safety rule 1), and the failure shows.
+    """
+    settings = load_interaction_settings()
+    writer = EventWriter(state, clock, settings.retry_ms)
+    step: InteractionStep | None = None
+
+    def consume(output) -> None:
+        """One kitchen.vision.common.FrameOutput: observation, change_mask, width, height."""
+        nonlocal step
+        if step is None:
+            step = InteractionStep(
+                state.list_zones(),
+                settings=settings,
+                classifier=classifier,
+                source_size=(output.width, output.height),
+                with_clips=classifier is not None and classifier.primary is not None,
+            )
+        waiting = writer.write(step.process(output.observation, output.change_mask))
+        if waiting:
+            raise StateUnavailable(f"{waiting} interaction events are waiting for the database")
+
+    return consume
+
+
 def read_zones(path: Path) -> list[Zone]:
     """Read a zones file ({"zones": [{"zone_id", "kind", "polygon"}]}, vision's format). Only IDs and kinds are used."""
     data = json.loads(Path(path).read_text())
