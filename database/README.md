@@ -4,10 +4,20 @@
 
 ## What lives here
 
-- The SpacetimeDB module: every table, reducer and single-writer rule in [contracts/state-tables.md](../contracts/state-tables.md), seeded from [contracts/allergen_units.json](../contracts/allergen_units.json).
+- The SpacetimeDB module, in [`allergen-yhz-81/`](allergen-yhz-81/): the Rust code is [`spacetimedb/src/lib.rs`](allergen-yhz-81/spacetimedb/src/lib.rs), and [`spacetime.json`](allergen-yhz-81/spacetime.json) publishes it as the local database `allergen-yhz81`. It holds every table, reducer and single-writer rule in [contracts/state-tables.md](../contracts/state-tables.md), seeded from [contracts/allergen_units.json](../contracts/allergen_units.json).
 - The real Python [`StateClient`](../contracts/apis.md#stateclient), which every Python component uses to read and write the database.
 - The generated TypeScript bindings that `web/` (team outputs) uses to subscribe to tables.
 - A small shift CLI (`start_shift`), run by a person at shift start.
+
+## What's built so far
+
+| Piece | State |
+|---|---|
+| Tables | `allergen`, `entity`, `entity_state`, `interaction`, `ticket` are in `lib.rs`. Not yet: `zone`, `bin_profile`, `plate_binding`, `verdict` |
+| Reducers | `register_entity`, `record_interaction`, `move_entity`, `put_ticket`. Not yet: `put_bin_profile`, `set_zones`, `bind_plate`, `record_verdict`, and single-writer checks |
+| Python `StateClient` | Not started |
+| TypeScript bindings for `web/` | Not generated yet |
+| Shift CLI | Not started |
 
 ## What agents expect
 
@@ -18,11 +28,11 @@
 - `list_interactions` returns events in time order.
 - Throughput: `upsert_entities` about 5 times a second with up to ~30 entities; `record_interactions` bursts up to ~20 a second.
 
-These are checked by the `StateClient` contract suite in `kitchen/shared/contract_tests/` (platform). `InMemoryStateClient` is the reference behavior.
+These are checked by the `StateClient` contract suite in `kitchen/shared/contract_tests/` (platform). `FakeStateClient` is the reference behavior.
 
 ## Until it lands
 
-Agents use `InMemoryStateClient` (platform, `kitchen/shared/fakes/`). Tasks that need the real database carry the `needs-partner` label. The web screens use a fake data source until your TS bindings exist.
+Agents use `FakeStateClient` (platform, `kitchen/shared/fakes/`). Tasks that need the real database carry the `needs-partner` label. The web screens use `FakeStateSource`, which replays a golden scenario, until your TS bindings exist.
 
 ## Handing off
 
@@ -33,15 +43,12 @@ Agents use `InMemoryStateClient` (platform, `kitchen/shared/fakes/`). Tasks that
 ## What agents build around it
 
 - **Every team** reads and writes through `StateClient`.
-- **sim:** a load generator to measure your throughput (sim-10).
-- **outputs:** the expo board, tablet and chef screens, on your TS bindings.
+- **sim:** a load generator to measure your throughput.
+- **outputs:** the tablet and expo screens, on your TS bindings.
 - **platform:** the fake, the contract suite, and the end-to-end harness.
 
 ## Unverified and open
 
-- The current SpacetimeDB version and module API, and how a reducer reads the caller's identity, haven't been checked.
+- How a reducer reads the caller's identity (for single-writer checks) hasn't been checked.
 - The `spacetime` CLI and a Rust toolchain weren't installed on the owner's Mac.
-- **OQ-1:** how Python reaches SpacetimeDB: HTTP reducer calls, a bridge process, or a community SDK. Your call.
-- **OQ-7:** local standalone on the laptop or Maincloud (default: local).
-
-See [AGENTS.md §11](../AGENTS.md#11-open-questions).
+- How Python reaches the database and where it runs: the default is SpacetimeDB 2.13 running locally, reached with HTTP reducer calls plus polling. It's your call; see the Database row in [AGENTS.md, Open questions](../AGENTS.md#11-open-questions).

@@ -277,6 +277,9 @@ wheels = [
 name = "kitchen"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "jsonschema" },
+]
 
 [package.optional-dependencies]
 ml = [
@@ -292,7 +295,6 @@ server = [
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
-    { name = "jsonschema" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -301,6 +303,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'server'", specifier = ">=0.27" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "onnxruntime", marker = "extra == 'ml'", specifier = ">=1.20" },
     { name = "opencv-python-headless", marker = "extra == 'ml'", specifier = ">=4.10" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
@@ -310,7 +313,6 @@ provides-extras = ["pi", "ml", "server"]
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.170.9" },
-    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.17.2" },
 ]

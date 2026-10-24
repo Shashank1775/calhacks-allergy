@@ -1,0 +1,71 @@
+{
+  "plate_id": "plate-t1",
+  "as_of_t_ms": 3000,
+  "nodes": [
+    {
+      "entity_id": "bin-1",
+      "kind": "bin",
+      "label": "satay sauce",
+      "origin": "shift_start",
+      "start": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "manual"
+      }
+    },
+    {
+      "entity_id": "tool-knife-1",
+      "kind": "tool",
+      "label": "knife",
+      "origin": "shift_start",
+      "start": {
+        "probabilities": {},
+        "unknown": false,
+        "source": "shift_start_clean"
+      }
+    },
+    {
+      "entity_id": "plate-t1",
+      "kind": "plate",
+      "label": "plate",
+      "origin": "shift_start",
+      "start": {
+        "probabilities": {},
+        "unknown": false,
+        "source": "shift_start_clean"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "tool-knife-1",
+      "b_id": "bin-1",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "tool-knife-1",
+      "b_id": "plate-t1",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ]
+}
