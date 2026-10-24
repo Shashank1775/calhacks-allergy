@@ -34,7 +34,7 @@ uv run pytest -m 'not hardware and not slow'
 
 ### The whole kitchen on one laptop
 
-No camera and no partner database: `tools/run_local.py` runs the Orders API, the verdict service and the gate loop on one shared `FakeStateClient`, replays a golden scenario's kitchen, and serves every table at `GET /state`. `tests/e2e` drives the same code on a fake clock.
+No camera and no partner database: `tools/run_local.py` serves the end-to-end harness's `Kitchen` (the Orders API, the verdict service and the gate loop on one shared `FakeStateClient`) on a live clock, replays a golden scenario's kitchen, and serves every table at `GET /state`.
 
 ```bash
 uv run python tools/run_local.py knife-carries-peanut-to-plate
