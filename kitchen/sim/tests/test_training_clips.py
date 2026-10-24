@@ -16,7 +16,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from kitchen.sim.episodes import KINDS, STEPS, simulate_episode
+from kitchen.sim.episodes import KINDS, PORTION_RADIUS, RIM_WIDTH, STEPS, simulate_episode
 from kitchen.sim.training_clips import SPLIT_SEED_OFFSET, TEST_FAMILIES, TRAIN_FAMILIES, make_clip, write_split
 
 SCHEMAS = Path(__file__).resolve().parents[3] / "contracts" / "schemas"
@@ -63,19 +63,113 @@ def test_same_seed_gives_the_same_clip():
 
 def test_transfers_change_the_container_and_hover_does_not():
     """The model can only learn 'material moved' if the food really moves in transfer clips and stays put otherwise."""
-    for kind, should_move in (("wipe", True), ("hover", False), ("pass_over", False)):
+    for kind, should_move in (("wipe", True), ("hover", False), ("pass_over", False), ("touch", False)):
         episode = simulate_episode(seed=3, family=0, kind=kind)
-        b_food = [
-            blob for blob in episode.food if np.linalg.norm(blob.position[0] - episode.containers[0].center[0]) < 0.2
-        ]
-        moved = max(np.linalg.norm(blob.position[-1] - blob.position[0]) for blob in b_food)
+        moved = food_moved_in_b(episode)  # relative to B, so a nudged container doesn't count
         assert (moved > 1e-3) == should_move, kind
+
+
+def inside_body(container, point, f):
+    """True if a point is inside a container's body (inside the rim) at frame f."""
+    offset = np.abs(point - container.center[f]) / (container.half_size - RIM_WIDTH)
+    return (offset**2).sum() <= 1.0 if container.is_round else offset.max() <= 1.0
+
+
+def food_moved_in_b(episode):
+    """How far the food in B moved relative to B over the episode."""
+    b = episode.containers[0].center
+    in_b = [blob for blob in episode.food if np.linalg.norm(blob.position[0] - b[0]) < 0.2 and not blob.on_actor.all()]
+    return max(np.linalg.norm((blob.position[-1] - b[-1]) - (blob.position[0] - b[0])) for blob in in_b)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_scoops_and_deposits_move_a_visible_portion_inside_b(seed):
+    """v2: the moved portion is spoonful-sized, and it starts (scoop) or lands (deposit) inside B's body."""
+    scoop = simulate_episode(seed=seed, family=0, kind="scoop")
+    portion = next(blob for blob in scoop.food if blob.on_actor.any())
+    assert portion.radius >= PORTION_RADIUS[0]
+    assert inside_body(scoop.containers[0], portion.position[0], 0)
+    assert np.linalg.norm(portion.position[-1] - portion.position[0]) > 2 * portion.radius  # it left its spot
+
+    deposit = simulate_episode(seed=seed, family=0, kind="deposit")
+    dropped = next(blob for blob in deposit.food if blob.on_actor.any())
+    drop = int(np.argmin(dropped.on_actor))  # the first frame the portion is off A
+    assert dropped.radius >= PORTION_RADIUS[0]
+    assert inside_body(deposit.containers[0], dropped.position[drop], drop)
+
+
+def test_the_v2_label_fixes_hold_over_many_seeds():
+    """Wipes always smear food; about half of touches land inside B; a nudge never moves B before A arrives."""
+    assert all(food_moved_in_b(simulate_episode(seed, 0, "wipe")) > 1e-3 for seed in range(100))
+    inside = 0
+    for seed in range(200):
+        touch = simulate_episode(seed, 0, "touch")
+        b = touch.containers[0]
+        f = int(np.searchsorted(touch.times_ms, touch.labels["contact_t_ms"]))
+        inside += np.abs(touch.actor.tip[f] - b.center[f]).max() < 0.6 * b.half_size.max()
+        assert np.allclose(b.center[f], b.center[0])  # the nudge comes after A arrives
+    assert 0.35 < inside / 200 < 0.75
+    assert (KINDS["hover"].contact, KINDS["hover"].transferred) == (True, False)
+
+
+def test_food_on_a_and_food_color_say_nothing_by_themselves():
+    """Some non-transfer clips carry food on A the whole time; some deposits are the same color as B's food."""
+    loaded = 0
+    for seed in range(200):
+        episode = simulate_episode(seed, 0, "pass_over")
+        loaded += any(blob.on_actor.all() for blob in episode.food)
+    assert 0.15 < loaded / 200 < 0.45
+
+    same_color = 0
+    for seed in range(100):
+        deposit = simulate_episode(seed, 0, "deposit")
+        dropped = next(blob for blob in deposit.food if blob.on_actor.any())
+        others = [blob.color for blob in deposit.food if blob is not dropped and not blob.on_actor.any()]
+        same_color += any(np.allclose(dropped.color, color) for color in others)
+    assert 0.1 < same_color / 100 < 0.5
+
+
+def test_stirred_food_stays_in_its_container():
+    """Food pushed by someone stirring never leaves B, so it never ends up under A on the counter."""
+    for seed in range(60):
+        episode = simulate_episode(seed, 0, "motion_nearby")
+        b = episode.containers[0]
+        in_b = [blob for blob in episode.food if not blob.on_actor.any() and inside_body(b, blob.position[0], 0)]
+        assert all(inside_body(b, blob.position[f], f) for blob in in_b for f in range(len(episode.times_ms)))
+
+
+def test_no_contact_clips_keep_a_and_its_load_off_bs_food():
+    """In motion_nearby (labeled contact=False), B's food never ends up under A, and a load on A never lies over B.
+
+    Bounding boxes are a loose stand-in for the drawn shapes, so a few percent of near misses are allowed.
+    """
+    from kitchen.sim.episodes import actor_extent, container_extent
+
+    def circle_hits_box(center, radius, box):
+        return np.linalg.norm(center - np.clip(center, box[:2], box[2:])) < radius
+
+    food_under_a = load_over_b = 0
+    for seed in range(200):
+        episode = simulate_episode(seed, 0, "motion_nearby")
+        b, frames = episode.containers[0], range(len(episode.times_ms))
+        b_food = [x for x in episode.food if not x.on_actor.any() and inside_body(b, x.position[0], 0)]
+        load = [x for x in episode.food if x.on_actor.all()]
+        food_under_a += any(
+            circle_hits_box(x.position[f], x.radius * x.stretch[f], actor_extent(episode.actor, f))
+            for x in b_food
+            for f in frames
+        )
+        load_over_b += any(
+            circle_hits_box(x.position[f], x.radius, container_extent(b, f)) for x in load for f in frames
+        )
+    assert food_under_a <= 8 and load_over_b <= 8  # v2.2 had about 100 and 27 per 200
 
 
 def test_splits_use_disjoint_seeds_and_test_uses_unseen_layouts(tmp_path):
     stats = {split: write_split(tmp_path, split, 2, seed_base=0, workers=1) for split in SPLIT_SEED_OFFSET}
     ranges = [range(s["seeds"][0], s["seeds"][1] + 1) for s in stats.values()]
     assert not set(ranges[0]) & set(ranges[1]) and not set(ranges[1]) & set(ranges[2])
+    assert not set(ranges[0]) & set(ranges[2])
     assert not set(TRAIN_FAMILIES) & set(TEST_FAMILIES)
     lines = (tmp_path / "train" / "clips.jsonl").read_text().splitlines()
     first = json.loads(lines[0])
