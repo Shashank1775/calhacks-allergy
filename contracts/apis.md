@@ -149,15 +149,14 @@ def build_clip(a_id: str, b_id: str, steps: Sequence[ClipStep], *, H: int = 128,
 
 ## LayaParser
 
-Owner: **orders**. Backed by our fine-tuned Laya model, which answers typed questions with calibrated probabilities. The adapter asks it whether a note forbids each allergen, how severe, and whether traces matter, or whether a bin label contains each allergen, and turns the answers into these results.
+Owner: **orders**. Backed by our fine-tuned Laya model, which answers typed questions with calibrated probabilities. The adapter asks it whether a note forbids each allergen, how severe, whether traces matter and whether an ingredient is still allowed, and turns the answers into a `ParseResult`. Bins don't go through Laya: their profiles are hard-coded for the demo (`kitchen/orders/bins.py`).
 
 ```python
 class LayaParser(Protocol):
     def parse_note(self, note: str, *, source: Literal["typed", "voice"]) -> ParseResult: ...
-    def read_bin_label(self, label_text: str) -> AllergenProfile: ...
 ```
 
-- Raises `LayaParserUnavailable`. The tablet then falls back to manual entry. It never guesses.
+- Raises `LayaParserUnavailable` (an empty note too). The Orders API then answers `503 laya_unavailable`. It never guesses.
 - **Fake:** `FakeLayaParser`, a deterministic keyword parser covering the notes in the orders eval set.
 
 ## Transcriber and Speaker
@@ -214,10 +213,8 @@ Owner: **orders** (`kitchen/orders/api.py`). Consumer: **outputs** (tablet scree
 | `POST /transcribe` | audio (`audio/wav`) | `{"text": str}` | Cartesia Ink |
 | `POST /parse` | `{"note": str, "source": "typed"\|"voice"}` | `ParseResult` | |
 | `POST /drafts/{draft_id}/answers` | `{"question_id": str, "value": any}` | `ParseResult` | `sendable` flips once all questions are answered |
-| `POST /drafts/{draft_id}/send` | `{"number": int}` | `Ticket` | `409 unanswered_questions` if not sendable (safety rule: no unanswered questions) |
-| `POST /tickets/{ticket_id}/amend` | `{"note": str}` | `ParseResult` | New draft at revision + 1; same question flow; send triggers a recheck (safety rule: late changes recheck everything) |
-| `POST /bins/read` | `{"label_text": str}` | `AllergenProfile` | Laya reads a bin label at shift start. Nothing is saved |
-| `PUT /bins/{entity_id}` | `AllergenProfile` | `AllergenProfile` | Saves the profile, as read or as adjusted by the person |
+| `POST /drafts/{draft_id}/send` | `{"number": int}` | `Ticket` | `409 unanswered_questions` if not sendable (safety rule: no unanswered questions). `ticket_id` is `t<number>`; `409 number_in_use` if that number was already sent this shift. An amendment draft keeps its ticket's number, so `number` can be left out |
+| `POST /tickets/{ticket_id}/amend` | `{"note": str}` | `ParseResult` | New draft for revision + 1: the original note plus the change, parsed again; same question flow; send triggers a recheck (safety rule: late changes recheck everything). `409 ticket_changed` on send if another amendment landed first |
 
 ## Vision HTTP API (on the Pi)
 

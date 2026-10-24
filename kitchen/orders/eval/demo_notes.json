@@ -1,0 +1,16 @@
+{
+  "notes": [
+    {"id": "peanut-epipen", "note": "peanut allergy, anaphylactic, she carries an EpiPen", "source": "typed", "forbidden": ["peanut"], "severity": "anaphylactic"},
+    {"id": "shrimp", "note": "no shrimp please, shellfish allergy", "source": "typed", "forbidden": ["shellfish"], "severity": "allergy"},
+    {"id": "lactose", "note": "lactose intolerant", "source": "typed", "forbidden": ["milk"], "severity": "intolerance"},
+    {"id": "sesame-egg", "note": "allergic to sesame and egg", "source": "typed", "forbidden": ["sesame", "egg"], "severity": "allergy"},
+    {"id": "gluten", "note": "gluten free please, celiac", "source": "typed", "forbidden": ["wheat"], "severity": "allergy"},
+    {"id": "no-allergies", "note": "no allergies, just make it extra spicy", "source": "typed", "forbidden": []},
+    {"id": "tree-nut-traces", "note": "tree nut allergy, even traces matter", "source": "typed", "forbidden": ["tree_nut"], "severity": "allergy"},
+    {"id": "fish-severe", "note": "severe fish allergy, keep it away from the fryer", "source": "typed", "forbidden": ["fish"], "severity": "anaphylactic"},
+    {"id": "dairy-free", "note": "dairy free", "source": "typed", "forbidden": ["milk"], "severity": "allergy"},
+    {"id": "voice-soy", "note": "um table six has a soy allergy no tofu", "source": "voice", "forbidden": ["soy"], "severity": "allergy"},
+    {"id": "bare-nuts", "note": "allergic to nuts, carries an epipen", "source": "typed", "forbidden": ["tree_nut", "peanut"], "severity": "anaphylactic"},
+    {"id": "except-peanuts", "note": "no allergies except peanuts", "source": "typed", "forbidden": ["peanut"], "severity": "allergy"}
+  ]
+}

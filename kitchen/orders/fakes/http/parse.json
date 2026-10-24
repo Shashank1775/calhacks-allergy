@@ -1,0 +1,83 @@
+{
+  "method": "POST",
+  "path": "/parse",
+  "request": {
+    "note": "allergic to nuts, carries an epipen",
+    "source": "typed"
+  },
+  "status": 200,
+  "response": {
+    "draft_id": "d-1ec736dc84",
+    "note": "allergic to nuts, carries an epipen",
+    "source": "typed",
+    "parser": {
+      "name": "laya",
+      "version": "fake"
+    },
+    "constraints": [
+      {
+        "allergen_unit_id": "tree_nut",
+        "severity": "anaphylactic",
+        "trace_sensitive": true,
+        "confidence": {
+          "allergen_unit_id": 0.7,
+          "severity": 0.95,
+          "trace_sensitive": 0.85
+        }
+      },
+      {
+        "allergen_unit_id": "peanut",
+        "severity": "anaphylactic",
+        "trace_sensitive": true,
+        "confidence": {
+          "allergen_unit_id": 0.7,
+          "severity": 0.95,
+          "trace_sensitive": 0.85
+        }
+      }
+    ],
+    "exceptions": [],
+    "questions": [
+      {
+        "target": {
+          "kind": "constraint",
+          "index": 0,
+          "field": "allergen_unit_id"
+        },
+        "prompt": "Keep tree nuts off this order?",
+        "options": [
+          {
+            "label": "Yes, keep it off",
+            "value": "tree_nut"
+          },
+          {
+            "label": "No",
+            "value": null
+          }
+        ],
+        "question_id": "q1"
+      },
+      {
+        "target": {
+          "kind": "constraint",
+          "index": 1,
+          "field": "allergen_unit_id"
+        },
+        "prompt": "Keep peanuts off this order?",
+        "options": [
+          {
+            "label": "Yes, keep it off",
+            "value": "peanut"
+          },
+          {
+            "label": "No",
+            "value": null
+          }
+        ],
+        "question_id": "q2"
+      }
+    ],
+    "question_threshold": 0.85,
+    "sendable": false
+  }
+}

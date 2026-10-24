@@ -22,7 +22,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step, 
 
 | Step | What happens | Folder | Owner |
 |---|---|---|---|
-| **Orders** | The server types or speaks a ticket (Cartesia Ink). Laya turns the note into forbidden allergens, low-confidence fields become one-tap questions, and the sent ticket is written to the database. At shift start, Laya also reads each bin's label into an allergen profile that a person checks | [`kitchen/orders/`](kitchen/orders/) | team `orders` |
+| **Orders** | The server types or speaks a ticket (Cartesia Ink). Laya turns the note into forbidden allergens, low-confidence fields become one-tap questions, and the sent ticket is written to the database. Demo bin profiles are hard-coded and written at startup | [`kitchen/orders/`](kitchen/orders/) | team `orders` |
 | **Vision** | YOLOv8 detection and pose, run locally with ONNX Runtime now and packaged to upload to the Hailo-8 later; ByteTrack, entity identity and origin, zones, plate binding, a per-frame **change mask**, frame recording | [`kitchen/vision/`](kitchen/vision/) | team `vision` |
 | **Entities** | In-memory entity store on the Pi, synced to SpacetimeDB about 5 times a second | [`kitchen/entities/`](kitchen/entities/) | **partner** |
 | **Interactions** | Candidate pairs; per pair, a window with vector features (for zone rules) and a **clip** of box masks plus change mask (for the ConvLSTM); zone rules; a classifier wrapper with fallback; edges written to the database | [`kitchen/interactions/`](kitchen/interactions/) | **partner** |
@@ -40,7 +40,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step, 
 Data flow:
 
 ```
-tablet ─▶ orders ─▶ DB: ticket, bin profiles
+tablet ─▶ orders ─▶ DB: ticket        orders startup ─▶ DB: bin profiles (hard-coded)
 camera ─▶ vision ─▶ ObservationFrame + change mask ─┬─▶ entities (partner) ─▶ DB: entity, entity_state (≈5 Hz)
                                                     └─▶ interactions (partner): pair windows (features + clips) ─▶ zone rules | ConvLSTM ─▶ DB: interaction edges
 DB ─▶ graph (partner) ─▶ reach ─▶ verdict ─▶ DB: verdict + chain ─▶ gate, voice, expo board
@@ -174,7 +174,7 @@ An issue is **ready** when it has a goal, acceptance criteria with the command t
 | Team | Folders | Builds | Ships these fakes for others | Safety focus |
 |---|---|---|---|---|
 | `platform` | `kitchen/shared/`, `tests/e2e/`, `tools/`, `.github/`, `.claude/`, `pyproject.toml` | The `kitchen` Python project, CI, models generated from contracts, interfaces, clock, the end-to-end harness, TS types for `web/` | `FakeStateClient`, and fakes for partner parts (`FakeEntityStore`, `FakeProvenanceGraph`, `FakeClassifier`), plus contract tests the partner's code must pass | Fakes must be faithful, especially fail-closed behavior |
-| `orders` | `kitchen/orders/` | Note parsing via Laya, one-tap questions, send, amendments, bin labels at shift start, Cartesia Ink, the Orders HTTP API, a ticket-note eval set | `FakeLayaParser`, `FakeTranscriber` | No unanswered questions; allergens, not contacts |
+| `orders` | `kitchen/orders/` | Note parsing via Laya, one-tap questions, send, amendments, hard-coded demo bins, Cartesia Ink, the Orders HTTP API, a ticket-note eval set | `FakeLayaParser`, `FakeTranscriber` | No unanswered questions; allergens, not contacts |
 | `vision` | `kitchen/vision/` | Video and webcam input, YOLOv8 detection and pose run locally with ONNX Runtime, a Hailo deploy bundle and backend ready for upload, the per-frame change mask (shared function), ByteTrack, identity and origin, zones, plate binding, recording and replay, the Pi HTTP server | Recorded frame JSONL packs, `FakeVisionAPI` | Known-clean source (new ID on re-acquire, origin set correctly) |
 | `verdict` | `kitchen/verdict/` | The verdict policy and clean-confidence, and the verdict service (plate at pass, amendment) | `FakeVerdictFeed` | Fail closed; plain-code verdict; late changes recheck everything. **The safety-critical team** |
 | `sim` | `kitchen/sim/` | Kitchen simulator with injected mistakes, scenario generation, and the **2D clip renderer**: abstract kitchens rendered as boxes plus change masks with labels from world truth, including hard negatives (overlap without contact, motion without contact, contact without movement, camera noise) | Scenario corpora, ConvLSTM training clip datasets | Ground truth independent of the graph; clips object-blind |
@@ -236,7 +236,7 @@ There's always a working demo on `main` after the vertical slice. Each later mil
 | **M0 Foundations** | Everyone builds against fakes | `kitchen` project and CI; generated models; interfaces; all fakes, including the partner-part fakes and their contract tests; each step has a skeleton with a passing test; vision replays a video locally into frame JSONL plus change masks; the shared change-mask function and clip builder; sim renders a first labeled clip set and generates at least 20 valid scenarios |
 | **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End to end on fakes: typed note → `FakeLayaParser` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `FakeGate`, `FakeSpeaker`. All golden scenarios pass. `safety` tests for fail closed, plain-code verdict and late changes. The tablet can't send with open questions. Hailo deploy bundle ready (no device needed). A sim clip dataset with hard negatives and leak-free splits for the partner. Integration with the partner's parts as they land (`needs-partner`) |
 | **M2 Live on Pi** | The camera drives it | Connect the Hailo and upload the bundle; the owner runs the parity check; det + pose + ByteTrack at 30 FPS or more (`hardware`). Calibration and plate binding. Live zone-rule edges. Gate hardware with `fault` on a stale feed (`hardware`). Overlays. A recorded live session replays deterministically |
-| **M3 Models** | Learned parts, gated by evaluation | Fine-tuned Laya parses the eval set and reads bin labels, with misses becoming questions. The partner's ConvLSTM vs zone rules, decided by the partner's benchmark. Cartesia Ink and Sonic live |
+| **M3 Models** | Learned parts, gated by evaluation | Fine-tuned Laya parses the eval set, with misses becoming questions. The partner's ConvLSTM vs zone rules, decided by the partner's benchmark. Cartesia Ink and Sonic live |
 | **M4 Demo Hardening** | It survives a live demo | Live late-change recheck. Failure drills (kill any component → HOLD or `fault`, never PASS). Demo script rehearsed |
 
 ## 11. Open questions
@@ -288,7 +288,7 @@ gh pr list --label ready-to-merge                      # the owner's merge queue
 | Interaction / edge | A classified contact between two entities: `transfer.contact`, `transfer.scoop`, `transfer.wipe`, `clean.wash` or `unimportant` |
 | Pass / expo / plating spot | Where plates leave / the expediter's board / where a plate is bound to its ticket |
 | Verdict | PASS or HOLD for one plate against one ticket revision |
-| Laya | Our fine-tuned copy of the open Laya model. It doesn't write text: it answers typed questions with probabilities (calibrated once fine-tuned). As `LayaParser` it reads ticket notes and bin labels. It plays no part in the verdict |
+| Laya | Our fine-tuned copy of the open Laya model. It doesn't write text: it answers typed questions with probabilities (calibrated once fine-tuned). As `LayaParser` it reads ticket notes. It plays no part in the verdict |
 | Zone rules / ConvLSTM | Hand-written classifier, always on / learned classifier (partner) over clips, adopted only if it wins |
 | Change mask | Per-frame single channel, bright where pixels changed since the last frame (brighter = more movement). One shared function for live and sim |
 | Clip | One candidate pair over time: box A mask, box B mask, change mask, plus elapsed time per step. The ConvLSTM's only input |

@@ -1,6 +1,6 @@
 """kitchen: the allergen tracker's Python code, one folder per pipeline step.
 
-    orders/        ticket notes and bin labels -> typed allergen data (Laya + one-tap questions)  (team orders)
+    orders/        ticket notes -> typed allergen data (Laya + one-tap questions); demo bins    (team orders)
     vision/        camera -> detections, tracks, entity IDs, change masks, recordings              (team vision)
     entities/      in-memory entity store + database sync at about 5 Hz                            (partner)
     interactions/  entity pairs -> features and clips -> classified edges                          (partner)

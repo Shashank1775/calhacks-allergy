@@ -2,11 +2,11 @@
 
 **Owner:** team `outputs` (agents). Also owns [`kitchen/gate/`](../kitchen/gate/README.md).
 
-What people see. Servers enter tickets and set up bins on the tablet; expo sees which plates are held and why.
+What people see. Servers enter tickets on the tablet; expo sees which plates are held and why.
 
 ## What happens here
 
-- **Tablet (`/tablet`):** the server types a note (or speaks it), sees the parsed constraints, answers one-tap questions, and sends. Send stays disabled until the draft is `sendable`. At shift start, the same screen reads each bin's label through Laya, shows the allergen profile, lets the person adjust it, and saves it.
+- **Tablet (`/tablet`):** the server types a note (or speaks it), sees the parsed constraints, answers one-tap questions, and sends. Send stays disabled until the draft is `sendable`.
 - **Expo board (`/expo`):** tickets, plates and verdicts. For each held plate it shows reasons, flagged allergens and the chain step by step with per-step confidence. A "start plate" button per ticket calls vision's `POST /plates/start`. Camera overlays color entities by allergen risk.
 - We never decide anything and write no database tables. We change state only through the orders and vision HTTP APIs.
 
@@ -25,11 +25,12 @@ web/
     badge.ts   plate_badge(): the only way a plate shows PASS
     styles.css shared rules, including 44 px touch targets
     state/     StateSource interface; FakeStateSource (replays a scenario); SpacetimeSource later (partner's TS bindings)
-    api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from contracts/fixtures/
-    types/     TEMPORARY.ts: hand-written contract types until platform generates src/generated/
+    api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from kitchen/orders/fakes/http/
+               (orders) and the vision API table
+    types/     TEMPORARY.ts: hand-written contract types until platform generates src/generated/ (never hand-edit that)
     components/ chit, rail, stamp, banner, "to be implemented" marker
     home/      the / page: video source, live camera source (to be implemented)
-    tablet/    ticket entry, one-tap questions, send gate, bin setup
+    tablet/    ticket entry, one-tap questions, send gate
     expo/      tickets, plates, hold reasons and chains, start-plate button, camera panel
 ```
 
@@ -59,7 +60,7 @@ With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION
 
 | Direction | What | Contract | From / to |
 |---|---|---|---|
-| Out/In | Parse, answers, send, amend, transcribe, bin labels | [Orders HTTP API](../contracts/apis.md#orders-http-api) | orders |
+| Out/In | Parse, answers, send, amend, transcribe | [Orders HTTP API](../contracts/apis.md#orders-http-api) | orders |
 | Out/In | Start plate, camera stream, health | [Vision HTTP API](../contracts/apis.md#vision-http-api-on-the-pi) | vision |
 | In | `ticket`, `bin_profile`, `entity`, `entity_state`, `plate_binding`, `verdict` | [state-tables.md](../contracts/state-tables.md) via SpacetimeDB TS bindings | partner's `database/` (bindings), written by orders, vision, verdict and the partner |
 | Uses | Allergen choices | [`allergen_units.json`](../contracts/allergen_units.json) | contracts (never hardcoded) |
@@ -74,7 +75,7 @@ See [Safety rules](../AGENTS.md#3-safety-rules).
 |---|---|---|
 | Fail closed | Showing PASS on stale data after the feed drops, or falling back to a replay when the source isn't set | Connection loss shows FEED LOST and clears PASS badges. A missing or unknown `WEB_STATE_SOURCE` shows FEED LOST on every screen |
 | Plain-code verdict | Client-side decision logic | One tested function renders PASS, only from `verdict.decision == "pass"` |
-| No unanswered questions | Tablet sends with an open question | Send is disabled until `sendable`. A `409 unanswered_questions` re-shows the questions. `laya_unavailable` shows manual entry, never a guessed result |
+| No unanswered questions | Tablet sends with an open question | Send is disabled until `sendable`. A `409 unanswered_questions` re-shows the questions. `503 laya_unavailable` shows the error and keeps the note, never a guessed result |
 | Late changes recheck everything | Showing an old revision's PASS | A plate whose latest verdict is for an older revision shows RECHECKING |
 
 ## Tests

@@ -26,7 +26,7 @@ export function HomeScreen() {
           <a className="display station_link" href="/tablet">
             Tablet →
           </a>
-          <p>New tickets, one-tap questions, and bin setup at shift start.</p>
+          <p>New tickets and one-tap questions.</p>
         </Chit>
         <Chit label="Expo station">
           <a className="display station_link" href="/expo">

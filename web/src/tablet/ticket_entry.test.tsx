@@ -1,13 +1,22 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw/http";
 import { describe, expect, it } from "vitest";
+import send_unanswered_example from "../../../kitchen/orders/fakes/http/send_unanswered.json";
 import { server, TEST_ORDERS_URL } from "../api/mocks/server";
 import { TicketEntry } from "./ticket_entry";
 
+const NOTE = "allergic to nuts, carries an epipen";
+
 async function read_note(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByLabelText("Guest's note"), "severe nut allergy, coconut is fine");
+  await user.type(screen.getByLabelText("Guest's note"), NOTE);
   await user.click(screen.getByRole("button", { name: "READ NOTE" }));
+}
+
+/** Clicks an option inside one question; both questions use the same option labels. */
+async function answer(user: ReturnType<typeof userEvent.setup>, prompt: RegExp, option: string) {
+  const question = await screen.findByRole("group", { name: prompt });
+  await user.click(within(question).getByRole("button", { name: option }));
 }
 
 describe("safety: no unanswered questions", () => {
@@ -17,13 +26,12 @@ describe("safety: no unanswered questions", () => {
     await read_note(user);
 
     await user.type(await screen.findByLabelText("Table"), "7");
-    const send = screen.getByRole("button", { name: "SEND TICKET" });
-    expect(send).toBeDisabled();
-
-    await user.click(screen.getByRole("button", { name: "Yes, peanuts too" }));
     expect(screen.getByRole("button", { name: "SEND TICKET" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Yes, even traces" }));
+    await answer(user, /Keep tree nuts off/, "Yes, keep it off");
+    expect(screen.getByRole("button", { name: "SEND TICKET" })).toBeDisabled();
+
+    await answer(user, /Keep peanuts off/, "Yes, keep it off");
     expect(await screen.findByRole("button", { name: "SEND TICKET" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "SEND TICKET" }));
@@ -35,7 +43,7 @@ describe("safety: no unanswered questions", () => {
       http.post(`${TEST_ORDERS_URL}/parse`, () =>
         HttpResponse.json({
           draft_id: "d-1",
-          note: "x",
+          note: NOTE,
           source: "typed",
           parser: { name: "laya", version: "test" },
           constraints: [],
@@ -46,7 +54,7 @@ describe("safety: no unanswered questions", () => {
         }),
       ),
       http.post(`${TEST_ORDERS_URL}/drafts/:id/send`, () =>
-        HttpResponse.json({ error: { code: "unanswered_questions", message: "open" } }, { status: 409 }),
+        HttpResponse.json(send_unanswered_example.response, { status: send_unanswered_example.status }),
       ),
     );
     const user = userEvent.setup();
@@ -60,8 +68,27 @@ describe("safety: no unanswered questions", () => {
   });
 });
 
+describe("TicketEntry", () => {
+  it("says so when the table number was already sent this shift", async () => {
+    server.use(
+      http.post(`${TEST_ORDERS_URL}/drafts/:id/send`, () =>
+        HttpResponse.json({ error: { code: "number_in_use", message: "in use" } }, { status: 409 }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<TicketEntry />);
+    await read_note(user);
+    await answer(user, /Keep tree nuts off/, "Yes, keep it off");
+    await answer(user, /Keep peanuts off/, "Yes, keep it off");
+    await user.type(screen.getByLabelText("Table"), "7");
+    await user.click(await screen.findByRole("button", { name: "SEND TICKET" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Table 7 already has a ticket this shift");
+  });
+});
+
 describe("safety: fail closed when Laya is down", () => {
-  it("shows manual entry, never a guessed parse", async () => {
+  it("shows the error and keeps the note, never a guessed parse", async () => {
     server.use(
       http.post(`${TEST_ORDERS_URL}/parse`, () =>
         HttpResponse.json({ error: { code: "laya_unavailable", message: "down" } }, { status: 503 }),
@@ -71,7 +98,9 @@ describe("safety: fail closed when Laya is down", () => {
     render(<TicketEntry />);
     await read_note(user);
 
-    expect(await screen.findByRole("region", { name: "Manual entry" })).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("nothing was guessed");
+    expect(screen.getByLabelText("Guest's note")).toHaveValue(NOTE);
     expect(screen.queryByText("LAYA READ:")).toBeNull();
+    expect(screen.queryByRole("button", { name: "SEND TICKET" })).toBeNull();
   });
 });

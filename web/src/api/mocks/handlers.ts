@@ -1,22 +1,30 @@
 /**
- * MSW handlers for the orders and vision APIs, built from the contract fixtures.
+ * MSW handlers for the orders and vision APIs.
+ * Orders responses come from the orders team's examples in kitchen/orders/fakes/http/.
  * Used by every test, and in the browser only when WEB_MOCK_API=1 on a dev build.
  */
 import { http, HttpResponse } from "msw/http";
-import needs_answer from "../../../../contracts/fixtures/valid/parse_result/needs-answer.json";
-import peanut_ticket from "../../../../contracts/fixtures/valid/ticket/peanut-anaphylactic.json";
-import satay_profile from "../../../../contracts/fixtures/valid/allergen_profile/bin-satay.json";
-import type { ParseResult } from "../../types/TEMPORARY";
+import parse_example from "../../../../kitchen/orders/fakes/http/parse.json";
+import send_example from "../../../../kitchen/orders/fakes/http/send.json";
+import send_unanswered_example from "../../../../kitchen/orders/fakes/http/send_unanswered.json";
+import type { ParseResult, Ticket } from "../../types/TEMPORARY";
 
-/** The mock keeps one draft, like a single tablet. */
+/** The mock keeps one draft, like a single tablet, and the table numbers sent this shift. */
 let draft: ParseResult = fresh_draft();
+const sent_numbers = new Set<number>();
 
 function fresh_draft(): ParseResult {
-  return structuredClone(needs_answer) as ParseResult;
+  return structuredClone(parse_example.response) as ParseResult;
 }
 
 function all_answered(result: ParseResult): boolean {
   return result.questions.every((question) => question.answer !== undefined);
+}
+
+/** Forgets sent table numbers between tests. */
+export function reset_orders_mock(): void {
+  draft = fresh_draft();
+  sent_numbers.clear();
 }
 
 export function orders_handlers(base: string) {
@@ -39,23 +47,24 @@ export function orders_handlers(base: string) {
 
     http.post(`${base}/drafts/:draft_id/send`, async ({ request }) => {
       if (!all_answered(draft)) {
+        return HttpResponse.json(send_unanswered_example.response, { status: send_unanswered_example.status });
+      }
+      const body = (await request.json()) as { number: number };
+      if (sent_numbers.has(body.number)) {
         return HttpResponse.json(
-          { error: { code: "unanswered_questions", message: "Answer every question first." } },
+          { error: { code: "number_in_use", message: `ticket ${body.number} was already sent this shift` } },
           { status: 409 },
         );
       }
-      const body = (await request.json()) as { number: number };
-      return HttpResponse.json({
-        ...peanut_ticket,
+      sent_numbers.add(body.number);
+      const ticket: Ticket = {
+        ...(send_example.response as Ticket),
         ticket_id: `t${body.number}`,
         number: body.number,
         note: draft.note,
-      });
+      };
+      return HttpResponse.json(ticket);
     }),
-
-    http.post(`${base}/bins/read`, () => HttpResponse.json(satay_profile)),
-
-    http.put(`${base}/bins/:entity_id`, async ({ request }) => HttpResponse.json(await request.json())),
   ];
 }
 

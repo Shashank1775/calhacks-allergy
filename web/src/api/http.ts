@@ -26,7 +26,7 @@ export function vision_url(): string | undefined {
 export async function call_api<T>(
   base_url: string | undefined,
   path: string,
-  method: "POST" | "PUT",
+  method: "POST",
   body?: unknown,
 ): Promise<ApiResult<T>> {
   if (!base_url) {

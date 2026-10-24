@@ -4,10 +4,11 @@
  * Calls: POST /parse, POST /drafts/{id}/answers, POST /drafts/{id}/send.
  * Rules: no unanswered questions. Send stays disabled until the draft is
  * sendable and every question has an answer; a 409 keeps the questions up.
- * Fail closed: if Laya is down we show manual entry, never a guessed result.
+ * Fail closed: if Laya is down (503 laya_unavailable) we show the error and
+ * keep the note, never a guessed result.
  */
 import { useState } from "react";
-import { allergen_name, ALLERGENS } from "../allergens";
+import { allergen_name } from "../allergens";
 import { answer_question, parse_note, send_draft } from "../api/orders";
 import { Chit } from "../components/chit";
 import { ToBeImplemented } from "../components/to_be_implemented";
@@ -18,7 +19,6 @@ export function TicketEntry() {
   const [table, set_table] = useState("");
   const [draft, set_draft] = useState<ParseResult | null>(null);
   const [sent, set_sent] = useState<Ticket | null>(null);
-  const [laya_down, set_laya_down] = useState(false);
   const [busy, set_busy] = useState(false);
   const [error, set_error] = useState<string | null>(null);
 
@@ -31,14 +31,14 @@ export function TicketEntry() {
     set_busy(true);
     set_error(null);
     set_sent(null);
-    set_laya_down(false);
     const result = await parse_note(note);
     set_busy(false);
     if (result.ok) {
       set_draft(result.data);
     } else if (result.code === "laya_unavailable") {
+      // The note stays in the box so the server can fix it or try again.
       set_draft(null);
-      set_laya_down(true);
+      set_error("Laya couldn't read this note, so nothing was guessed. Check the note and read it again.");
     } else {
       set_draft(null);
       set_error(`Couldn't read the note: ${result.message}`);
@@ -71,6 +71,8 @@ export function TicketEntry() {
       set_table("");
     } else if (result.code === "unanswered_questions") {
       set_error("Orders says a question is still open. Answer it, then send again.");
+    } else if (result.code === "number_in_use") {
+      set_error(`Table ${table_number} already has a ticket this shift. Check the table number.`);
     } else {
       set_error(`Couldn't send: ${result.message}`);
     }
@@ -92,8 +94,6 @@ export function TicketEntry() {
         READ NOTE
       </button>
       <ToBeImplemented>Speaking the note (POST /transcribe). The iPad needs HTTPS for its microphone.</ToBeImplemented>
-
-      {laya_down && <ManualEntry />}
 
       {draft && (
         <>
@@ -191,27 +191,5 @@ function QuestionBlock({
         })}
       </div>
     </fieldset>
-  );
-}
-
-/** Shown when Laya is down. Never pre-filled with a guess. */
-function ManualEntry() {
-  return (
-    <section className="manual_entry" aria-label="Manual entry">
-      <p className="error" role="alert">
-        Laya is unavailable. Enter the forbidden allergens by hand.
-      </p>
-      <div className="option_row">
-        {ALLERGENS.map((allergen) => (
-          <label key={allergen.id} className="check">
-            <input type="checkbox" /> {allergen.name}
-          </label>
-        ))}
-      </div>
-      <button type="button" className="btn" disabled>
-        SEND TICKET
-      </button>
-      <ToBeImplemented>Sending a hand-entered ticket. The orders API has no endpoint for it yet.</ToBeImplemented>
-    </section>
   );
 }

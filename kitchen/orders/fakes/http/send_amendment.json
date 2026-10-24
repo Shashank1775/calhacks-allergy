@@ -1,0 +1,20 @@
+{
+  "method": "POST",
+  "path": "/drafts/d-cb942158e1/send",
+  "request": {},
+  "status": 200,
+  "response": {
+    "ticket_id": "t7",
+    "number": 7,
+    "revision": 2,
+    "created_t_ms": 120000,
+    "source": "typed",
+    "note": "allergic to nuts, carries an epipen. also no dairy",
+    "pass_threshold": 0.99,
+    "forbidden": [
+      "milk",
+      "peanut",
+      "tree_nut"
+    ]
+  }
+}

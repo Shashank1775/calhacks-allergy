@@ -1,0 +1,14 @@
+{
+  "method": "POST",
+  "path": "/drafts/d-1ec736dc84/send",
+  "request": {
+    "number": 7
+  },
+  "status": 409,
+  "response": {
+    "error": {
+      "code": "unanswered_questions",
+      "message": "answer every question before sending"
+    }
+  }
+}

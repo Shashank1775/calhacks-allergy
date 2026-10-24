@@ -6,7 +6,7 @@
 
 ## Context
 
-Team `outputs` builds two screens in `web/`: the **tablet** (tickets, one-tap questions, bin labels at shift start) and the **expo** board (plates, verdicts, held-plate chains, camera overlays). We need live tables without hand-written DOM code, tests that run without any service, Safari on an iPad, and code a person can read. React was picked over Svelte, Vue and plain TypeScript: it is SpacetimeDB's first-class starter, plain `tsc` checks `.tsx`, and most people and agents read it fluently.
+Team `outputs` builds two screens in `web/`: the **tablet** (tickets and one-tap questions) and the **expo** board (plates, verdicts, held-plate chains, camera overlays). We need live tables without hand-written DOM code, tests that run without any service, Safari on an iPad, and code a person can read. React was picked over Svelte, Vue and plain TypeScript: it is SpacetimeDB's first-class starter, plain `tsc` checks `.tsx`, and most people and agents read it fluently.
 
 ## Decision
 
