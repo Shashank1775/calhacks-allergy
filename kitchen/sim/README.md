@@ -34,11 +34,21 @@ The owner's example: a spoon touches an omelette dish and the omelette shifts. I
 
 ## Files
 
-| File | What it does |
-|---|---|
-| `world.py` | The simulated world: layout, bins with profiles, cooks, tools, recipes, the true allergen process, and injected mistakes (seeded) |
-| `scenarios.py` | World runs → scenario files and replay JSONL. CLI: `generate`, `export` |
-| `training_clips.py` | World runs → abstract frames → shared change mask → shared clip builder → labeled clips, with hard negatives and leak-free train/val/test splits |
+| File | What it does | State |
+|---|---|---|
+| `episodes.py` | Short episodes of one tool or hand (A) and one container (B), plus bystanders: motion, food, nudges, and the true labels. Eight kinds: scoop, deposit, wipe, touch, pass over, hover, motion nearby, approach and leave | Built |
+| `training_clips.py` | Episodes → abstract frames → shared change mask → shared clip builder → labeled clips, with leak-free train/val/test splits, a manifest and a datasheet | Built |
+| `world.py` | The full-shift kitchen for scenarios: layout, bins with profiles, cooks, tools, recipes, the true allergen process, and injected mistakes (seeded) | Not built |
+| `scenarios.py` | World runs → scenario files and replay JSONL. CLI: `generate`, `export` | Not built |
+
+### Make a clip dataset and train on it
+
+```bash
+uv run python -m kitchen.sim.training_clips --out data/clips/v1 --train 40000 --val 4000 --test 4000 --workers 24
+python tools/train_lstm.py --data data/clips/v1 --out runs/lstm-v1 --epochs 20   # on a GPU machine with torch
+```
+
+A clip is about 80 KB compressed, so 48,000 clips take about 4 GB. Each split has `clips.jsonl` (one `interaction_clip` record per line, with labels) and one npz per clip (keys `x` and `dt_ms`). `tools/train_lstm.py` trains the partner's model unchanged and stands in until their `kitchen/lstm/train.py` exists.
 
 ## In and out
 
