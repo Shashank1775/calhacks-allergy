@@ -69,7 +69,7 @@
         "string",
         "null"
       ],
-      "description": "Plates only: set when the cook taps start ticket."
+      "description": "Plates only: set when the cook taps start plate."
     },
     "allergen_profile": {
       "$ref": "allergen_profile.schema.json"
