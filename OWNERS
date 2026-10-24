@@ -20,6 +20,8 @@ tools/                         platform
 .github/                       platform
 .claude/                       platform
 pyproject.toml                 platform
+.python-version                platform
+conftest.py                    platform
 uv.lock                        platform
 .gitignore                     platform
 .env.example                   platform

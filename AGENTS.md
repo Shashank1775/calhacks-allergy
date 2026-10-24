@@ -140,7 +140,7 @@ Approve with a signed `APPROVED` comment and the `review:approved` label, then `
 ### Worker: steps
 1. Read this file, the README of each folder you'll touch, the issue with all comments (`gh issue view <n> --comments`), and every contract it names.
 2. Comment `STARTED in worktree <path>, branch <branch>` with a 3–6 bullet plan. If the acceptance criteria are ambiguous, ask in that comment and wait.
-3. Work in your own worktree. Rename its branch to `<team>/<n>-<slug>`. Commit small; for anything safety-relevant, write the test first.
+3. Work in your own worktree. Rename its branch to `<team>/<n>-<slug>`. Work in **loops of design → build → test → review**. Commit small; for anything safety-relevant, write the test first. **If three loops haven't produced a passing, approved result, stop:** post what's blocking, set `status:blocked`, and move on to other work. Don't start a fourth loop.
 4. Open a **draft** PR early (`git push -u origin HEAD && gh pr create --draft --fill`).
 5. Verify: the folder's tests, `python3 tools/validate_contracts.py`, `python3 tools/check_ownership.py --diff origin/main`. Paste the exact commands and trimmed output into the PR.
 6. Rebase on `origin/main`, re-verify, `git push --force-with-lease`, `gh pr ready`, and set the issue to `status:review`.
@@ -227,7 +227,7 @@ Merge with squash only. GitHub won't let one account approve its own PR, so appr
 **Boards.** Each team has a pinned `Team board: <team>` issue, and its Manager rewrites the body (not comments) every cycle. The Director keeps the `Program board` the same way: milestone status, blockers, RFCs, needs-the-owner, partner. Boards are the first thing a restarted agent reads.
 
 **Escalation.**
-- Worker stuck after two attempts → Manager (comment, `status:blocked`).
+- Worker stuck after three design → build → test loops → Manager (comment, `status:blocked`). The team moves on to other ready work.
 - Needs another team → `type:request`.
 - Contract change, scope change, team dispute, or milestone at risk → Director (Program board).
 - Needs the partner → Manager or Director opens `owner:partner`.
@@ -285,6 +285,17 @@ Ownership is authoritative in [`OWNERS`](OWNERS). Each folder's README lists its
 
 **Generated files** (`kitchen/shared/models.py`, TS types) are never edited by hand.
 
+**Code style (the owner's rules; reviewers block on these)**
+- **KISS: keep it simple.** Write the simplest thing that works. No layer, option, base class or abstraction the task doesn't need. Prefer plain functions and dataclasses over class hierarchies.
+- **Readable by a human first.** Short functions that each do one thing, and descriptive names. No clever one-liners, no deep nesting.
+- **snake_case** for Python modules, functions and variables, for file and folder names, JSON fields, and TypeScript variables and functions. Use `PascalCase` only for classes, types and React components, and `UPPER_SNAKE_CASE` for constants.
+- **Spacing.** Format with `ruff format` (Python) or Prettier (TypeScript). Put blank lines between logical blocks, and one statement per line.
+- **Comments.**
+  - Every module starts with its docstring (owner, step, reads, emits, rules).
+  - Every public function has a docstring saying what it does and why.
+  - Comment the *why* of anything non-obvious, especially safety-related lines.
+  - No commented-out code.
+
 ## 9. Hard stops
 
 Stop, comment on your issue, and wait if:
@@ -295,7 +306,7 @@ Stop, comment on your issue, and wait if:
 - two issues contradict each other, or an issue contradicts this file;
 - you're about to delete or rewrite more than you were asked to;
 - anything would push to `main`, force-push someone else's branch, or rewrite published history;
-- you've failed twice at the same problem (post both attempts and their errors).
+- three design → build → test loops on the same task haven't passed (post each attempt and its errors, then move on).
 
 **Never:**
 - commit secrets, `.env`, weights or video;
