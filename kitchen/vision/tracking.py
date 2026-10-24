@@ -23,6 +23,11 @@ VISION_TRACKER picks one of two trackers. "iou" (the default) matches each detec
 "motion" is experimental, off until real overhead footage shows it helps (compare_trackers.py). It adds to the above:
     - a recently seen track is matched at its predicted box (last box moved by its velocity), not its last box, so a
       utensil moving faster than its own width per frame still overlaps itself;
+    - recently seen tracks match first, and a track lost for longer only gets the detections left over, so an object
+      that is being followed is not handed to the stale track of another object that used to lie where it now is;
+    - a new track started next to a track that just went missing takes that track's motion (never its identity: it is
+      a new entity, with unknown history if it may be a switch), so an object that broke its track at full speed is
+      followed again from its next frame instead of breaking every frame;
     - after both IoU passes, a recently seen track that is still unmatched and moving may take the one free detection
       within motion_gate_diagonals of its predicted centre, but only if no other recent track could take that
       detection and no other free detection is in its reach. A still object the detector missed for a frame is still
@@ -48,6 +53,12 @@ TRACKERS = ("iou", "motion")
 
 # Motion mode: how much each new measured velocity moves a track's velocity (an exponential moving average).
 VELOCITY_SMOOTHING = 0.5
+# Motion mode: how far (in the lost track's box diagonals) a new track may be from a track that just went missing to
+# take its motion. A utensil carried at a frame-width a second moves about one diagonal a frame at 15 fps.
+HANDOFF_REACH_DIAGONALS = 3.0
+# Motion mode: a lost track counts as having been moving if its velocity would carry it out of its own box (half its
+# size along x or y) in this long, a frame or two. Box jitter on a still knife is a few percent of the box.
+MOVING_HORIZON_MS = 100
 
 
 def iou_matrix(boxes_a: list[Box], boxes_b: list[Box]) -> np.ndarray:
@@ -128,10 +139,12 @@ class TrackSet:
         ended = self._end_stale_tracks(t_ms)
 
         owners: dict[int, int] = {}
-        unmatched_tracks = self._match(self.tracks, high, boxes, owners, t_ms)
-        unmatched_tracks = self._match(unmatched_tracks, low, boxes, owners, t_ms)
         if self.motion:
-            unmatched_tracks = self._second_chance(unmatched_tracks, high + low, boxes, owners, t_ms, frame_size)
+            unmatched_tracks = self._match_recent_first(high, low, boxes, owners, t_ms, frame_size)
+        else:
+            unmatched_tracks = self._match(self.tracks, high, boxes, owners, t_ms)
+            unmatched_tracks = self._match(unmatched_tracks, low, boxes, owners, t_ms)
+        missing_recent = [track for track in unmatched_tracks if self._is_recent(track, t_ms)]
         for track in unmatched_tracks:
             track.misses += 1
         missing = ended + [track.track_id for track in unmatched_tracks]
@@ -140,16 +153,90 @@ class TrackSet:
         for index in high:
             if index not in owners:
                 track = Track(self.new_track_id(), boxes[index], t_ms)
+                if self.motion:
+                    track.velocity = self._handed_off_velocity(track, missing_recent, frame_size)
                 self.tracks.append(track)
                 owners[index] = track.track_id
 
         return owners, ended, missing
 
+    def _match_recent_first(
+        self,
+        high: list[int],
+        low: list[int],
+        boxes: list[Box],
+        owners: dict[int, int],
+        t_ms: int,
+        frame_size: tuple[int, int],
+    ) -> list[Track]:
+        """Motion mode's association: recently seen tracks match first (both score bands, then the second chance), and
+        only then do tracks lost for longer get the detections left over. Returns the tracks left unmatched.
+
+        Two rules keep a stale track from taking another object's detection (fail closed: the detection starts a new
+        track with unknown history instead):
+            - a stale track that was moving when it was lost never matches again: its object isn't where it was lost,
+              so whatever is there now (say, a dirty knife carried onto the spot a clean one just left) is another
+              object. A still object, such as a knife covered by a hand, is still matched where it lay;
+            - a stale track never takes a detection that overlaps a box another track matched this frame (two objects
+              are crossing there), or that a moving recent track still unmatched could reach (an object just carried
+              onto the spot where the stale track's object lay, as when two knives swap places): either way it could
+              as well be claiming the other object.
+        """
+        recent = [track for track in self.tracks if self._is_recent(track, t_ms)]
+        stale = [track for track in self.tracks if not self._is_recent(track, t_ms)]
+        still_stale = [track for track in stale if not self._leaves_its_box(track, MOVING_HORIZON_MS)]
+        unmatched_recent = self._match(recent, high, boxes, owners, t_ms)
+        unmatched_recent = self._match(unmatched_recent, low, boxes, owners, t_ms)
+        unmatched_recent = self._second_chance(unmatched_recent, stale, high + low, boxes, owners, t_ms, frame_size)
+
+        matched_boxes = [boxes[index] for index in owners]
+        moving_unmatched = [
+            track for track in unmatched_recent if self._leaves_its_box(track, t_ms - track.last_seen_ms)
+        ]
+        clear = {
+            index
+            for index in high + low
+            if index not in owners
+            and not overlaps_any(boxes[index], matched_boxes)
+            and not any(self._within_reach(track, boxes[index], t_ms, frame_size) for track in moving_unmatched)
+        }
+        unmatched_still = self._match(still_stale, [index for index in high if index in clear], boxes, owners, t_ms)
+        unmatched_still = self._match(unmatched_still, [index for index in low if index in clear], boxes, owners, t_ms)
+        return unmatched_recent + unmatched_still + [track for track in stale if track not in still_stale]
+
+    def _handed_off_velocity(
+        self, new_track: Track, missing_recent: list[Track], frame_size: tuple[int, int]
+    ) -> tuple[float, float]:
+        """Motion mode: the velocity a new track starts with. If exactly one recently seen track went missing this
+        frame within HANDOFF_REACH_DIAGONALS of it, the move from that track's last box to the new one, since the new
+        track is most likely that object outrunning its track. Otherwise at rest.
+
+        Only motion is handed off, never identity: the new track is a new entity (identity.py makes it unknown, since
+        a track went missing), and a wrong velocity can at worst make it lose its object again.
+        """
+        width, height = frame_size
+        new_x, new_y = box_centre(new_track.box)
+        near = []
+        for track in missing_recent:
+            old_x, old_y = box_centre(track.box)
+            x1, y1, x2, y2 = track.box
+            diagonal = math.hypot((x2 - x1) * width, (y2 - y1) * height)
+            distance = math.hypot((new_x - old_x) * width, (new_y - old_y) * height)
+            if distance <= HANDOFF_REACH_DIAGONALS * diagonal:
+                near.append(track)
+        if len(near) != 1:
+            return (0.0, 0.0)
+        old_x, old_y = box_centre(near[0].box)
+        elapsed_ms = max(1, new_track.last_seen_ms - near[0].last_seen_ms)
+        return ((new_x - old_x) / elapsed_ms, (new_y - old_y) / elapsed_ms)
+
     def _match(
         self, tracks: list[Track], indexes: list[int], boxes: list[Box], owners: dict[int, int], t_ms: int
     ) -> list[Track]:
-        """Match `tracks` to the detections at `indexes`, record the matches in `owners`, and return the tracks left
-        unmatched. Motion mode compares each recently seen track's predicted box, not its last box."""
+        """Match `tracks` to the detections at `indexes` not already in `owners`, record the matches in `owners`, and
+        return the tracks left unmatched. Motion mode compares each recently seen track's predicted box, not its last
+        box."""
+        indexes = [index for index in indexes if index not in owners]
         iou = iou_matrix([self._match_box(track, t_ms) for track in tracks], [boxes[index] for index in indexes])
         matched = set()
         for row, column in greedy_match(iou, self.settings.track_match_iou):
@@ -194,6 +281,7 @@ class TrackSet:
     def _second_chance(
         self,
         tracks: list[Track],
+        stale: list[Track],
         indexes: list[int],
         boxes: list[Box],
         owners: dict[int, int],
@@ -203,10 +291,10 @@ class TrackSet:
         """Motion mode: let each moving, recently seen, still unmatched track take the one free detection within its
         reach, when the pairing is unambiguous both ways. Returns the tracks still unmatched.
 
-        Only a moving track may take one: a still object the detector missed for a frame hasn't gone anywhere, so a
+        Only a track moving out of its own box may take one: a still object the detector missed for a frame hasn't gone anywhere, so a
         detection near it is another object (say a knife just put down beside it in the rack). Unambiguous means
-        exactly one free detection is within the track's reach and no other recent unmatched track, moving or still,
-        reaches that detection. Two utensils crossing reach each other's detections, so neither takes one here: a wrong
+        exactly one free detection is within the track's reach and no other unmatched track, recent or `stale`, could
+        claim that detection (_could_claim). Two utensils crossing reach each other's detections, so neither takes one here: a wrong
         pairing would hand one object the other's history (possibly a clean one), while no pairing makes the newcomer
         a new track with unknown history (fail closed).
         """
@@ -217,13 +305,14 @@ class TrackSet:
             for track in recent
         }
         claimants: dict[int, int] = {}
-        for track in recent:
-            for index in reach[track.track_id]:
-                claimants[index] = claimants.get(index, 0) + 1
+        for track in recent + stale:
+            for index in free:
+                if self._could_claim(track, boxes[index], t_ms, frame_size):
+                    claimants[index] = claimants.get(index, 0) + 1
 
         taken = set()
         for track in recent:
-            if not self._is_moving(track, t_ms, frame_size):
+            if not self._leaves_its_box(track, t_ms - track.last_seen_ms):
                 continue
             candidates = reach[track.track_id]
             if len(candidates) == 1 and claimants[candidates[0]] == 1:
@@ -232,14 +321,22 @@ class TrackSet:
                 taken.add(track.track_id)
         return [track for track in tracks if track.track_id not in taken]
 
-    def _is_moving(self, track: Track, t_ms: int, frame_size: tuple[int, int]) -> bool:
-        """Whether a track's predicted move since its last match is at least half its box's narrow side, in pixels:
-        only then can its object have left its old box (box jitter on a still object moves it far less)."""
-        width, height = frame_size
-        elapsed_ms = t_ms - track.last_seen_ms
-        shift = math.hypot(track.velocity[0] * elapsed_ms * width, track.velocity[1] * elapsed_ms * height)
+    def _could_claim(self, track: Track, box: Box, t_ms: int, frame_size: tuple[int, int]) -> bool:
+        """Whether an unmatched track could be the owner of a detection, so that another track taking it would be a
+        guess: a moving track anywhere within its reach (from its last box if it is stale), a still track only where
+        the detection overlaps its box (a still object reappears where it lay)."""
+        if self._leaves_its_box(track, t_ms - track.last_seen_ms):
+            return self._within_reach(track, box, t_ms, frame_size)
+        return overlaps_any(box, [track.box])
+
+    def _leaves_its_box(self, track: Track, elapsed_ms: float) -> bool:
+        """Whether a track's velocity carries it at least half its own width (or height) along x (or y) in
+        `elapsed_ms`: only then can its object have left its old box. Measured per axis, against the box's size along
+        that axis, so box jitter (a few percent of the box) never counts as moving, whatever the box's shape."""
         x1, y1, x2, y2 = track.box
-        return shift >= min((x2 - x1) * width, (y2 - y1) * height) / 2
+        return (
+            abs(track.velocity[0]) * elapsed_ms >= (x2 - x1) / 2 or abs(track.velocity[1]) * elapsed_ms >= (y2 - y1) / 2
+        )
 
     def _within_reach(self, track: Track, box: Box, t_ms: int, frame_size: tuple[int, int]) -> bool:
         """Whether a detection's centre is within motion_gate_diagonals of the track's predicted centre, the distance
@@ -262,6 +359,14 @@ class TrackSet:
         ended = [track.track_id for track in self.tracks if t_ms - track.last_seen_ms > self.settings.track_lost_ms]
         self.tracks = [track for track in self.tracks if track.track_id not in ended]
         return ended
+
+
+def overlaps_any(box: Box, others: list[Box]) -> bool:
+    """Whether a box shares any area with one of `others`."""
+    return any(
+        min(box[2], other[2]) > max(box[0], other[0]) and min(box[3], other[3]) > max(box[1], other[1])
+        for other in others
+    )
 
 
 def box_centre(box: Box) -> tuple[float, float]:

@@ -222,6 +222,84 @@ def test_a_dirty_knife_crossing_a_clean_one_never_takes_its_clean_identity(name)
     assert all(item["entity_id"] != "tool-knife-1" for item in dirty_items)
 
 
+def jerked(x0, speed_fw_per_s, start_s=1.0, travel=0.4):
+    """Still at x0 until start_s, then moving at full speed straight away (a quick grab), for `travel`, then still."""
+
+    def x(t_s):
+        moved = min(max(t_s - start_s, 0.0) * abs(speed_fw_per_s), travel)
+        return x0 + moved if speed_fw_per_s > 0 else x0 - moved
+
+    return x
+
+
+@pytest.mark.safety
+def test_two_knives_swapping_places_never_take_each_others_identity():
+    """Two clean knives are grabbed and each put down where the other lay, within a second. The spot each lands on
+    still has the other knife's track (lost there, still alive), but the knife just carried in could be either, so it
+    comes back unknown instead of taking the other knife's identity."""
+    tracker = Tracker(MOTION)
+    first = None
+    last = {}
+    for frame in range(45):
+        t_s = frame * FRAME_MS / 1000
+        a, b = knife(jerked(0.3, 0.5)(t_s), 0.5), knife(jerked(0.7, -0.5)(t_s), 0.5)
+        items = update(tracker, [a, b], frame * FRAME_MS)
+        last = {"a": entity_on(items, a), "b": entity_on(items, b)}
+        first = first or {"a": last["a"]["entity_id"], "b": last["b"]["entity_id"]}
+
+    assert first == {"a": "tool-knife-1", "b": "tool-knife-2"}
+    assert last["a"]["entity_id"] != first["b"]
+    assert last["b"]["entity_id"] != first["a"]
+
+
+@pytest.mark.safety
+def test_a_track_lost_while_moving_never_takes_whatever_is_where_it_was_lost():
+    """A carried knife goes undetected for a few frames. Its object kept going, so a knife that turns up where it was
+    last seen is another one: a new entity, not the carried knife's identity."""
+    tracker = Tracker(MOTION)
+    for frame in range(10):
+        x = carried_x(0.5, frame * FRAME_MS / 1000)
+        items = update(tracker, [knife(x, 0.5)], AFTER_SHIFT_START + frame * FRAME_MS)
+    lost_at = x
+    for frame in range(10, 14):
+        update(tracker, [], AFTER_SHIFT_START + frame * FRAME_MS)
+    other = knife(lost_at, 0.5)
+    items = update(tracker, [other], AFTER_SHIFT_START + 14 * FRAME_MS)
+
+    assert entity_on(items, other)["entity_id"] == "tool-knife-2"
+
+
+def test_a_knife_grabbed_at_full_speed_settles_on_one_new_identity():
+    """Grabbed and moved at full speed at once, a knife outruns its track on the first frame. The new track takes the
+    lost track's motion (not its identity), so it follows the knife from then on instead of breaking every frame."""
+    tracker = Tracker(MOTION)
+    ids = []
+    for frame in range(40):
+        x = jerked(0.2, 0.5, start_s=0.5, travel=0.6)(frame * FRAME_MS / 1000)
+        items = update(tracker, [knife(x, 0.5)], AFTER_SHIFT_START + frame * FRAME_MS)
+        ids.append(items[0]["entity_id"])
+
+    assert len(set(ids)) <= 2
+    assert ids[-1] == ids[15]
+
+
+def test_a_still_knife_lying_across_the_frame_keeps_one_identity_through_jitter_and_misses():
+    """A horizontal knife's box is short: box jitter along its length must not count as moving (which would stop it
+    being matched again where it lay after a missed frame or two)."""
+    rng = np.random.default_rng(1)
+    tracker = Tracker(MOTION)
+    ids = set()
+    for frame in range(150):
+        if frame > 5 and rng.random() < 0.25:
+            update(tracker, [], frame * FRAME_MS)
+            continue
+        jitter = rng.normal(0, [0.004, 0.0015])
+        items = update(tracker, [knife(0.5 + jitter[0], 0.5 + jitter[1], size=(0.12, 0.025))], frame * FRAME_MS)
+        ids |= {item["entity_id"] for item in items}
+
+    assert ids == {"tool-knife-1"}
+
+
 @pytest.mark.safety
 def test_a_knife_relabelled_spoon_in_the_rack_is_unknown():
     """A dirty knife is carried into the rack; the next frame the detector calls it a spoon. Today the spoon is a new
