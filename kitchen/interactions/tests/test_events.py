@@ -328,6 +328,31 @@ def test_a_touch_seen_again_after_news_carries_it_then():
     ]
 
 
+@pytest.mark.safety
+def test_news_reaches_back_as_far_as_a_window_that_bridged_a_loss_can_show():
+    """A spoon rests on a plate, last seen there at 297. A hand's grab is confirmed 2 s later, after the hand was lost
+    for a second: its window holds window_ms of time seen plus the loss, and says the grab may have begun at 231,
+    while the spoon was still on the plate. The spoon-plate touch is still remembered, and carries the hand's news."""
+    segmenter = Segmenter(SETTINGS)
+    spoon_plate = {"a_id": "tool-spoon-1", "b_id": "plate-t1", "b_kind": "plate"}
+    hand_spoon = {"a_id": HAND, "b_id": "tool-spoon-1", "b_kind": "tool"}
+    grab_ms = 297 + SETTINGS.window_ms + SETTINGS.track_gap_ms
+    events = []
+    for t_ms in [*range(0, grab_ms, 33), grab_ms]:
+        frame = []
+        if t_ms <= 297:
+            frame.append(judged_at(t_ms, CONTACT, **spoon_plate))
+        if t_ms == grab_ms:
+            frame.append((*judged_at(t_ms, CONTACT, **hand_spoon), 231))
+        events += segmenter.add_frame(t_ms, frame)
+
+    assert [(e["a_id"], e["b_id"], e["t_start_ms"], e["t_end_ms"], e["direction"]) for e in events] == [
+        ("tool-spoon-1", "plate-t1", 0, 0, "both"),
+        (HAND, "tool-spoon-1", grab_ms, grab_ms, "both"),
+        ("tool-spoon-1", "plate-t1", grab_ms, grab_ms + 1, "a_to_b"),
+    ]
+
+
 def test_a_scoop_from_a_bin_is_news_to_the_tool_only():
     """A scoop from a bin moves food from the bin to the tool and nothing into the bin, so it is no news to the bin's
     other touches: a spoon resting in the bin carries nothing for it. (Zone rules always add a contact, which moves
@@ -540,7 +565,7 @@ def test_a_wash_is_never_cut():
 
 @pytest.mark.safety
 def test_a_rinse_split_by_a_loss_longer_than_the_bridge_is_still_one_wash():
-    """The knife is unseen in the sink for 1.5 s, longer than wash_gap_ms, so its dwell starts over and a second wash
+    """The knife is unseen in the sink for 1.5 s, longer than track_gap_ms, so its dwell starts over and a second wash
     label comes. Nothing touched the knife between the two, so the second can't make it any cleaner: it is dropped."""
     knife = Track(
         KNIFE,
@@ -646,8 +671,8 @@ def test_pipeline_e2e_a_transfer_is_written_the_frame_of_its_hit_and_a_wash_soon
     assert transfers and len(transfers) < len(recorded)
     for event in recorded:
         if event["action"] == "clean.wash":
-            # A wash is written wash_gap_ms after its last hit, since it bridges a loss.
-            assert written_at[event["event_id"]] - event["t_end_ms"] <= SETTINGS.wash_gap_ms + 200, event["event_id"]
+            # A wash is written track_gap_ms after its last hit, since it bridges a loss.
+            assert written_at[event["event_id"]] - event["t_end_ms"] <= SETTINGS.track_gap_ms + 200, event["event_id"]
         else:
             # Written the frame of its hit; news it carries spans a millisecond or a few past that frame.
             assert written_at[event["event_id"]] == event["t_start_ms"] <= event["t_end_ms"], event["event_id"]

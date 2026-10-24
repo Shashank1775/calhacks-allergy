@@ -13,7 +13,8 @@ The rules, newest feature row first:
 - transfer.scoop: a tool overlapping a bin, inside that bin's slot, for scoop_min_ms.
 - transfer.contact: any pair overlapping for contact_min_ms. A scoop is a contact too, so both are returned: the scoop
   moves food bin to tool, and the contact lets a dirty tool dirty the bin (allergens move both ways).
-Both durations count from one frame interval before the overlap was first seen, so they don't depend on the frame rate.
+Both durations count from one frame interval before the overlap was first seen, so they don't depend on the frame rate,
+and leave out time the pair went unseen (a gap longer than pair_gap_ms, which the window bridges).
 - unimportant otherwise: hovering near, or passing over without staying.
 """
 
@@ -21,38 +22,44 @@ import math
 from collections.abc import Sequence
 
 from kitchen.interactions.candidates import WASHABLE_KINDS
+from kitchen.interactions.features import unseen_ms
 from kitchen.interactions.settings import InteractionSettings, settings_digest
 from kitchen.shared.interfaces import PairWindow
 from kitchen.shared.models import Action, InteractionFeatures
 
 # Bumped when a rule changes; the settings digest after it changes whenever a constant does.
-RULES_VERSION = "1.1.0"
+RULES_VERSION = "1.2.0"
 
 NOTHING: list[tuple[Action, float]] = [("unimportant", 1.0)]
 
 
-def frame_interval_ms(rows: Sequence[InteractionFeatures]) -> int:
+def frame_interval_ms(rows: Sequence[InteractionFeatures], pair_gap_ms: int) -> int:
     """The window's typical time between rows, in whole milliseconds rounded up; 0 for a single row.
 
-    Rounded up because timestamps are whole milliseconds: rounding down could lose a touch that lasted exactly a
-    threshold, and a false contact only holds a plate.
+    Gaps longer than pair_gap_ms (a loss the window bridges) are left out: they aren't frames. Rounded up because
+    timestamps are whole milliseconds: rounding down could lose a touch that lasted exactly a threshold, and a false
+    contact only holds a plate.
     """
-    if len(rows) < 2:
+    steps = [later["t_ms"] - earlier["t_ms"] for earlier, later in zip(rows, rows[1:], strict=False)]
+    seen = [step for step in steps if step <= pair_gap_ms]
+    if not seen:
         return 0
-    return math.ceil((rows[-1]["t_ms"] - rows[0]["t_ms"]) / (len(rows) - 1))
+    return math.ceil(sum(seen) / len(seen))
 
 
-def overlap_ms(rows: Sequence[InteractionFeatures], min_overlap: float) -> int:
+def overlap_ms(rows: Sequence[InteractionFeatures], min_overlap: float, pair_gap_ms: int) -> int:
     """How long the pair has been overlapping, up to the newest row: 0 unless the newest row overlaps.
 
     Measured from the first overlapping row in the window, so one jittery frame doesn't restart the count, plus one
     frame interval, because the overlap began somewhere in the interval before that row. Without it a touch measures
-    up to two frame intervals short, which loses a real tap at 10 or 15 FPS that 60 FPS would keep.
+    up to two frame intervals short, which loses a real tap at 10 or 15 FPS that 60 FPS would keep. Time the pair went
+    unseen (gaps longer than pair_gap_ms) isn't overlap, so a touch on both sides of a loss counts both parts only.
     """
     if not rows or rows[-1]["overlap"] < min_overlap:
         return 0
-    first = next(row for row in rows if row["overlap"] >= min_overlap)
-    return rows[-1]["t_ms"] - first["t_ms"] + frame_interval_ms(rows)
+    first = next(index for index, row in enumerate(rows) if row["overlap"] >= min_overlap)
+    seen_ms = rows[-1]["t_ms"] - rows[first]["t_ms"] - unseen_ms(rows[first:], pair_gap_ms)
+    return seen_ms + frame_interval_ms(rows, pair_gap_ms)
 
 
 class ZoneRules:
@@ -85,7 +92,7 @@ class ZoneRules:
         """Scoop and contact for a two-entity pair; empty when neither fires."""
         s = self.settings
         latest = rows[-1]
-        overlapping_ms = overlap_ms(rows, s.contact_min_overlap)
+        overlapping_ms = overlap_ms(rows, s.contact_min_overlap, s.pair_gap_ms)
         labels: list[tuple[Action, float]] = []
 
         in_own_bin_slot = latest["inside_zone"] and latest["zone_kind"] == "bin_slot"

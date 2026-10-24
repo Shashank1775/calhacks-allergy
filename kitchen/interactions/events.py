@@ -62,16 +62,16 @@ def direction_for(action: str, b_kind: str) -> str:
     return "both"
 
 
-def touch_began_ms(rows: list[InteractionFeatures], min_overlap: float) -> int:
+def touch_began_ms(rows: list[InteractionFeatures], min_overlap: float, pair_gap_ms: int) -> int:
     """The earliest the touch a window's rows show may have begun, for news and washes to look back to.
 
-    Zone rules count a touch's overlap from the window's first overlapping row, across short dropouts, so it may have
-    begun up to a frame before that row; one more frame allows for a late one. With no overlapping row (a primary
-    that judged the whole window), the window's first row.
+    Zone rules count a touch's overlap from the window's first overlapping row, across dropouts (the window bridges a
+    loss of up to track_gap_ms), so it may have begun up to a frame before that row; one more frame allows for a late
+    one. With no overlapping row (a primary that judged the whole window), the window's first row.
     """
     overlapping = [row for row in rows if row["overlap"] >= min_overlap]
     first_ms = (overlapping or rows)[0]["t_ms"]
-    return first_ms - 2 * frame_interval_ms(rows)
+    return first_ms - 2 * frame_interval_ms(rows, pair_gap_ms)
 
 
 # A touch is keyed by pair and action, whichever classifier answered each frame.
@@ -232,7 +232,8 @@ class Segmenter:
       news to the far side in turn, the next wave, so news carries on along a chain of things all touching: a dirty
       hand that grabs a spoon resting on a plate dirties the plate. It looks back because a first hit comes only once
       the overlap has lasted contact_min_ms (scoop_min_ms for a scoop), counted from the window's first overlapping
-      row across short dropouts, so a touch that ended in that time may have been touching when the new one began.
+      row across dropouts, so a touch that ended in that time, or while a hand was lost, may have been touching when
+      the new one began.
       InteractionStep passes when that was (touch_began_ms); a caller that can't say gets lead_ms before the hit. A
       touch that was going on but not seen since then carries the news if it is seen again within merge_gap_ms, as
       the same touch. A touch carries each piece of news once per side and per touch it came through, so news from
@@ -242,7 +243,7 @@ class Segmenter:
     - A later hit surer than the touch's strongest so far (a primary and zone rules answering in turn) writes an edge
       for the difference, (p - p_before) / (1 - p_before), so the touch's edges add up to its surest hit under
       noisy-OR. It is news like a first hit.
-    - A wash is one event per rinse, bridged across a loss of up to wash_gap_ms. It counts only once no transfer has
+    - A wash is one event per rinse, bridged across a loss of up to track_gap_ms. It counts only once no transfer has
       touched the entity for wash_min_dwell_ms, nor anything overlapped it (a touch the detector loses before it is
       confirmed), so it never comes before a touch during the soak, and a transfer or overlap ends its open wash. A wash that opened after that transfer's touch may have begun is dropped
       instead, since the touch may have come first. A new wash on an entity no transfer has touched since its last
@@ -254,8 +255,9 @@ class Segmenter:
         # How long before its first hit a touch may have begun, when the caller can't say: zone rules confirm a touch
         # only after this much overlap.
         self.lead_ms = max(settings.contact_min_ms, settings.scoop_min_ms)
-        # Keep touches this long after they were last seen: news may look back a whole window, and a touch may resume.
-        self.keep_ms = max(settings.merge_gap_ms, settings.window_ms + self.lead_ms)
+        # Keep touches this long after they were last seen: news may look back a whole window, which can also bridge
+        # a loss of up to track_gap_ms, and a touch may resume.
+        self.keep_ms = max(settings.merge_gap_ms, settings.window_ms + settings.track_gap_ms + self.lead_ms)
         self._touches: dict[Key, Touch] = {}  # transfers seen within keep_ms
         self._news_count = 0  # news IDs, numbered in the order the news happened
         self._news: dict[int, News] = {}  # news from the last merge_gap_ms, which a touch seen again may still owe
@@ -442,7 +444,7 @@ class Segmenter:
 
         written = []
         wash = self._washes.get(entity_id)
-        if wash is not None and hit.t_ms - wash.t_end_ms <= self.settings.wash_gap_ms:
+        if wash is not None and hit.t_ms - wash.t_end_ms <= self.settings.track_gap_ms:
             wash.extend(hit)
             return []
         if wash is not None:
@@ -454,13 +456,13 @@ class Segmenter:
 
     def close_stale(self, t_ms: int) -> list[InteractionEvent]:
         """Forget every touch not seen within keep_ms (it ended, and no news can reach back to it), close every wash
-        with no hit for wash_gap_ms, and forget what can no longer matter. A touch's edges are already written, so only
+        with no hit for track_gap_ms, and forget what can no longer matter. A touch's edges are already written, so only
         washes are written here."""
         s = self.settings
         ended = [key for key, touch in self._touches.items() if t_ms - touch.last_hit.t_ms > self.keep_ms]
         for key in ended:
             del self._touches[key]
-        rinsed = [entity_id for entity_id, wash in self._washes.items() if t_ms - wash.t_end_ms > s.wash_gap_ms]
+        rinsed = [entity_id for entity_id, wash in self._washes.items() if t_ms - wash.t_end_ms > s.track_gap_ms]
         written = [self._washes.pop(entity_id).event() for entity_id in rinsed]
 
         # A touch going on when news came, if it is seen again at all, is seen within merge_gap_ms of it.
@@ -577,7 +579,7 @@ class InteractionStep:
         judged = []
         for window in self.windows.update(frame, rows, change_mask):
             labels, classifier = self.classifier.classify_window(window)
-            began_ms = touch_began_ms(window.features, self.settings.contact_min_overlap)
+            began_ms = touch_began_ms(window.features, self.settings.contact_min_overlap, self.settings.pair_gap_ms)
             judged.append((window.features[-1], labels, classifier, began_ms))
         return self.segmenter.add_frame(t_ms, judged)
 

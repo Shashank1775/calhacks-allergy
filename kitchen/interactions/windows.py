@@ -7,12 +7,15 @@ Emits: PairWindow (features + interaction_clip + tensor) for classifier.py
 Rules: 6 allergen-blind features, object-blind clips; clips come only from kitchen/shared/clips.build_clip, never from
        code here; 1 a missing change mask, a pair too young for two steps, or a clip that fails to build gives a window
        with no clip (clip and tensor None) rather than a made-up one, and the classifier wrapper sends such a window
-       to zone rules (rule 7)
+       to zone rules (rule 7); a window lasts through a loss of up to track_gap_ms, so a touch confirmed after a hand
+       was lost still shows when it began
 
-A window holds the pair's feature rows from the last window_ms. Its clip samples up to clip_steps of those frames,
-about window_ms / clip_steps apart (16 steps over about 1 s by default, as the sim clips the ConvLSTM trains on).
-Clips are built only when asked (with_clips): zone rules never read them, and drawing one per pair per frame would
-cost the Pi a good share of a core for nothing.
+A window holds the pair's feature rows from the last window_ms that the pair was seen. While one of its entities is
+out of view, for up to track_gap_ms (vision keeps the track), it is bridged without using up the window; a pair seen
+apart for longer than pair_gap_ms, or lost for longer, starts a new window. Its clip samples up to clip_steps of
+those frames, about window_ms / clip_steps apart (16 steps over about 1 s by default, as the sim clips the ConvLSTM
+trains on). Clips are built only when asked (with_clips): zone rules never read them, and drawing one per pair per
+frame would cost the Pi a good share of a core for nothing.
 """
 
 import logging
@@ -21,6 +24,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from kitchen.interactions.features import pair_ended, unseen_ms
 from kitchen.interactions.settings import InteractionSettings
 from kitchen.shared.clips import ClipStep, build_clip
 from kitchen.shared.interfaces import PairWindow
@@ -73,6 +77,7 @@ class WindowBuilder:
         self.with_clips = with_clips
         self.source = source
         self._rows: dict[tuple[str, str], deque[WindowRow]] = {}
+        self._in_view: set[str] = set()  # the entities seen in the previous frame
 
     def update(
         self, frame: ObservationFrame, feature_rows: list[InteractionFeatures], change_mask: np.ndarray | None
@@ -87,16 +92,24 @@ class WindowBuilder:
         for features in feature_rows:
             key = (features["a_id"], features["b_id"])
             rows = self._rows.setdefault(key, deque())
-            # A pair that was out of range for longer than pair_gap_ms starts a new window (its dwell restarted too).
-            if rows and t_ms - rows[-1].features["t_ms"] > self.settings.pair_gap_ms:
+            # A pair that ended (pair_ended) starts a new window, as its dwell starts over: forget_stale_pairs drops
+            # it in the frames it is missing from, and this catches one back in the very next frame. A loss keeps the
+            # window, so zone rules and news see an overlap that began before a hand was lost.
+            if rows and pair_ended(key, t_ms - rows[-1].features["t_ms"], self._in_view, self.settings):
                 rows.clear()
             rows.append(WindowRow(features, boxes[key[0]], boxes[key[1]], change_mask))
-            while t_ms - rows[0].features["t_ms"] > self.settings.window_ms:
+            while self.seen_ms(rows) > self.settings.window_ms:
                 rows.popleft()
             windows.append(self.window(list(rows)))
 
+        self._in_view = set(boxes)
         self.forget_stale_pairs(t_ms)
         return windows
+
+    def seen_ms(self, rows: deque[WindowRow]) -> int:
+        """How long the rows span, less the time the pair went unseen, so a loss doesn't push out what came before."""
+        features = [row.features for row in rows]
+        return features[-1]["t_ms"] - features[0]["t_ms"] - unseen_ms(features, self.settings.pair_gap_ms)
 
     def window(self, rows: list[WindowRow]) -> PairWindow:
         """One pair's window: every feature row in it, and a clip when one can honestly be built."""
@@ -139,9 +152,12 @@ class WindowBuilder:
             return None, None
 
     def forget_stale_pairs(self, t_ms: int) -> None:
-        """Drop pairs with no row for longer than pair_gap_ms, so memory doesn't grow over a shift."""
+        """Drop the pairs that ended (pair_ended: seen apart, or lost for longer than vision keeps a track), so their
+        next touch starts a new window and memory doesn't grow over a shift."""
         stale = [
-            key for key, rows in self._rows.items() if t_ms - rows[-1].features["t_ms"] > self.settings.pair_gap_ms
+            key
+            for key, rows in self._rows.items()
+            if pair_ended(key, t_ms - rows[-1].features["t_ms"], self._in_view, self.settings)
         ]
         for key in stale:
             del self._rows[key]

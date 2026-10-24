@@ -142,6 +142,24 @@ def test_only_a_self_pair_can_be_a_wash():
     assert plate_labels == [("unimportant", 1.0)]  # plates aren't washed mid-shift
 
 
+def test_a_touch_on_both_sides_of_a_loss_counts_only_the_time_it_was_seen():
+    """A hand on a bin is seen for 66 ms, lost for 500 ms (longer than pair_gap_ms, within track_gap_ms), then seen
+    again. Its window bridges the loss, and zone rules count both parts plus one frame interval, never the loss: 198
+    ms seen is no contact, 231 ms is."""
+    hand_in_bin = {
+        **contract_fixture("interaction_features", "knife-in-bin"),
+        "a_id": "hand-p1-right",
+        "a_kind": "hand",
+    }
+    times = [0, 33, 66, 566, 599, 632, 665]
+
+    def labels_at(seen_times: list[int]) -> list:
+        return ZoneRules(SETTINGS).classify(window_of([{**hand_in_bin, "t_ms": t_ms} for t_ms in seen_times]))
+
+    assert labels_at(times) == [("unimportant", 1.0)]
+    assert labels_at([*times, 698]) == [("transfer.contact", SETTINGS.contact_probability)]
+
+
 def test_a_hand_in_a_bin_is_a_contact_not_a_scoop():
     hand_in_bin = {
         **contract_fixture("interaction_features", "knife-in-bin"),
