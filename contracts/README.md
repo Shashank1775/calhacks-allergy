@@ -16,7 +16,7 @@ The only things teams may depend on across team lines. If it is not in this fold
 
 ## Rules
 
-1. **Change contracts in their own PR.** It touches only `contracts/` and names the teams it affects. The Director merges it; a partner interface also needs the partner's OK. See [AGENTS.md §6](../AGENTS.md#6-how-work-flows).
+1. **Change contracts in their own PR.** It touches only `contracts/` and names the teams it affects. The Director reviews it and the owner merges it; a partner interface also needs the partner's OK. See [AGENTS.md §6](../AGENTS.md#6-how-work-flows).
 2. **Single writer per table.** Each SpacetimeDB table has exactly one team that writes it ([state-tables.md](state-tables.md#writers)). Everyone else reads.
 3. **Every interface has a fake.** The producing team ships it. For the partner's components, the platform team writes the fake, and the partner's real code must pass the same contract tests (`kitchen/shared/contract_tests/`).
 4. **Generated types are generated.** Python models (`kitchen/shared/models.py`) and TypeScript types (`web/src/generated/`) are generated from `schemas/` by the platform team's tooling. Never hand-edit generated files; change the schema instead.

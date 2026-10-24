@@ -12,7 +12,7 @@ A kitchen allergen tracker. A camera on a Raspberry Pi with a Hailo-8 watches fo
 | [`kitchen/`](kitchen/README.md) | All Python code, one folder per pipeline step | agents + partner |
 | `kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/`, [`database/`](database/) | Entity store, interactions, LSTM, provenance graph, SpacetimeDB module | **partner** |
 | [`web/`](web/) | Tablet, chef and expo screens | agents (outputs) |
-| [`contracts/`](contracts/README.md) | Data shapes and interfaces shared between folders, plus golden test scenarios | agents (platform), Director merges |
+| [`contracts/`](contracts/README.md) | Data shapes and interfaces shared between folders, plus golden test scenarios | agents (platform), Director reviews |
 | [`tools/`](tools/) | Contract validator | agents (platform) |
 | [`docs/decisions/`](docs/decisions/) | Architecture decision records | — |
 
