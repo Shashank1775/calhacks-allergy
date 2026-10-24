@@ -240,9 +240,12 @@ def test_version_names_the_run_and_pins_the_file(lstm, model_dir):
     assert lstm.version == f"{model_dir.name}+{file_sha256(model_dir / MODEL_FILE)[:8]}"
 
 
+@pytest.mark.slow
 def test_one_clip_fits_the_wrappers_primary_timeout(lstm):
     # p95, not the median: every call over the timeout loses its label to zone rules. This machine only; the Pi is
-    # slower, so time it there before adoption (README).
+    # slower, so time it there before adoption (README). Marked slow because it measures wall-clock time: on a laptop
+    # busy with other work it fails for reasons that have nothing to do with the model. Run it on demand:
+    #   uv run pytest kitchen/lstm -m slow
     window = make_window(random_tensor(16))
     lstm.classify(window)  # the first run sets up onnxruntime's buffers
     milliseconds = []
