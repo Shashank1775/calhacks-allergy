@@ -1,0 +1,118 @@
+{
+  "scenario_id": "tied-wash-does-not-erase-scoop",
+  "description": "The knife's scoop of satay (e1) and its wash (e2) have identical timestamps, as when both fall in the same camera window; later the knife touches the plate (e3). Under the strict tie default (OQ-17) a wash tied with a transfer is applied first, so the wash cannot erase the peanut that arrives with the scoop, and the plate must hold. The event IDs put the scoop first on purpose: breaking the tie by event_id alone would apply the wash last, clean the knife and could let the plate pass. Holds for any k in (0, 1]: with the wash first, nothing cleans the knife after e1, so it carries k * 0.95 * 0.98 > 0 peanut and the plate gets k * 0.9 times that, also > 0, at e3. The path e1 -> e3 runs forward in time with no wash after the scoop, so exact reachability flags peanut whatever k is.",
+  "tags": [
+    "invariant-5",
+    "tie-order"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-1",
+      "label": "satay sauce",
+      "allergen_profile": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t7",
+      "number": 7,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no peanut",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t7",
+      "ticket_id": "t7",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "tool-knife-1",
+      "b_id": "bin-1",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "tool-knife-1",
+      "b_id": "tool-knife-1",
+      "action": "clean.wash",
+      "probability": 0.98,
+      "direction": "a_to_b",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e3",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "tool-knife-1",
+      "b_id": "plate-t7",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t7",
+      "ticket_id": "t7",
+      "t_ms": 3000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t7",
+      "ticket_revision": 1,
+      "decision": "hold",
+      "allergens_reached": [
+        "peanut"
+      ],
+      "reason_codes": [
+        "exact_flag"
+      ],
+      "chain_event_ids": [
+        "e1",
+        "e3"
+      ]
+    }
+  ]
+}

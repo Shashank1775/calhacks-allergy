@@ -1,0 +1,119 @@
+{
+  "scenario_id": "hand-carries-sesame-via-tongs",
+  "description": "A cook's hand touches the tahini tub (e1), then picks up clean tongs (e2), and the tongs touch the plate (e3). The tongs never touch the tahini, yet sesame reaches the plate through two carriers, so the plate must hold with the three-step chain. Holds for any k in (0, 1]: each hop multiplies by k * 0.9, so the plate ends with (k * 0.9)^3 * 0.97 sesame, which is above zero for every k > 0. For small k that number is tiny (about 0.0007 at k = 0.1, a clean-confidence above the 0.99 threshold), so the hold must come from the exact flag on the time-forward path e1 -> e2 -> e3, not from confidence. A graph that drops long or low-probability chains would wrongly pass this plate.",
+  "tags": [
+    "invariant-2",
+    "multi-hop"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-2",
+      "label": "tahini",
+      "allergen_profile": {
+        "probabilities": {
+          "sesame": 0.97
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t8",
+      "number": 8,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "sesame allergy",
+      "pass_threshold": 0.99,
+      "constraints": [
+        {
+          "allergen_unit_id": "sesame",
+          "severity": "anaphylactic",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t8",
+      "ticket_id": "t8",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "hand-p2-left",
+      "b_id": "bin-2",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "hand-p2-left",
+      "b_id": "tool-tongs-3",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e3",
+      "t_start_ms": 3000,
+      "t_end_ms": 3400,
+      "a_id": "tool-tongs-3",
+      "b_id": "plate-t8",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t8",
+      "ticket_id": "t8",
+      "t_ms": 4000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t8",
+      "ticket_revision": 1,
+      "decision": "hold",
+      "allergens_reached": [
+        "sesame"
+      ],
+      "reason_codes": [
+        "exact_flag"
+      ],
+      "chain_event_ids": [
+        "e1",
+        "e2",
+        "e3"
+      ]
+    }
+  ]
+}

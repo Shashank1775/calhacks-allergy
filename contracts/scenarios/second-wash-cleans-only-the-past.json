@@ -1,0 +1,195 @@
+{
+  "scenario_id": "second-wash-cleans-only-the-past",
+  "description": "The knife scoops satay (e1), is washed (e2), scoops satay again (e3), touches plate t9 (e4), is washed again (e5) and touches plate t10 (e6). Each wash clears only what the knife carried before it. Plate t9 must hold: the first wash breaks the old path from e1, but e3 dirties the knife again after it, so the chain is e3 -> e4; the second wash cleans the knife, never the plate it already touched. Plate t10 must pass, as in wash-resets-knife. Holds for any k in (0, 1]: for t9, nothing washes the knife between e3 and e4, so the plate gets more than zero peanut and exact reachability flags it for every k > 0. For t10, the knife carries at most 1 before e5 and so at most 1 - 0.98 = 0.02 after it; the plate gets at most k * 0.9 * 0.02 <= 0.018, a clean-confidence of at least 0.982 >= 0.95, and no path from the satay reaches it without crossing a wash.",
+  "tags": [
+    "invariant-5",
+    "wash-reset"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-1",
+      "label": "satay sauce",
+      "allergen_profile": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t9",
+      "number": 9,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no peanut",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    },
+    {
+      "ticket_id": "t10",
+      "number": 10,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no peanut",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t9",
+      "ticket_id": "t9",
+      "t_ms": 500
+    },
+    {
+      "plate_id": "plate-t10",
+      "ticket_id": "t10",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "tool-knife-1",
+      "b_id": "bin-1",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 1600,
+      "t_end_ms": 2000,
+      "a_id": "tool-knife-1",
+      "b_id": "tool-knife-1",
+      "action": "clean.wash",
+      "probability": 0.98,
+      "direction": "a_to_b",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e3",
+      "t_start_ms": 2400,
+      "t_end_ms": 2800,
+      "a_id": "tool-knife-1",
+      "b_id": "bin-1",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e4",
+      "t_start_ms": 3200,
+      "t_end_ms": 3600,
+      "a_id": "tool-knife-1",
+      "b_id": "plate-t9",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e5",
+      "t_start_ms": 4000,
+      "t_end_ms": 4400,
+      "a_id": "tool-knife-1",
+      "b_id": "tool-knife-1",
+      "action": "clean.wash",
+      "probability": 0.98,
+      "direction": "a_to_b",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e6",
+      "t_start_ms": 4800,
+      "t_end_ms": 5200,
+      "a_id": "tool-knife-1",
+      "b_id": "plate-t10",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t9",
+      "ticket_id": "t9",
+      "t_ms": 6000
+    },
+    {
+      "plate_id": "plate-t10",
+      "ticket_id": "t10",
+      "t_ms": 6400
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t9",
+      "ticket_revision": 1,
+      "decision": "hold",
+      "allergens_reached": [
+        "peanut"
+      ],
+      "reason_codes": [
+        "exact_flag"
+      ],
+      "chain_event_ids": [
+        "e3",
+        "e4"
+      ]
+    },
+    {
+      "plate_id": "plate-t10",
+      "ticket_revision": 1,
+      "decision": "pass",
+      "allergens_reached": []
+    }
+  ]
+}
