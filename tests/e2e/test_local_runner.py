@@ -274,6 +274,18 @@ def test_state_answers_the_web_origin_only():
     assert "access-control-allow-origin" not in other.headers
 
 
+def test_orders_cors_origins_tolerate_spaces_and_a_trailing_comma(monkeypatch):
+    """An iPad origin after "a, " used to be refused (#206): the runner strips each origin and drops empty ones."""
+    monkeypatch.setenv("ORDERS_CORS_ORIGINS", f"{WEB_ORIGIN}, http://192.168.1.10:5173,")
+    origins = run_local.orders_cors_origins()
+    assert origins == [WEB_ORIGIN, "http://192.168.1.10:5173"]
+
+    runner = run_local.LocalRunner(KNIFE_SCENARIO, FakeClock(), cors_origins=origins)
+    preflight = {"Origin": "http://192.168.1.10:5173", "Access-Control-Request-Method": "GET"}
+    response = runner.shift.orders.options("/state", headers=preflight)
+    assert response.headers["access-control-allow-origin"] == "http://192.168.1.10:5173"
+
+
 @pytest.mark.safety
 def test_a_failed_step_still_ticks_the_gate():
     """Fail closed: when a scenario step throws, the gate still ticks that step (closed), and the failed item isn't

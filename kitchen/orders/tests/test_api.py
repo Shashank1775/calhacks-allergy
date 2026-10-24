@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from kitchen.orders.api import create_app
+from kitchen.orders.api import create_app, parse_cors_origins
 from kitchen.orders.laya_parser import FakeLayaParser, LayaParserUnavailable
 from kitchen.orders.tickets import TicketDesk
 from kitchen.orders.transcribe import FakeTranscriber
@@ -99,6 +99,18 @@ def test_health_and_cors(state, clock):
     response = client.get("/health", headers={"Origin": "http://localhost:5173"})
     assert response.json() == {"ok": True}
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_origins_tolerate_spaces_and_a_trailing_comma(state, clock):
+    """ORDERS_CORS_ORIGINS="a, b," must let both in: CORS compares origins exactly, so " b" would never match."""
+    origins = parse_cors_origins("http://localhost:5173, http://192.168.1.10:5173,")
+    assert origins == ["http://localhost:5173", "http://192.168.1.10:5173"]
+
+    app = create_app(TicketDesk(FakeLayaParser(), state, clock), FakeTranscriber(), origins)
+    preflight = {"Origin": "http://192.168.1.10:5173", "Access-Control-Request-Method": "POST"}
+    response = TestClient(app).options("/parse", headers=preflight)
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://192.168.1.10:5173"
 
 
 def test_the_mock_server_examples_match_the_contracts(check_schema):
