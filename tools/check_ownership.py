@@ -2,7 +2,8 @@
 """Check that every file has exactly one owner (see OWNERS), and report which owners a branch touches.
 
   python3 tools/check_ownership.py                    # fail if any tracked file is unowned
-  python3 tools/check_ownership.py --diff origin/main # list owners touched by this branch vs a base ref
+  python3 tools/check_ownership.py --diff origin/main [--branch NAME]
+      # list owners touched by this branch; fail if an agent branch touches partner paths
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ def tracked_files() -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--diff", metavar="BASE", help="report owners touched since merge-base with BASE")
+    ap.add_argument("--branch", help="head branch name (default: current branch); partner/* may touch partner paths")
     args = ap.parse_args()
     rules = load_owners()
 
@@ -71,11 +73,15 @@ def main() -> int:
             print(f"{owner}: {len(by_owner[owner])} file(s)")
             for f in by_owner[owner]:
                 print(f"    {f}")
-        teams = {owner_of(f, rules) or "UNOWNED" for f in changed if f not in SHARED_SIDE_EFFECT_FILES} - {"director"}
+        teams = {owner_of(f, rules) or "UNOWNED" for f in changed if f not in SHARED_SIDE_EFFECT_FILES} - {"director", "partner"}
         if "contracts/" in {f[:10] for f in changed}:
             print("NOTE: touches contracts/ -> needs an RFC and the Director must merge (label contract-change)")
         if len(teams) > 1:
             print(f"NOTE: touches {len(teams)} owners -> label cross-team and get each other owner's approval")
+        branch = args.branch or git("rev-parse", "--abbrev-ref", "HEAD")[0]
+        if "partner" in by_owner and not branch.startswith("partner/"):
+            print(f"FAIL: branch {branch!r} touches partner-owned paths; agents never edit them (AGENTS.md section 4)")
+            return 1
         if "UNOWNED" in by_owner:
             print("FAIL: unowned files; add them to OWNERS (Director merges)")
             return 1

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "scenario.schema.json",
   "title": "Scenario",
-  "description": "A golden kitchen scenario with known ground truth. Producer: sim (and hand-written by any team via PR to contracts/scenarios). Consumers: provenance tests, platform end-to-end harness, Laya evaluation.",
+  "description": "A golden kitchen scenario with known ground truth. Producer: sim (and hand-written by any team via PR to contracts/scenarios). Consumers: verdict and partner graph tests, platform end-to-end harness, Laya evaluation.",
   "type": "object",
   "additionalProperties": false,
   "required": [

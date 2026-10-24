@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "laya_request.schema.json",
   "title": "LayaRequest",
-  "description": "The plate's time-forward ancestor subgraph, sent to Laya. Producer: provenance. Consumer: the Laya model (trained by sim).",
+  "description": "The plate's time-forward ancestor subgraph, sent to Laya. Producer: verdict (from the partner graph's subgraph query). Consumer: the Laya model (trained by sim).",
   "type": "object",
   "additionalProperties": false,
   "required": ["plate_id", "ticket_id", "as_of_t_ms", "forbidden", "nodes", "edges"],

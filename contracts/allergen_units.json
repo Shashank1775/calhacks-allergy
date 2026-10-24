@@ -1,5 +1,5 @@
 {
-  "$comment": "Seed data for the SpacetimeDB allergen_unit table: the nine major US allergens. default_severity values are placeholders pending OQ-3 in docs/OPEN_QUESTIONS.md.",
+  "$comment": "Seed data for the SpacetimeDB allergen_unit table: the nine major US allergens. default_severity values are placeholders pending OQ-3 (AGENTS.md section 11).",
   "version": "0.1.0",
   "units": [
     { "id": "milk",      "name": "Milk",                "default_severity": "allergy", "parent_id": null },

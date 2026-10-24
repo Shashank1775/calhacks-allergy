@@ -4,7 +4,7 @@ labels: ["type:rfc", "contract-change", "status:backlog"]
 body:
   - type: markdown
     attributes:
-      value: Add a `team:` label for every affected team. Each affected Manager comments ACK / ACK with changes / NACK. See docs/agents/WORKFLOW.md#contract-changes-rfcs.
+      value: Add a `team:` label for every affected team. Each affected Manager comments ACK / ACK with changes / NACK. See AGENTS.md section 6 (RFCs). If a partner interface changes, the partner must ACK.
   - type: textarea
     id: change
     attributes: { label: Proposed change, description: Exact fields, types, endpoints or table columns. }
@@ -28,7 +28,7 @@ body:
     attributes: { label: Migration plan, description: Required if breaking. }
   - type: textarea
     id: safety
-    attributes: { label: Safety impact, description: Does this touch any of the nine invariants in docs/ARCHITECTURE.md? }
+    attributes: { label: Safety impact, description: Does this touch any of the nine safety rules in AGENTS.md section 3? }
     validations: { required: true }
   - type: textarea
     id: signature

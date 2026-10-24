@@ -1,0 +1,1 @@
+This folder belongs to the partner (a human). Agents never edit anything here, not even a typo. If you need something from it, open an issue labeled owner:partner. The interface you can rely on: [EntityStore](../../contracts/apis.md#entitystore).

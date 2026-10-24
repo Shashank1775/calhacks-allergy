@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "interaction_event.schema.json",
   "title": "InteractionEvent",
-  "description": "A classified interaction: one time-stamped edge in the provenance graph. Producer: interactions (live) and sim (synthetic). Consumer: provenance.",
+  "description": "A classified interaction: one time-stamped edge in the provenance graph. Producer: interactions (live) and sim (synthetic). Consumer: partner graph.",
   "type": "object",
   "additionalProperties": false,
   "required": [

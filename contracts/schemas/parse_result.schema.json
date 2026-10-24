@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "parse_result.schema.json",
   "title": "ParseResult",
-  "description": "What intake's parse step returns for one ticket note. Producer: intake. Consumers: intake apply step, experience tablet UI.",
+  "description": "What the orders parse step returns for one ticket note. Producer: orders. Consumers: orders apply step, outputs tablet screen.",
   "type": "object",
   "additionalProperties": false,
   "required": ["draft_id", "note", "source", "parser", "cached", "constraints", "exceptions", "questions", "question_threshold", "sendable"],

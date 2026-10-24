@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "mistake_pattern.schema.json",
   "title": "MistakePattern",
-  "description": "A recurring contamination path, grouped by source, tool type and allergen. Producer: provenance. Consumer: experience (Repeated Mistakes view).",
+  "description": "A recurring contamination path, grouped by source, tool type and allergen. Producer: verdict. Consumer: outputs (Repeated Mistakes view).",
   "type": "object",
   "additionalProperties": false,
   "required": ["pattern_id", "allergen_unit_id", "source_entity_id", "source_label", "via_kind", "occurrences", "first_t_ms", "last_t_ms", "example_verdict_ids", "suggested_fix"],

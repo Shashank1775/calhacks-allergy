@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 
-# large artifacts live outside git (docs/agents/WORKFLOW.md#data-and-large-files)
+# large artifacts live outside git (AGENTS.md section 6, Data and secrets)
 data/
 *.mp4
 *.mov

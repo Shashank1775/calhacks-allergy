@@ -7,9 +7,11 @@ echo "bootstrapping $REPO"
 
 label() { gh label create "$1" --repo "$REPO" --color "$2" --description "$3" --force >/dev/null && echo "  label $1"; }
 
-for t in platform intake state perception interactions provenance sim experience; do
+for t in platform orders vision interactions verdict sim outputs; do
   label "team:$t" 1d76db "Owned by team $t"
 done
+label owner:partner  0052cc "For the human partner (entities, lstm, graph, database)"
+label needs-partner  0052cc "Last step needs the partner's real component; build against the fake first"
 label type:task     0e8a16 "A unit of work for one Worker"
 label type:epic     5319e7 "Milestone-sized goal; checklist links tasks"
 label type:bug      d73a4a "Something is wrong on main"
@@ -41,7 +43,7 @@ milestone() {
   if grep -qxF "$1" <<<"$existing_milestones"; then echo "  milestone exists: $1"
   else gh api "repos/$REPO/milestones" -f title="$1" -f description="$2" >/dev/null && echo "  milestone $1"; fi
 }
-milestone "M0 Foundations"    "Everyone can build against fakes. Exit criteria in docs/ROADMAP.md"
+milestone "M0 Foundations"    "Everyone can build against fakes. Exit criteria in AGENTS.md section 10"
 milestone "M1 Vertical Slice" "A simulated kitchen produces correct verdicts on screen"
 milestone "M2 Live on Pi"     "The camera drives it"
 milestone "M3 Models"         "Learned parts, gated by evaluation"

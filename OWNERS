@@ -1,6 +1,7 @@
 # Path ownership. Longest matching prefix wins. Every tracked file must match a line.
 # A trailing "/" means a directory prefix; otherwise the path must match exactly.
-# Checked in CI by tools/check_ownership.py. Changes to this file are merged by the Director.
+# "partner" is a human teammate: agents never edit partner paths (AGENTS.md section 4); CI enforces it.
+# Checked by tools/check_ownership.py. Changes to this file are merged by the Director.
 #
 # path                         owner
 
@@ -8,31 +9,32 @@ AGENTS.md                      director
 CLAUDE.md                      director
 README.md                      director
 OWNERS                         director
-.gitignore                     platform
-.env.example                   platform
 docs/                          director
 
 contracts/                     platform      # Director merges; changes need an RFC
-libs/                          platform
+kitchen/__init__.py            platform
+kitchen/README.md              platform
+kitchen/shared/                platform
+tests/                         platform
 tools/                         platform
 .github/                       platform
 .claude/                       platform
 pyproject.toml                 platform
 uv.lock                        platform
+.gitignore                     platform
+.env.example                   platform
 
-components/intake/             intake
-components/state/              state
-components/perception/         perception
-components/interactions/       interactions
-components/provenance/         provenance
-components/sim/                sim
-components/experience/         experience
+kitchen/orders/                orders
+kitchen/profiling/             orders
+kitchen/vision/                vision
+kitchen/interactions/          interactions
+kitchen/verdict/               verdict
+kitchen/sim/                   sim
+kitchen/gate/                  outputs
+web/                           outputs
+web/src/generated/             platform      # TS types generated from contracts
 
-teams/platform/                platform
-teams/intake/                  intake
-teams/state/                   state
-teams/perception/              perception
-teams/interactions/            interactions
-teams/provenance/              provenance
-teams/sim/                     sim
-teams/experience/              experience
+kitchen/entities/              partner
+kitchen/lstm/                  partner
+kitchen/graph/                 partner
+database/                      partner

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ticket.schema.json",
   "title": "Ticket",
-  "description": "A sent ticket and its constraints, as stored in SpacetimeDB (logical view of the ticket + ticket_constraint tables). Producer: intake. Consumers: provenance, experience.",
+  "description": "A sent ticket and its constraints, as stored in SpacetimeDB (logical view of the ticket + ticket_constraint tables). Producer: orders. Consumers: verdict, partner graph, outputs.",
   "type": "object",
   "additionalProperties": false,
   "required": ["ticket_id", "number", "revision", "status", "created_t_ms", "source", "note", "pass_threshold", "constraints", "exceptions"],

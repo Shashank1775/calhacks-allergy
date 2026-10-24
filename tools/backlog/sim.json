@@ -6,9 +6,9 @@
       "title": "sim: M0 Foundations",
       "goals": [
         "Seeded generator v0 emitting valid scenario files, byte-identical per seed",
-        "Ground-truth and observation model ADR (truth independent of provenance)",
-        ">= 20 generated scenarios validated (ROADMAP M0 exit)",
-        "Event JSONL export for replay",
+        "Ground-truth and observation model ADR (truth independent of the partner's graph and the verdict policy)",
+        ">= 20 generated scenarios validated (M0 exit)",
+        "Event and entity JSONL export for replay",
         "2-3 proposed golden scenarios for edge cases"
       ]
     },
@@ -17,10 +17,10 @@
       "title": "sim: M1 Vertical Slice",
       "goals": [
         "Error-injection library (skipped wash, shared utensil, late entity, track loss, amendment, dropped edges)",
-        ">= 500-scenario corpus with manifest, plus a committed observation-complete CI subset for provenance",
+        ">= 500-scenario corpus with manifest, plus a committed observation-complete CI subset",
         "False-pass and false-hold metrics script over verdict JSONL",
         "Laya dataset generator v0 with leak-free splits; model-agnostic eval harness v0",
-        "Long-shift stress scenario and state load generator"
+        "Long-shift stress scenario (also the partner graph's performance test) and a StateClient load generator"
       ]
     },
     {
@@ -38,7 +38,7 @@
         "Laya fine-tune once OQ-5 is answered",
         "Eval gate: on held-out sim, Laya never misses an allergen ExactLaya finds; also checked on real recorded graphs",
         "Model card, eval report, artifact manifest",
-        "Synthetic allergen-blind feature windows for interactions if requested"
+        "Synthetic allergen-blind feature windows for the partner's LSTM if requested"
       ]
     },
     {
@@ -62,14 +62,14 @@
         "platform-01",
         "platform-02"
       ],
-      "goal": "A seeded kitchen simulator (bins with profiles, plating spot, wash, pass, 1-3 cooks, tools, tickets) that runs simple prep workflows in a simulated world and writes scenario files whose expected answers come from that world, not from any propagation engine.",
+      "goal": "A seeded kitchen simulator (bins with profiles, plating spot, wash, clean stack, pass, 1-3 cooks, tools, tickets) in kitchen/sim/kitchen.py and scenarios.py that runs simple prep workflows and writes scenario files whose expected answers come from the simulated world, not from any propagation engine.",
       "acceptance": [
-        "uv run python -m sim.generate --seed 7 --count 5 --out data/scenarios/ writes 5 files that validate against scenario.schema.json: test_generated_valid",
+        "uv run python -m kitchen.sim.scenarios generate --seed 7 --count 5 --out data/scenarios/ writes 5 files that validate against scenario.schema.json: test_generated_valid",
         "The same (generator version, seed) produces byte-identical files: test_deterministic",
-        "Ground truth comes from sampled true transfers and washes in sim.world; expected.decision is hold iff a forbidden unit truly reached the plate: test_truth_from_world",
-        "Every generated scenario carries tags generated and, when every true transfer was emitted, observation-complete: test_tags",
-        "No import from the provenance package anywhere in components/sim: test_no_provenance_import",
-        "README documents the v0 world model and CLI"
+        "Ground truth comes from sampled true transfers and washes; expected.decision is hold iff a forbidden unit truly reached the plate: test_truth_from_world",
+        "Fresh plates come from a clean_stack zone (late_entities origin clean_stack); every scenario carries tag generated, plus observation-complete when every true transfer was emitted: test_tags",
+        "No import from kitchen.graph or kitchen.verdict anywhere in kitchen/sim except verdict's published LayaClient fakes: test_no_forbidden_imports",
+        "uv run pytest kitchen/sim passes; kitchen/sim/README.md documents the v0 world model and CLI"
       ],
       "contracts": [
         "scenario",
@@ -91,11 +91,11 @@
       "prio": "p0",
       "flags": [],
       "blocked_by": [],
-      "goal": "Decide and document how the simulated world moves allergens and how observations are derived from it, so sim's answers stay independent of provenance.",
+      "goal": "Decide and document how the simulated world moves allergens and how observations are derived from it, so sim's answers stay independent of the partner's graph and the verdict policy.",
       "acceptance": [
-        "Team ADR PR to docs/adr/ (Director merges) covering per-action true transfer rates, wash efficacy, observation noise on probability, dropped edges, track loss -> late_entities",
-        "Defines hard vs soft expectations: for generated scenarios an expected hold is a hard requirement, an expected pass is a target; only observation-complete scenarios gate CI",
-        "Flags the gap that scenario.schema.json expresses these semantics only via tags, and proposes an RFC if a field is needed"
+        "Team ADR PR to docs/decisions/ (Director merges) covering per-action true transfer rates, wash efficacy, observation noise on probability, dropped edges, and track loss -> late_entities with origin unknown",
+        "Defines hard vs soft expectations: for generated scenarios an expected hold is a hard requirement and an expected pass is a target; only observation-complete scenarios gate CI",
+        "Flags the gap that scenario.schema.json expresses these semantics only through tags, and proposes an RFC if a field is needed"
       ],
       "contracts": [
         "scenario"
@@ -116,9 +116,9 @@
       ],
       "goal": "Produce the M0 exit corpus covering the basic shapes every consumer needs.",
       "acceptance": [
-        ">= 20 generated scenarios covering basic transfer, wash reset, time order, multi-cook, shared utensil and a ticket with two constraints, listed in a manifest with sha256: test_manifest_matches",
-        "A CI subset <= 200 KB committed under components/sim/tests/fixtures/scenarios/; the full set regenerates from seeds: uv run python -m sim.generate --manifest components/sim/corpus-m0.json",
-        "Every file passes the same checks as tools/validate_contracts.py (schema, unique event IDs, bindings, chain references): test_corpus_valid"
+        ">= 20 generated scenarios covering basic transfer, wash reset, time order, multi-cook, shared utensil, a clean-stack plate and a ticket with two constraints, listed in a manifest with sha256: test_manifest_matches",
+        "A CI subset <= 200 KB committed under kitchen/sim/tests/fixtures/scenarios/; the full set regenerates from seeds: uv run python -m kitchen.sim.scenarios generate --manifest kitchen/sim/corpus-m0.json",
+        "Every file passes the same checks as tools/validate_contracts.py (schema, unique event IDs, bindings, chain references, wash self-loops): uv run pytest kitchen/sim -k corpus_valid"
       ],
       "contracts": [
         "scenario"
@@ -136,11 +136,11 @@
       "prio": "p1",
       "flags": [],
       "blocked_by": [],
-      "goal": "Hand-write golden scenarios for edges the first five don't cover, as a contract-change PR the Director merges.",
+      "goal": "Hand-write golden scenarios for edges the first six don't cover, as a contract-change PR the Director merges.",
       "acceptance": [
-        "Three new files in contracts/scenarios/ for equal or overlapping timestamps, two-hop transfer via a hand, and a double wash; each description explains why the expected decision holds for any k in (0, 1]",
+        "Three new files in contracts/scenarios/: equal or overlapping timestamps (expected decision under the strict tie default in OQ-17), a two-hop transfer through a hand, and a double wash; each description explains why the expected decision holds for any k in (0, 1]",
         "python3 tools/validate_contracts.py passes",
-        "PR labeled contract-change and linked from a type:rfc issue with provenance and platform ACKs"
+        "PR labeled contract-change, linked from a type:rfc issue with ACKs from verdict and platform and a note to the partner (owner:partner), since the graph must pass them too"
       ],
       "contracts": [
         "scenario"
@@ -164,9 +164,9 @@
       ],
       "goal": "Turn any scenario into the replay streams other teams consume: interaction_event JSONL and an entity timeline JSONL.",
       "acceptance": [
-        "uv run python -m sim.export --scenario <file> --out <dir> writes events.jsonl (one interaction_event per line, time-ordered) and entities.jsonl (one entity per line): test_export_valid",
+        "uv run python -m kitchen.sim.scenarios export --scenario <file> --out <dir> writes events.jsonl (one interaction_event per line, time-ordered) and entities.jsonl (one entity per line, with origin): test_export_valid",
         "Every line validates against its schema: test_lines_valid",
-        "Round trip: scenario -> JSONL -> scenario preserves events exactly: test_round_trip"
+        "Round trip scenario -> JSONL -> scenario preserves events exactly: test_round_trip"
       ],
       "contracts": [
         "interaction_event",
@@ -174,7 +174,7 @@
         "scenario"
       ],
       "out_of_scope": [
-        "ObservationFrame synthesis (pixel-level)"
+        "ObservationFrame synthesis (pixel level)"
       ]
     },
     {
@@ -187,9 +187,9 @@
       "blocked_by": [
         "sim-01"
       ],
-      "goal": "Composable injectors for the mistakes and sensing failures that matter, each changing the simulated world or the observation model, never the expected answer directly.",
+      "goal": "Composable injectors in kitchen/sim/errors.py for the mistakes and sensing failures that matter, each changing the simulated world or the observation model, never the expected answer directly.",
       "acceptance": [
-        "Injectors: skipped_wash, shared_utensil, bare_hand_contact, late_entity, track_loss (re-ID as a new entity listed in late_entities), amendment, dropped_edge, probability_noise; each unit-tested: uv run pytest components/sim -k inject",
+        "Injectors skipped_wash, shared_utensil, bare_hand_contact, late_entity, track_loss (re-ID as a new entity in late_entities with origin unknown), amendment, dropped_edge and probability_noise, each unit-tested: uv run pytest kitchen/sim -k inject",
         "dropped_edge removes the observation-complete tag; the others keep it: test_tag_semantics",
         "Injectors compose under one seed and stay deterministic: test_compose_deterministic"
       ],
@@ -212,18 +212,18 @@
         "sim-03",
         "sim-06"
       ],
-      "goal": "A large corpus outside git plus a committed observation-complete CI subset that provenance gates on, and a script that scores any verdict stream against it.",
+      "goal": "A large corpus outside git, a committed observation-complete CI subset that verdict gates on, and a script that scores any verdict stream against it.",
       "acceptance": [
         ">= 500 scenarios generated to data/ with data-manifest.json (name, size, sha256, generator version, seeds)",
         "Committed CI subset <= 1 MB of observation-complete scenarios spanning every injector except dropped_edge",
-        "uv run python -m sim.metrics --scenarios <dir> --verdicts <verdicts.jsonl> prints false-pass count, false-hold rate and a per-tag breakdown: test_metrics_counts"
+        "uv run python -m kitchen.sim.scenarios metrics --scenarios <dir> --verdicts <verdicts.jsonl> prints false-pass count, false-hold rate and a per-tag breakdown: test_metrics_counts"
       ],
       "contracts": [
         "scenario",
         "verdict"
       ],
       "out_of_scope": [
-        "Running provenance (provenance owns its CI gate)"
+        "Running the verdict gate (verdict-09)"
       ]
     },
     {
@@ -238,13 +238,14 @@
       ],
       "goal": "Build (laya_request, target laya_response) pairs from simulated plate subgraphs, with ground-truth allergens and true chains, split so test data never leaks into training.",
       "acceptance": [
-        "uv run python -m sim.laya_data --corpus <dir> --out data/laya/ writes train/val/test JSONL; every request and response validates: test_pairs_valid",
+        "uv run python -m kitchen.sim.laya_data --corpus <dir> --out data/laya/ writes train/val/test JSONL; every request and response validates: test_pairs_valid",
         "Splits by seed range AND held-out kitchen/recipe families; a test fails if any seed or scenario_id appears in two splits: test_no_leakage",
         "Manifest with counts and sha256 per split"
       ],
       "contracts": [
         "laya_request",
         "laya_response",
+        "allergen_reach",
         "chain_step"
       ],
       "out_of_scope": [
@@ -259,19 +260,20 @@
       "type": "task",
       "prio": "p1",
       "flags": [
-        "safety-critical"
+        "safety-critical",
+        "needs-partner"
       ],
       "blocked_by": [
         "sim-08",
-        "provenance-01",
-        "platform-03"
+        "platform-03",
+        "platform-06"
       ],
-      "goal": "Evaluate any LayaClient on the test split, including the gate that Laya never misses an allergen ExactLaya finds; runs today with provenance's published ExactLaya and AdversarialLaya fakes.",
+      "goal": "Evaluate any LayaClient on the test split, with the gate that Laya never misses an allergen the reference finds. The reference is ground truth today and ExactLaya on the partner's real graph once it lands. Uses verdict's published ExactLaya and AdversarialLaya fakes through LayaClient once they exist.",
       "acceptance": [
-        "uv run python -m sim.laya_eval --client <import path> --split test writes report.json and report.md",
-        "Reports recall vs ExactLaya (gate: 100%), precision and recall vs ground truth, chain correctness, latency p50/p95, malformed rate: test_report_fields",
-        "Exits non-zero when the gate fails; AdversarialLaya flipped mode fails it, ExactLaya passes it: test_gate_behaviour",
-        "Uses ExactLaya only through the LayaClient interface (provenance's published fake)"
+        "uv run python -m kitchen.sim.laya_eval --client <import path> --split test writes report.json and report.md",
+        "Reports recall vs reference (gate: 100%), precision and recall vs ground truth, chain correctness, latency p50/p95, malformed rate: test_report_fields",
+        "Exits non-zero when the gate fails: a client that drops allergens fails it and a ground-truth client passes it: test_gate_behaviour",
+        "Final step (needs-partner): --reference exact runs ExactLaya over the partner's graph and the gate still behaves the same"
       ],
       "contracts": [
         "LayaClient",
@@ -289,16 +291,19 @@
       "title": "sim: StateClient load generator",
       "type": "task",
       "prio": "p2",
-      "flags": [],
+      "flags": [
+        "needs-partner"
+      ],
       "blocked_by": [
         "sim-01",
-        "state-03"
+        "platform-04"
       ],
-      "goal": "Replay a long scenario through any StateClient at target rates and report throughput and latency, so state can verify its budget.",
+      "goal": "Replay a long scenario through any StateClient at target rates and report throughput and latency, so the partner can verify the database's budget.",
       "acceptance": [
-        "uv run python -m sim.load --client <import path> --profile default drives upsert_entities at 5 Hz x 30 entities and record_interactions bursts up to 20/s",
+        "uv run python -m kitchen.sim.scenarios load --client <import path> --profile default drives upsert_entities at 5 Hz x 30 entities and record_interactions bursts up to 20/s",
         "Reports p50/p95/p99 call latency and error counts as JSON",
-        "Runs against InMemoryStateClient in CI (short profile): test_load_inmemory"
+        "Runs against InMemoryStateClient in CI with a short profile: test_load_inmemory",
+        "Final step (needs-partner): run against the partner's real StateClient on a local SpacetimeDB and post the report on an issue labeled owner:partner"
       ],
       "contracts": [
         "StateClient",
@@ -306,7 +311,7 @@
         "interaction_event"
       ],
       "out_of_scope": [
-        "Tuning SpacetimeDB (state)"
+        "Tuning SpacetimeDB (partner)"
       ]
     },
     {
@@ -319,17 +324,17 @@
       "blocked_by": [
         "sim-06"
       ],
-      "goal": "An 8-hour simulated shift with thousands of edges and many plates, kept outside git, for provenance's performance budget.",
+      "goal": "An 8-hour simulated shift with thousands of edges and many plates, kept outside git, for the partner graph's and verdict's performance budgets.",
       "acceptance": [
-        "uv run python -m sim.generate --profile long-shift --seed 1 produces a valid scenario with >= 5,000 events and >= 100 plates",
+        "uv run python -m kitchen.sim.scenarios generate --profile long-shift --seed 1 produces a valid scenario with >= 5,000 events and >= 100 plates",
         "Listed in data-manifest.json with sha256; regenerates byte-identically",
-        "Generation finishes in under 2 minutes on a laptop: reported in the PR"
+        "Generation finishes in under 2 minutes on a laptop, reported in the PR"
       ],
       "contracts": [
         "scenario"
       ],
       "out_of_scope": [
-        "Running provenance on it"
+        "Running the graph or verdict on it"
       ]
     }
   ]

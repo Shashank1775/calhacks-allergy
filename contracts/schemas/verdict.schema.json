@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "verdict.schema.json",
   "title": "Verdict",
-  "description": "The pass/hold decision for one plate against one ticket revision. Producer: provenance. Consumers: experience (gate, voice, expo board), provenance mistakes analysis.",
+  "description": "The pass/hold decision for one plate against one ticket revision. Producer: verdict. Consumers: outputs (gate, voice, expo board), verdict mistakes analysis.",
   "type": "object",
   "additionalProperties": false,
   "required": ["verdict_id", "ticket_id", "ticket_revision", "plate_id", "decided_t_ms", "trigger", "decision", "mode", "confidence", "pass_threshold", "reasons", "flagged", "chain", "versions"],

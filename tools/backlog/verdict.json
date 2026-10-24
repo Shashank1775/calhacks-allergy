@@ -1,0 +1,373 @@
+{
+  "team": "verdict",
+  "epics": [
+    {
+      "milestone": "M0",
+      "title": "verdict: M0 Foundations",
+      "goals": [
+        "decide() in kitchen/verdict/policy.py: fail closed, models only tighten, plain code",
+        "Clean-confidence and flag-threshold ADR merged",
+        "LayaClient adapter with ExactLaya (wraps ProvenanceGraph.reach) and AdversarialLaya fakes",
+        "All golden scenarios in contracts/scenarios pass through the policy in CI (rules_only, on FakeProvenanceGraph)",
+        "ScriptedVerdictSource so outputs can build without us"
+      ]
+    },
+    {
+      "milestone": "M1",
+      "title": "verdict: M1 Vertical Slice",
+      "goals": [
+        "Verdict service on StateClient: triggers on plate-at-pass and ticket amendments, records verdict and chain atomically",
+        "Safety suite with fault injection for invariants 1, 2, 4, 8 and 9, signed off by the safety reviewer",
+        "Zero false passes on sim's observation-complete CI subset",
+        "Golden scenarios and the latency budget against the partner's real graph and database (needs-partner)"
+      ]
+    },
+    {
+      "milestone": "M2",
+      "title": "verdict: M2 Live on Pi",
+      "goals": [
+        "Consume live edges through the partner's graph",
+        "Staleness (plate updates, edge feed lag) produces HOLD with stale_track or missing_input",
+        "Rules-only verdict latency <= 200 ms on live data",
+        "Deterministic replay of a recorded live session"
+      ]
+    },
+    {
+      "milestone": "M3",
+      "title": "verdict: M3 Models",
+      "goals": [
+        "full mode with the real Laya through LayaClient; timeout -> model_unavailable HOLD",
+        "Verdict latency <= 1 s with Laya",
+        "ADR on trace_sensitive semantics (OQ-8), owner-approved",
+        "AdversarialLaya suite re-run against the real Laya adapter"
+      ]
+    },
+    {
+      "milestone": "M4",
+      "title": "verdict: M4 Demo Hardening",
+      "goals": [
+        "Repeated Mistakes aggregation with suggested-fix templates written to mistake_pattern (kitchen/verdict/mistakes.py)",
+        "Live late-change recheck end to end",
+        "Failure drills: database down, graph down, Laya down, stale feed -> HOLD, each scripted"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "key": "verdict-01",
+      "milestone": "M0",
+      "title": "verdict: decide() policy: fail closed, models only tighten",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "platform-02"
+      ],
+      "goal": "One plain-code function in kitchen/verdict/policy.py, decide(ticket, exact_reach, unknown_ancestors, laya_outcome, mode, input_health, settings) -> Verdict, that returns HOLD unless every check affirmatively passes.",
+      "acceptance": [
+        "HOLD iff (exact flags or Laya flags) intersect the ticket's forbidden units, or unknown_ancestors is non-empty, or confidence < ticket.pass_threshold, or any error, missing input or model_unavailable: table-driven test_decide_cases (uv run pytest kitchen/verdict -k decide_cases)",
+        "Hypothesis property, marked safety: for every input and every Laya outcome (any response, an exception, a timeout), decide(full) is hold whenever decide(rules_only) is hold, and flagged is a superset of the exact flags: uv run pytest kitchen/verdict -m safety -k models_only_tighten",
+        "Hypothesis property, marked safety: safe_decide() wrapping any exception raised by any input accessor returns hold with reason error: uv run pytest kitchen/verdict -m safety -k fail_closed",
+        "Non-empty unknown_ancestors gives hold with reason unknown_history: test_unknown_history_holds",
+        "In full mode a missing Laya outcome gives hold with model_unavailable, and mode is recorded on the verdict: test_mode_recorded",
+        "ticket.exceptions never suppress a flag (OQ-2 default); trace_sensitive false is treated as true until the OQ-8 ADR: test_exceptions_do_not_loosen, test_trace_default_strict",
+        "Every output validates against verdict.schema.json, and the same inputs give byte-identical JSON: test_verdict_schema, test_deterministic",
+        "All thresholds and timeouts come from one VerdictSettings object and are recorded in verdict.versions; confidence uses a conservative placeholder (1 - max P(forbidden unit)) that verdict-02 can replace without changing decide()'s signature"
+      ],
+      "contracts": [
+        "ticket",
+        "allergen_reach",
+        "laya_response",
+        "verdict",
+        "chain_step"
+      ],
+      "out_of_scope": [
+        "Computing reachability (the partner's graph does that; decide() takes its result as input)",
+        "Calling Laya",
+        "Writing to SpacetimeDB"
+      ]
+    },
+    {
+      "key": "verdict-02",
+      "milestone": "M0",
+      "title": "verdict: ADR for clean-confidence and flag thresholds",
+      "type": "spike",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [],
+      "goal": "Write the ADR that defines clean-confidence and how per-unit flag thresholds relate to ticket.pass_threshold and severity (OQ-4), so verdict-01's placeholder can be replaced.",
+      "acceptance": [
+        "ADR PR to docs/decisions/ (Director merges) defines confidence as a function of reachability probabilities and input health, and shows it is monotone: more evidence of a forbidden allergen never raises it",
+        "Lists the property tests that will guard the definition, so verdict-01 can adopt them",
+        "Placeholder threshold defaults from OQ-4 recorded as VerdictSettings values, flagged for owner sign-off",
+        "Notes that edge tie order (OQ-17) belongs to the partner's graph, and states which tie rule the verdict tests assume"
+      ],
+      "contracts": [
+        "verdict",
+        "ticket",
+        "allergen_reach"
+      ],
+      "out_of_scope": [
+        "Implementation",
+        "trace_sensitive semantics (OQ-8, M3)",
+        "Graph math (partner)"
+      ]
+    },
+    {
+      "key": "verdict-03",
+      "milestone": "M0",
+      "title": "verdict: LayaClient adapter and ExactLaya fake",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "platform-03",
+        "platform-06"
+      ],
+      "goal": "In kitchen/verdict/laya.py, a LayaClient adapter that enforces the timeout and validates responses, plus ExactLaya, which answers any LayaRequest from ProvenanceGraph.reach.",
+      "acceptance": [
+        "The adapter turns a timeout, an exception or a response that fails laya_response.schema.json into LayaUnavailable, never a pass-through: test_timeout_unavailable, test_malformed_unavailable",
+        "ExactLaya(graph).analyze(request, timeout_ms=...) satisfies the LayaClient Protocol and returns a valid laya_response built from graph.reach: test_exact_laya_protocol",
+        "Chains in ExactLaya responses run source to plate with strictly increasing t_ms: test_chain_time_ordered",
+        "On FakeProvenanceGraph loaded with knife-carries-peanut-to-plate, ExactLaya reports peanut with chain [e1, e2]: uv run pytest kitchen/verdict -k exact_laya_golden"
+      ],
+      "contracts": [
+        "LayaClient",
+        "laya_request",
+        "laya_response",
+        "allergen_reach",
+        "ProvenanceGraph"
+      ],
+      "out_of_scope": [
+        "Exact reachability itself (partner)",
+        "The real Laya model (sim, M3)",
+        "Verdict decisions"
+      ]
+    },
+    {
+      "key": "verdict-04",
+      "milestone": "M0",
+      "title": "verdict: AdversarialLaya fakes and loosening tests",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "verdict-01",
+        "verdict-03"
+      ],
+      "goal": "Fakes that behave like a broken or hostile Laya, and a suite proving none of them can turn a HOLD into a PASS.",
+      "acceptance": [
+        "AdversarialLaya modes: random, empty (claims clean), late (exceeds timeout), malformed (fails schema), flipped (drops every allergen exact found), raises: test_modes_exist",
+        "For every mode, on every golden scenario (via FakeProvenanceGraph), the full-mode decision is never looser than rules_only, marked safety: uv run pytest kitchen/verdict -m safety -k adversarial",
+        "Documented in kitchen/verdict/README.md so sim's eval harness can use the same modes"
+      ],
+      "contracts": [
+        "LayaClient",
+        "laya_response",
+        "verdict"
+      ],
+      "out_of_scope": [
+        "Real Laya integration (M3)"
+      ]
+    },
+    {
+      "key": "verdict-05",
+      "milestone": "M0",
+      "title": "verdict: golden scenario runner in CI",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "verdict-01",
+        "platform-04",
+        "platform-06"
+      ],
+      "goal": "Every scenario in contracts/scenarios runs through graph + policy in rules_only mode on every PR, including amendments, and must match expected exactly. The graph is FakeProvenanceGraph today, and is swappable for the partner's real graph by a flag.",
+      "acceptance": [
+        "A pytest module parametrized over contracts/scenarios/*.json loads each scenario into InMemoryStateClient and FakeProvenanceGraph: uv run pytest kitchen/verdict -m safety -k golden",
+        "Amendments are replayed; every expected (plate, revision) entry is checked for decision, allergens_reached, reason_codes and chain_event_ids",
+        "Adding a scenario file needs no code change, and a mismatch prints an expected-vs-actual diff",
+        "A --graph option (fake | real) selects the ProvenanceGraph implementation; real is skipped with a clear message until the partner's graph is importable"
+      ],
+      "contracts": [
+        "scenario",
+        "verdict",
+        "ProvenanceGraph"
+      ],
+      "out_of_scope": [
+        "Running against the real graph (verdict-10)",
+        "Sim's generated corpus (verdict-09)"
+      ]
+    },
+    {
+      "key": "verdict-06",
+      "milestone": "M0",
+      "title": "verdict: ScriptedVerdictSource fake for outputs",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "good-first-task"
+      ],
+      "blocked_by": [
+        "platform-03",
+        "platform-04"
+      ],
+      "goal": "A fake in kitchen/verdict/service.py that writes verdict, verdict_step and mistake_pattern rows into InMemoryStateClient on a Clock schedule, so outputs can build the expo board and gate before the real service exists.",
+      "acceptance": [
+        "ScriptedVerdictSource(state, clock).play(path) replays contracts/fixtures/valid verdict and mistake_pattern fixtures, or a scenario's expected list: test_replays_fixtures",
+        "Every emitted row validates against its schema: test_rows_valid",
+        "A one-line usage example in kitchen/verdict/README.md"
+      ],
+      "contracts": [
+        "verdict",
+        "chain_step",
+        "mistake_pattern",
+        "StateClient"
+      ],
+      "out_of_scope": [
+        "Any real decision logic",
+        "entity_risk rows (the partner's graph owns that table)"
+      ]
+    },
+    {
+      "key": "verdict-07",
+      "milestone": "M1",
+      "title": "verdict: verdict service on StateClient",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "verdict-05",
+        "platform-04",
+        "platform-06"
+      ],
+      "goal": "A service that watches StateClient and, when a bound plate enters the pass zone or its ticket's revision goes up, queries ProvenanceGraph, calls decide(), and records the verdict with its chain atomically.",
+      "acceptance": [
+        "Triggers on entity.zone == pass for a bound plate (trigger plate_at_pass) and on a ticket revision increase (trigger ticket_amended): test_triggers",
+        "Every verdict is computed from scratch from full history, never incrementally from a previous verdict, marked safety: test_amendment_full_recheck",
+        "StateUnavailable, GraphUnavailable or any exception while building inputs produces a HOLD verdict (recorded once the DB is back) and an ERROR log: test_dependency_failure_holds",
+        "Missing ticket, missing binding, or no entity update for the plate within the staleness window gives hold with missing_input or stale_track: test_input_health",
+        "Replaying each golden scenario through InMemoryStateClient and FakeProvenanceGraph yields the expected verdict rows: uv run pytest kitchen/verdict -k service"
+      ],
+      "contracts": [
+        "StateClient",
+        "ProvenanceGraph",
+        "verdict",
+        "chain_step",
+        "ticket",
+        "entity",
+        "plate_binding"
+      ],
+      "out_of_scope": [
+        "Real SpacetimeDB and the real graph (verdict-10)",
+        "Laya full mode (M3)",
+        "Repeated Mistakes (M4)"
+      ]
+    },
+    {
+      "key": "verdict-08",
+      "milestone": "M1",
+      "title": "verdict: consolidated safety suite and fault injection",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "verdict-07"
+      ],
+      "goal": "One discoverable safety suite covering invariants 1, 2, 4, 8 and 9 at the policy and service level, with a reusable fault-injection harness, ready for the safety reviewer to sign off (M1 exit).",
+      "acceptance": [
+        "A fault-injection wrapper raises at every StateClient, ProvenanceGraph and LayaClient call site in turn; every run ends in hold: uv run pytest kitchen/verdict -m safety -k fault_injection",
+        "Property tests for invariants 1, 2, 4, 8 and 9 exist and are listed in kitchen/verdict/SAFETY.md with what each proves",
+        "uv run pytest kitchen/verdict -m safety runs in CI on every PR in under 2 minutes",
+        "review:safety-approved recorded on the PR by the safety reviewer"
+      ],
+      "contracts": [
+        "verdict",
+        "StateClient",
+        "ProvenanceGraph",
+        "LayaClient"
+      ],
+      "out_of_scope": [
+        "New product behavior",
+        "Graph-level properties such as time-forward (partner's contract tests)"
+      ]
+    },
+    {
+      "key": "verdict-09",
+      "milestone": "M1",
+      "title": "verdict: gate on sim's observation-complete corpus",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "safety-critical",
+        "needs-partner"
+      ],
+      "blocked_by": [
+        "verdict-05",
+        "sim-01"
+      ],
+      "goal": "Run sim's committed CI subset through graph + policy on every PR, with zero false passes allowed and the false-hold rate reported. On FakeProvenanceGraph this exercises the policy over varied ground truth; the real end-to-end check switches to the partner's graph once it lands.",
+      "acceptance": [
+        "For scenarios tagged generated and observation-complete, any expected hold that we pass fails CI, marked safety: uv run pytest kitchen/verdict -m safety -k sim_corpus",
+        "False-hold rate printed as a CI summary line",
+        "Scenarios without the observation-complete tag are reported but never fail CI",
+        "Final step (needs-partner): the same run with --graph real passes with zero false passes"
+      ],
+      "contracts": [
+        "scenario",
+        "verdict",
+        "ProvenanceGraph"
+      ],
+      "out_of_scope": [
+        "Generating the corpus (sim)",
+        "Tuning transfer efficiencies (partner's graph)"
+      ]
+    },
+    {
+      "key": "verdict-10",
+      "milestone": "M1",
+      "title": "verdict: run on the partner's real graph and database",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "safety-critical",
+        "needs-partner"
+      ],
+      "blocked_by": [
+        "verdict-07"
+      ],
+      "goal": "Swap FakeProvenanceGraph and InMemoryStateClient for the partner's real ProvenanceGraph and StateClient against a local SpacetimeDB, pass every golden scenario, and meet the rules-only latency budget.",
+      "acceptance": [
+        "The golden runner passes with --graph real against the partner's graph: uv run pytest kitchen/verdict -m safety -k golden --graph real",
+        "record_verdict writes verdict and verdict_step atomically; a killed process never leaves a verdict without its chain: test_atomic_record (integration, marked slow)",
+        "Plate-at-pass to verdict row <= 200 ms p95 in rules_only on golden scenarios, measured and reported in the PR",
+        "Any mismatch is filed as an issue labeled owner:partner with the failing scenario, not worked around in kitchen/verdict"
+      ],
+      "contracts": [
+        "ProvenanceGraph",
+        "StateClient",
+        "verdict",
+        "chain_step"
+      ],
+      "out_of_scope": [
+        "Editing the partner's graph or database",
+        "Pi deployment",
+        "Laya"
+      ]
+    }
+  ]
+}

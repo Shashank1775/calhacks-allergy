@@ -4,7 +4,7 @@ labels: ["type:task", "status:backlog"]
 body:
   - type: markdown
     attributes:
-      value: Add exactly one `team:` label and a `prio:` label. See docs/agents/WORKFLOW.md#writing-an-issue.
+      value: Add exactly one `team:` label and a `prio:` label. See AGENTS.md section 6 (the ready bar).
   - type: textarea
     id: goal
     attributes: { label: Goal, description: The outcome, not the method. One or two sentences. }

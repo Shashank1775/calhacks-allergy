@@ -1,0 +1,363 @@
+{
+  "team": "outputs",
+  "epics": [
+    {
+      "milestone": "M0",
+      "title": "outputs: M0 Foundations",
+      "goals": [
+        "Expo board skeleton runs on an in-browser ScenarioStateSource (outputs-01)",
+        "Web framework and app layout decided in an ADR",
+        "Gate state machine with ConsoleGate and MockGPIOGate, fail closed by construction",
+        "ConsoleSpeaker and the spoken-line formatter ('Hold seven')"
+      ]
+    },
+    {
+      "milestone": "M1",
+      "title": "outputs: M1 Vertical Slice",
+      "goals": [
+        "Tablet screen: type a note, answer one-tap questions, send only when sendable (invariant 3)",
+        "Expo board shows held plates with chains and per-step confidence",
+        "Chef confirmation screen for unclear ingredients",
+        "Gate service drives GateDriver and Speaker from verdicts via StateClient",
+        "'Start ticket' button calls vision's /v1/plates/start (mocked)",
+        "Expo board reads live SpacetimeDB through the partner's TS bindings (needs partner)"
+      ]
+    },
+    {
+      "milestone": "M2",
+      "title": "outputs: M2 Live on Pi",
+      "goals": [
+        "GPIO gate driver (servo, red/green light, buzzer) verified on the device by the owner",
+        "Fault on a stale verdict feed or vision health shown on the real gate",
+        "Camera overlays color entities by entity_risk (OQ-6)",
+        "'Start ticket' works against real vision on the Pi"
+      ]
+    },
+    {
+      "milestone": "M3",
+      "title": "outputs: M3 Models",
+      "goals": [
+        "Cartesia Sonic voice live behind Speaker, within the verdict latency budget",
+        "Voice ticket entry on the tablet through /v1/transcribe"
+      ]
+    },
+    {
+      "milestone": "M4",
+      "title": "outputs: M4 Demo Hardening",
+      "goals": [
+        "Repeated Mistakes view with suggested fixes",
+        "Amendment flow on the tablet with the recheck visible on expo",
+        "Scripted gate failure drills: kill the feed, gate goes to fault",
+        "Demo polish for the owner's script"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "key": "outputs-01",
+      "milestone": "M0",
+      "title": "outputs: Expo board skeleton on ScenarioStateSource",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": [
+        "platform-01"
+      ],
+      "goal": "A Vite + TypeScript app in web/ whose expo route lists tickets, plates and verdicts from a StateSource interface, backed for now by an in-browser ScenarioStateSource that replays a contracts/scenarios file. The SpacetimeDB source comes later from the partner's TS bindings.",
+      "acceptance": [
+        "web/src/state/ defines a StateSource interface exposing tickets, entities, verdicts and verdict steps with subscribe callbacks shaped like the tables in contracts/state-tables.md",
+        "ScenarioStateSource loads any contracts/scenarios/*.json, replays events over time and emits verdicts from the scenario's expected entries: `npm --prefix web test` passes a test that loads every golden scenario",
+        "The expo route renders the ticket list, plates and each verdict's decision; the pass badge renders only when decision == 'pass': vitest render test passes",
+        "`npm --prefix web run build` succeeds, and a type:request asks platform to run web build and test in CI",
+        "Until platform ships TS types generated from contracts/schemas, a type:request is filed and types live in one file, web/src/types/TEMPORARY.ts, linking to that request",
+        "PR includes a screenshot of the expo route running on a golden scenario"
+      ],
+      "contracts": [
+        "ticket",
+        "verdict",
+        "entity",
+        "scenario",
+        "state-tables"
+      ],
+      "out_of_scope": [
+        "Real SpacetimeDB connection (outputs-08)",
+        "Chain view details (outputs-07)",
+        "Styling beyond legibility"
+      ]
+    },
+    {
+      "key": "outputs-02",
+      "milestone": "M0",
+      "title": "outputs: ADR: web framework and app layout",
+      "type": "spike",
+      "prio": "p1",
+      "flags": [
+        "good-first-task"
+      ],
+      "blocked_by": [],
+      "goal": "Pick the UI framework and layout for the tablet, chef and expo screens (one Vite app with routes is the default) and record it in a team ADR.",
+      "acceptance": [
+        "docs/decisions/NNNN-outputs-web-framework.md proposed via PR: options considered, choice, routing, state management, test tooling (vitest), and how the SpacetimeDB TypeScript SDK and MSW mocks fit",
+        "Confirms the SpacetimeDB TypeScript SDK works with the chosen framework, citing current docs; unverified claims are marked",
+        "Notes tablet constraints (touch targets of at least 44 px, works in a browser on an iPad-class device)"
+      ],
+      "contracts": [],
+      "out_of_scope": [
+        "Building screens",
+        "Component library deep dives"
+      ]
+    },
+    {
+      "key": "outputs-03",
+      "milestone": "M0",
+      "title": "outputs: Gate state machine with ConsoleGate and MockGPIOGate",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "platform-03"
+      ],
+      "goal": "A pure gate state machine (idle, pass, hold, fault) in kitchen/gate/service.py that is closed by default and fails to fault, plus the ConsoleGate and MockGPIOGate implementations of GateDriver in kitchen/gate/driver.py.",
+      "acceptance": [
+        "Transitions are a pure function matching the state-machine table in kitchen/gate/README.md: `uv run pytest kitchen/gate -k gate_transitions` passes",
+        "The default state is closed (idle shows red); only an explicit pass for the plate at the pass and the ticket's current revision opens it: `uv run pytest kitchen/gate -k gate_opens_only_on_current_pass -m safety` passes",
+        "A verdict feed silent beyond the configured limit, or stale vision health, gives fault: `uv run pytest kitchen/gate -k gate_stale_fault -m safety` passes",
+        "Any exception inside the driver or state machine gives fault: `uv run pytest kitchen/gate -k gate_exception_fault -m safety` passes",
+        "MockGPIOGate records every show() call for assertions; ConsoleGate prints the state: `uv run pytest kitchen/gate -k gate_fakes` passes"
+      ],
+      "contracts": [
+        "GateDriver",
+        "verdict"
+      ],
+      "out_of_scope": [
+        "Real GPIO (M2, hardware)",
+        "Subscribing to verdicts (outputs-05)"
+      ]
+    },
+    {
+      "key": "outputs-04",
+      "milestone": "M0",
+      "title": "outputs: ConsoleSpeaker and spoken-line formatter",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "good-first-task"
+      ],
+      "blocked_by": [
+        "platform-03"
+      ],
+      "goal": "A Speaker fake (kitchen/gate/voice.py) and a formatter (kitchen/gate/lines.py) that turns verdicts into short spoken lines ('Hold seven', 'Seven, peanut'), dropping stale lines instead of queueing them.",
+      "acceptance": [
+        "The formatter turns ticket numbers into words and produces the hold line from verdict fixtures: `uv run pytest kitchen/gate -k voice_format` passes on contracts/fixtures/valid/verdict/*.json",
+        "ConsoleSpeaker implements Speaker.say without blocking: `uv run pytest kitchen/gate -k console_speaker` passes",
+        "A newer line for the same plate replaces an unspoken older one: `uv run pytest kitchen/gate -k speaker_drops_stale` passes"
+      ],
+      "contracts": [
+        "Speaker",
+        "verdict"
+      ],
+      "out_of_scope": [
+        "Cartesia Sonic (M3)",
+        "Audio output devices"
+      ]
+    },
+    {
+      "key": "outputs-05",
+      "milestone": "M1",
+      "title": "outputs: Gate service driven by verdicts via StateClient",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "outputs-03",
+        "outputs-04",
+        "platform-04"
+      ],
+      "goal": "A gate process (kitchen/gate/service.py) that subscribes to verdicts through StateClient and drives GateDriver and Speaker for the plate at the pass, holding on anything other than a current-revision pass.",
+      "acceptance": [
+        "Running every golden scenario through InMemoryStateClient drives MockGPIOGate to the scenario's expected decision: `uv run pytest kitchen/gate -k gate_service_scenarios -m safety` passes",
+        "A verdict for an older ticket revision than the current one leaves the gate holding (invariant 9): `uv run pytest kitchen/gate -k gate_stale_revision -m safety` passes",
+        "StateUnavailable or a silent subscription gives fault: `uv run pytest kitchen/gate -k gate_service_feed_loss -m safety` passes",
+        "The Speaker gets 'Hold <number>' on every hold: `uv run pytest kitchen/gate -k gate_service_voice` passes",
+        "Runs with ConsoleGate and ConsoleSpeaker via `uv run python -m kitchen.gate.service --fake`, documented in kitchen/gate/README.md"
+      ],
+      "contracts": [
+        "verdict",
+        "ticket",
+        "StateClient",
+        "GateDriver",
+        "Speaker"
+      ],
+      "out_of_scope": [
+        "Real GPIO (M2)",
+        "Wiring the partner's real StateClient beyond config"
+      ]
+    },
+    {
+      "key": "outputs-06",
+      "milestone": "M1",
+      "title": "outputs: Tablet screen with one-tap questions and send gate",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "outputs-01",
+        "orders-01"
+      ],
+      "goal": "The tablet route in web/src/tablet/ lets a server type a note, see the parsed constraints, answer one-tap questions and send, with Send disabled until the draft is sendable.",
+      "acceptance": [
+        "Uses an MSW mock server built from kitchen/orders/fakes/http/ examples: vitest tests run without the orders service",
+        "Send is disabled while any question is unanswered: `npm --prefix web test -- tablet_send_gate` passes",
+        "A 409 unanswered_questions response re-shows the open questions: vitest test passes",
+        "jev_unavailable shows a manual-entry form instead of a guessed result: vitest test passes",
+        "Touch targets are at least 44 px; PR includes a screenshot"
+      ],
+      "contracts": [
+        "parse_result",
+        "ticket",
+        "Orders HTTP API"
+      ],
+      "out_of_scope": [
+        "Voice capture (M3)",
+        "Amendment flow (M4)",
+        "Parsing logic (orders)"
+      ]
+    },
+    {
+      "key": "outputs-07",
+      "milestone": "M1",
+      "title": "outputs: Expo board held-plate chain view",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": [
+        "outputs-01"
+      ],
+      "goal": "For each held plate, the expo board (web/src/expo/) shows the reasons, flagged allergens and the contamination chain step by step with per-step confidence.",
+      "acceptance": [
+        "The chain view renders contracts/fixtures/valid/verdict/hold-peanut.json with both steps, entities, actions and step_confidence: vitest render test passes",
+        "Every reason code in verdict.schema.json has a human label: a vitest test enumerates the enum",
+        "Plates whose latest verdict is for an older ticket revision show 'rechecking', not pass: vitest test passes",
+        "PR includes a screenshot running on the knife-carries-peanut-to-plate scenario"
+      ],
+      "contracts": [
+        "verdict",
+        "chain_step",
+        "ticket"
+      ],
+      "out_of_scope": [
+        "Camera overlays (M2)",
+        "Repeated Mistakes view (M4)"
+      ]
+    },
+    {
+      "key": "outputs-08",
+      "milestone": "M1",
+      "title": "outputs: Connect expo board to SpacetimeDB TS bindings",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "needs-partner"
+      ],
+      "blocked_by": [
+        "outputs-01"
+      ],
+      "goal": "Add a SpacetimeDB-backed StateSource (web/src/state/) using the TS bindings generated from the partner's database/, with live subscriptions, while ScenarioStateSource stays for tests and demos. Build against mocked bindings shaped like contracts/state-tables.md; the last step needs the partner's generated bindings.",
+      "acceptance": [
+        "The SpacetimeDB source subscribes to ticket, ticket_constraint, entity, entity_risk, verdict and verdict_step and fills the same store: unit tests with the bindings mocked pass (`npm --prefix web test`)",
+        "The source is selected by config or URL parameter; the default in tests is ScenarioStateSource",
+        "Connection loss shows a visible 'feed lost' banner and never leaves stale PASS badges on screen: vitest test passes",
+        "Once the partner's bindings exist, the PR body includes output from a manual run against a local SpacetimeDB set up per database/README.md"
+      ],
+      "contracts": [
+        "state-tables",
+        "verdict",
+        "entity"
+      ],
+      "out_of_scope": [
+        "Generating bindings (partner)",
+        "Changing tables or editing database/ (partner-owned)"
+      ]
+    },
+    {
+      "key": "outputs-09",
+      "milestone": "M1",
+      "title": "outputs: Chef confirmation screen",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": [
+        "outputs-01",
+        "orders-01"
+      ],
+      "goal": "The chef route in web/src/chef/ lists open chef confirmations for unclear bin ingredients and lets the chef pick allergen units, calling POST /v1/profiles/bins/{entity_id}/confirm.",
+      "acceptance": [
+        "Lists open confirmations from the StateSource (chef_confirmation table) with bin label and ingredient: vitest test passes on seeded data",
+        "Submitting calls the confirm endpoint (MSW mock) with the chosen allergen_unit_ids; 'none of these' is an explicit choice: vitest test passes",
+        "Allergen choices come from contracts/allergen_units.json, never hardcoded: vitest test passes",
+        "PR includes a screenshot"
+      ],
+      "contracts": [
+        "allergen_profile",
+        "Orders HTTP API",
+        "allergen_units.json"
+      ],
+      "out_of_scope": [
+        "Profiling logic (orders)",
+        "Label photo capture"
+      ]
+    },
+    {
+      "key": "outputs-10",
+      "milestone": "M1",
+      "title": "outputs: 'Start ticket' button calling vision",
+      "type": "task",
+      "prio": "p2",
+      "flags": [],
+      "blocked_by": [
+        "outputs-01"
+      ],
+      "goal": "A cook-facing 'start ticket' control that calls vision's POST /v1/plates/start and shows clear errors when no plate, several plates, or an already-bound plate is at the plating spot.",
+      "acceptance": [
+        "Calls POST /v1/plates/start with the ticket_id against an MSW mock: vitest test passes",
+        "409 no_plate_at_spot, 409 multiple_plates_at_spot and 409 plate_already_bound show distinct messages, and nothing is assumed bound: vitest test passes",
+        "web/README.md documents the web origin to set in VISION_CORS_ORIGINS per contracts/apis.md#http-conventions"
+      ],
+      "contracts": [
+        "Vision HTTP API"
+      ],
+      "out_of_scope": [
+        "Plate binding logic (vision)",
+        "Testing against the real Pi (M2)"
+      ]
+    },
+    {
+      "key": "outputs-11",
+      "milestone": "M1",
+      "title": "outputs: Spike: verify Cartesia Sonic for gate voice",
+      "type": "spike",
+      "prio": "p2",
+      "flags": [],
+      "blocked_by": [],
+      "goal": "Document how Cartesia Sonic would be called for short gate lines: auth, streaming vs batch, latency, audio output on the Pi, cost, and offline fallback.",
+      "acceptance": [
+        "kitchen/gate/docs/sonic-spike.md answers each point, citing sources; unverified claims are marked",
+        "An adapter sketch for kitchen/gate/voice.py keeps the Speaker signature unchanged and explains how stale lines are dropped",
+        "Owner questions (keys, voice choice, audio hardware per OQ-11) posted on the issue with status:needs-human if needed"
+      ],
+      "contracts": [
+        "Speaker"
+      ],
+      "out_of_scope": [
+        "Production adapter (M3)",
+        "Creating vendor accounts"
+      ]
+    }
+  ]
+}

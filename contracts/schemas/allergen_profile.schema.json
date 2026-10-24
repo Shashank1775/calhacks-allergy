@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "allergen_profile.schema.json",
   "title": "AllergenProfile",
-  "description": "Probability that an entity carries each allergen unit. Bins: set by intake profiling. Tools, hands, plates: clean at shift start, then updated by provenance.",
+  "description": "Probability that an entity carries each allergen unit. Bins: set by orders (profiling). Tools, hands, plates: clean at shift start, then updated by the partner graph.",
   "type": "object",
   "additionalProperties": false,
   "required": ["probabilities", "unknown", "source"],

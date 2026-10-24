@@ -2,36 +2,96 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "observation_frame.schema.json",
   "title": "ObservationFrame",
-  "description": "One tracked camera frame. Producer: perception. Consumer: interactions (in-process on the Pi). Recorded as JSONL for replay and tests.",
+  "description": "One tracked camera frame. Producer: vision. Consumers: interactions and the partner entity store (in-process on the Pi). Recorded as JSONL for replay and tests.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["frame_id", "t_ms", "camera_id", "detections"],
+  "required": [
+    "frame_id",
+    "t_ms",
+    "camera_id",
+    "detections"
+  ],
   "properties": {
-    "frame_id": { "type": "integer", "minimum": 0 },
-    "t_ms": { "$ref": "common.schema.json#/$defs/t_ms" },
-    "camera_id": { "type": "string" },
-    "fps_estimate": { "type": "number", "minimum": 0 },
+    "frame_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "t_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "camera_id": {
+      "type": "string"
+    },
+    "fps_estimate": {
+      "type": "number",
+      "minimum": 0
+    },
     "detections": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["track_id", "entity_id", "kind", "class_name", "box", "confidence"],
+        "required": [
+          "track_id",
+          "entity_id",
+          "kind",
+          "class_name",
+          "box",
+          "confidence",
+          "origin"
+        ],
         "properties": {
-          "track_id": { "type": "integer" },
-          "entity_id": { "$ref": "common.schema.json#/$defs/entity_id" },
-          "kind": { "$ref": "common.schema.json#/$defs/entity_kind" },
-          "class_name": { "type": "string", "description": "Detector class, e.g. knife, spoon, fork, bowl, wrist." },
-          "box": { "$ref": "common.schema.json#/$defs/box" },
-          "confidence": { "$ref": "common.schema.json#/$defs/probability" },
-          "zone": { "type": ["string", "null"] },
-          "person_id": { "type": ["string", "null"], "description": "Hands only: the pose skeleton the wrist belongs to." },
+          "track_id": {
+            "type": "integer"
+          },
+          "entity_id": {
+            "$ref": "common.schema.json#/$defs/entity_id"
+          },
+          "kind": {
+            "$ref": "common.schema.json#/$defs/entity_kind"
+          },
+          "class_name": {
+            "type": "string",
+            "description": "Detector class, e.g. knife, spoon, fork, bowl, wrist."
+          },
+          "box": {
+            "$ref": "common.schema.json#/$defs/box"
+          },
+          "confidence": {
+            "$ref": "common.schema.json#/$defs/probability"
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "person_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hands only: the pose skeleton the wrist belongs to."
+          },
           "wrist": {
             "description": "Hands only: wrist keypoint [x, y, confidence], normalized.",
-            "type": ["array", "null"],
-            "items": { "type": "number" },
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number"
+            },
             "minItems": 3,
             "maxItems": 3
+          },
+          "origin": {
+            "enum": [
+              "shift_start",
+              "clean_stack",
+              "unknown"
+            ],
+            "description": "Set by vision's identity step when the entity is first seen; constant for the entity's life (invariant 8)."
           }
         }
       }

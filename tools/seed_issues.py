@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKLOG = ROOT / "tools" / "backlog"
-TEAMS = ["platform", "intake", "state", "perception", "interactions", "provenance", "sim", "experience"]
+TEAMS = ["platform", "orders", "vision", "interactions", "verdict", "sim", "outputs"]
 MILESTONES = {
     "M0": "M0 Foundations",
     "M1": "M1 Vertical Slice",
@@ -28,7 +28,7 @@ MILESTONES = {
     "M3": "M3 Models",
     "M4": "M4 Demo Hardening",
 }
-FLAGS = {"safety-critical", "hardware", "good-first-task"}
+FLAGS = {"safety-critical", "hardware", "good-first-task", "needs-partner"}
 KEY_RE = re.compile(r"<!-- key: ([a-z0-9-]+) -->")
 
 
@@ -107,8 +107,8 @@ def task_body(t: dict, numbers: dict[str, int | str]) -> str:
 def team_board_body(team: str) -> str:
     return "\n".join([
         f"<!-- key: board-{team} -->",
-        f"Team board for **{team}**. The Manager rewrites this body every cycle (see docs/agents/MANAGER.md).",
-        f"Charter: `teams/{team}/CHARTER.md`", "",
+        f"Team board for **{team}**. The Manager rewrites this body every cycle (see AGENTS.md section 5).",
+        "Rules: AGENTS.md. Folder details: the README in each of the team's folders (AGENTS.md section 7).", "",
         "## In flight", "_none_", "", "## Blocked", "_none_", "", "## Next up", "_none_", "",
         "## Decisions", "_none_", "", "## Risks", "_none_", "", "— [director]",
     ])
@@ -117,11 +117,11 @@ def team_board_body(team: str) -> str:
 def program_board_body() -> str:
     return "\n".join([
         "<!-- key: board-program -->",
-        "Program board. The Director rewrites this body every cycle (see docs/agents/DIRECTOR.md).", "",
+        "Program board. The Director rewrites this body every cycle (see AGENTS.md section 5).", "",
         "## Phase gate", "See AGENTS.md.", "",
         "## Milestone status", "| Exit criterion | Status | Evidence |", "|---|---|---|", "", 
         "## Cross-team blockers", "_none_", "", "## Open RFCs", "_none_", "",
-        "## Needs the owner", "_none_", "", "— [director]",
+        "## Needs the owner", "_none_", "", "## Partner", "_Open owner:partner issues and needs-partner tasks._", "", "— [director]",
     ])
 
 

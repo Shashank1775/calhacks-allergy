@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "entity.schema.json",
   "title": "Entity",
-  "description": "A tracked bin, tool, hand or plate. Producer: perception (position fields), intake (bin profiles), provenance (propagated profiles). Synced to SpacetimeDB at about 5 Hz.",
+  "description": "A tracked bin, tool, hand or plate. Producers: partner entity store (position fields, built from vision's frames), orders (bin profiles), partner graph (propagated profiles). Synced to SpacetimeDB at about 5 Hz.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -56,7 +56,7 @@
         "clean_stack",
         "unknown"
       ],
-      "description": "How the entity entered the shift (invariant 8). Set once by perception; never changes. Only shift_start and clean_stack start clean."
+      "description": "How the entity entered the shift (invariant 8). Set once by vision; never changes. Only shift_start and clean_stack start clean."
     },
     "first_seen_t_ms": {
       "$ref": "common.schema.json#/$defs/t_ms"

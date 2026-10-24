@@ -1,5 +1,5 @@
 {
-  "$comment": "Recommended Claude Code project permissions for the agent org. The owner reviews this, then copies it to .claude/settings.json (docs/agents/LAUNCH.md). Deny rules are a speed bump, not a wall; the GitHub ruleset is what protects main.",
+  "$comment": "Recommended Claude Code project permissions for the agent org. The owner reviews this, then copies it to .claude/settings.json (AGENTS.md section 14). Deny rules are a speed bump, not a wall; the GitHub ruleset is what protects main.",
   "permissions": {
     "allow": [
       "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)",

@@ -1,6 +1,6 @@
 # SpacetimeDB tables and reducers
 
-Logical spec. The state team implements it as a SpacetimeDB module in `components/state/` and may choose physical types (structs, `Vec`, JSON strings) as long as the [`StateClient`](apis.md#stateclient-python-interface) and generated TypeScript bindings expose these fields.
+Logical spec. The **partner** implements it as a SpacetimeDB module in `database/` and may choose physical types (structs, `Vec`, JSON strings) as long as the [`StateClient`](apis.md#stateclient) and generated TypeScript bindings expose these fields.
 
 ## Writers
 
@@ -8,21 +8,21 @@ Every table has exactly **one** writer team. The module enforces this by checkin
 
 | Table | Writer | Readers | Schema |
 |---|---|---|---|
-| `allergen_unit` | state (seed from `allergen_units.json`) | all | `allergen_units.json` |
-| `shift` | state (`start_shift`) | all | — |
-| `zone` | perception (calibration) | all | — |
-| `ticket` | intake | provenance, experience | `ticket` |
-| `ticket_constraint` | intake | provenance, experience | `ticket.constraints[]` |
-| `ticket_exception` | intake | provenance, experience | `ticket.exceptions[]` |
-| `bin_profile` | intake | provenance, experience | `allergen_profile` |
-| `chef_confirmation` | intake | experience | — |
-| `entity` | perception | all | `entity` minus `allergen_profile` |
-| `plate_binding` | perception | provenance, experience | `scenario.plate_bindings[]` |
-| `interaction` | interactions | provenance, experience | `interaction_event` |
-| `entity_risk` | provenance | experience | `allergen_profile` (live, propagated) |
-| `verdict` | provenance | experience | `verdict` minus `chain` |
-| `verdict_step` | provenance | experience | `verdict.chain[]` |
-| `mistake_pattern` | provenance | experience | `mistake_pattern` |
+| `allergen_unit` | partner database (seed from `allergen_units.json`) | all | `allergen_units.json` |
+| `shift` | partner database (`start_shift`) | all | — |
+| `zone` | vision (calibration) | all | — |
+| `ticket` | orders | verdict, partner graph, outputs | `ticket` |
+| `ticket_constraint` | orders | verdict, partner graph, outputs | `ticket.constraints[]` |
+| `ticket_exception` | orders | verdict, partner graph, outputs | `ticket.exceptions[]` |
+| `bin_profile` | orders | verdict, partner graph, outputs | `allergen_profile` |
+| `chef_confirmation` | orders | outputs | — |
+| `entity` | partner entity store | all | `entity` minus `allergen_profile` |
+| `plate_binding` | vision | verdict, partner graph, outputs | `scenario.plate_bindings[]` |
+| `interaction` | interactions | partner graph, outputs | `interaction_event` |
+| `entity_risk` | partner graph | outputs | `allergen_profile` (live, propagated) |
+| `verdict` | verdict | outputs | `verdict` minus `chain` |
+| `verdict_step` | verdict | outputs | `verdict.chain[]` |
+| `mistake_pattern` | verdict | outputs | `mistake_pattern` |
 
 The logical `Entity.allergen_profile` in the schema is the join: `bin_profile` for bins, `entity_risk` for everything else, and `{unknown: true}` for entities with `origin: unknown` that nothing has reset yet.
 
@@ -52,18 +52,18 @@ Every ticket revision is kept, in all three ticket tables, so any verdict can be
 
 | Reducer | Caller | Effect |
 |---|---|---|
-| `seed_allergen_units(units)` | state (init) | Upsert `allergen_unit` |
-| `start_shift(shift_id, wall_clock_start)` | state (the owner runs the state team's shift CLI) | New active shift. Tools, hands and plates start clean |
-| `set_zones(zones)` | perception | Replace calibration |
-| `put_ticket(ticket)` | intake | Insert, or amend with `revision + 1` and new constraint rows |
-| `put_bin_profile(entity_id, profile)` | intake | Upsert |
-| `open_chef_confirmation(entity_id, ingredient)` / `answer_chef_confirmation(id, allergen_unit_ids)` | intake | |
-| `upsert_entities(entities)` | perception | Batched at ~5 Hz. Never deletes; stale entities keep `last_seen_t_ms` |
-| `bind_plate(plate_id, ticket_id, t_ms)` | perception | |
+| `seed_allergen_units(units)` | partner database (init) | Upsert `allergen_unit` |
+| `start_shift(shift_id, wall_clock_start)` | partner database (shift CLI, run by a person at shift start) | New active shift. Tools, hands and plates start clean |
+| `set_zones(zones)` | vision | Replace calibration |
+| `put_ticket(ticket)` | orders | Insert, or amend with `revision + 1` and new constraint rows |
+| `put_bin_profile(entity_id, profile)` | orders | Upsert |
+| `open_chef_confirmation(entity_id, ingredient)` / `answer_chef_confirmation(id, allergen_unit_ids)` | orders | |
+| `upsert_entities(entities)` | partner entity store | Batched at ~5 Hz. Never deletes; stale entities keep `last_seen_t_ms` |
+| `bind_plate(plate_id, ticket_id, t_ms)` | vision | |
 | `record_interactions(events)` | interactions | Insert; duplicate `event_id` is a no-op |
-| `put_entity_risk(entity_id, profile, t_ms)` | provenance | Upsert |
-| `record_verdict(verdict, steps)` | provenance | Insert verdict and its chain atomically |
-| `put_mistake_pattern(pattern)` | provenance | Upsert |
+| `put_entity_risk(entity_id, profile, t_ms)` | partner graph | Upsert |
+| `record_verdict(verdict, steps)` | verdict | Insert verdict and its chain atomically |
+| `put_mistake_pattern(pattern)` | verdict | Upsert |
 
 ## Throughput (proposed)
 

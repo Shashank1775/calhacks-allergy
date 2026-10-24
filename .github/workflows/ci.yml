@@ -23,11 +23,11 @@ jobs:
         run: python tools/check_ownership.py
       - name: Owners touched by this PR
         if: github.event_name == 'pull_request'
-        run: python tools/check_ownership.py --diff origin/${{ github.base_ref }}
+        run: python tools/check_ownership.py --diff origin/${{ github.base_ref }} --branch ${{ github.head_ref }}
       - name: Phase gate
         if: github.event_name == 'pull_request'
         run: python tools/check_phase_gate.py --diff origin/${{ github.base_ref }}
       - name: Backlog is valid
         run: python tools/seed_issues.py --dry-run > /dev/null
 
-  # Per-component lint and test jobs are added by the platform team (task platform-01).
+  # Python lint and test jobs for the kitchen package are added by the platform team (task platform-01).
