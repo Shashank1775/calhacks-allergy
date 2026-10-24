@@ -94,6 +94,62 @@ def test_triggers_again_when_the_plate_comes_back():
     assert [verdict["decided_t_ms"] for verdict in state.list_verdicts()] == [3000, 3800]
 
 
+def write_row(state, clock, entity_id, zone, t_ms, version=1, caused_by=None, at_ms=None):
+    """Append a state row stamped t_ms, delivered at clock time at_ms (default t_ms). A row with caused_by set is one
+    the graph wrote: it copies a zone forward instead of reporting where the camera saw the plate."""
+    clock.set(t_ms if at_ms is None else at_ms)
+    state.move_entity(EntityState(entity_id, version, t_ms, zone, None, {}, False, caused_by=caused_by))
+
+
+def plate_at_pass_times(state):
+    return [verdict["decided_t_ms"] for verdict in state.list_verdicts() if verdict["trigger"] == "plate_at_pass"]
+
+
+@pytest.mark.safety
+def test_a_graph_written_row_does_not_take_a_plate_out_of_the_pass():
+    """A risk row carrying a stale zone must not make the store's next pass row judge the plate again (#216)."""
+    state, clock, _, _, _ = kitchen("knife-carries-peanut-to-plate")
+    write_row(state, clock, "plate-t1", "plating-spot", 2000)
+    write_row(state, clock, "plate-t1", "pass", 3000)
+    # Not older than the newest row (a risk row copies its t_ms), so only caused_by tells it apart.
+    write_row(state, clock, "plate-t1", "plating-spot", 3000, version=4, caused_by="e-touch", at_ms=3100)
+    write_row(state, clock, "plate-t1", "pass", 3200, version=2)
+
+    assert plate_at_pass_times(state) == [3000]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(
+    "late_row",
+    [{"t_ms": 2000, "version": 1}, {"t_ms": 3000, "version": 1}],
+    ids=["older t_ms", "same t_ms, older version"],
+)
+def test_a_row_older_than_the_plates_newest_does_not_take_it_out_of_the_pass(late_row):
+    """A store row written late, older by (t_ms, version) than one already seen, can't move the plate back (#216)."""
+    state, clock, _, _, _ = kitchen("knife-carries-peanut-to-plate")
+    write_row(state, clock, "plate-t1", "pass", 3000, version=2)
+    write_row(state, clock, "plate-t1", "plating-spot", **late_row, at_ms=3100)
+    write_row(state, clock, "plate-t1", "pass", 3200, version=3)
+
+    assert plate_at_pass_times(state) == [3000]
+
+
+@pytest.mark.safety
+def test_a_graph_written_row_neither_takes_a_plate_to_the_pass_nor_stops_it_coming_back():
+    """Only the store's rows say where a plate is: a risk row copying "pass" judges nothing, and a plate that really
+    leaves and comes back is judged again, so no HOLD is skipped."""
+    state, clock, _, _, _ = kitchen("knife-carries-peanut-to-plate")
+    write_row(state, clock, "plate-t1", "pass", 3000)
+    write_row(state, clock, "plate-t1", "plating-spot", 3500)
+    write_row(state, clock, "plate-t1", "pass", 3500, version=7, caused_by="e-touch", at_ms=3600)
+    assert plate_at_pass_times(state) == [3000]
+
+    write_row(state, clock, "plate-t1", "pass", 3800)
+
+    assert plate_at_pass_times(state) == [3000, 3800]
+    assert [verdict["decision"] for verdict in state.list_verdicts()] == ["hold", "hold"]
+
+
 @pytest.mark.safety
 def test_amendment_full_recheck():
     """Late changes recheck everything: an amendment rejudges the plate from the graph, not from the last verdict."""

@@ -78,6 +78,7 @@ class VerdictService:
         self._recorded_answer: dict[str, tuple] = {}  # per plate, answer() of its latest recorded verdict
         self._late_rechecks = 0  # numbers each late-edge verdict_id
         self._at_pass: set[str] = set()
+        self._newest_row: dict[str, tuple[int, int]] = {}  # per plate, (t_ms, version) of the store's newest row
         self._unsubscribe = []
 
     def start(self) -> None:
@@ -105,11 +106,22 @@ class VerdictService:
         self._unsubscribe = []
 
     def on_entity_state(self, change) -> None:
-        """Judge a plate when its new state puts it in a pass zone and it wasn't there before."""
+        """Judge a plate when its new state puts it in a pass zone and it wasn't there before.
+
+        Only the entity store's newest row says where a plate is. A row the graph wrote (caused_by set) copies a zone
+        forward, possibly a stale one (contracts/state-tables.md: the store owns zone, the graph owns allergens), and a
+        store row older by (t_ms, version) than one already seen was written late. Either one, read as a move, could
+        take a judged plate out of the pass and have the next real row judge it twice, so both are skipped. Skipping
+        them never skips a judgment: the store's own row for a plate reaching the pass is still its newest.
+        """
         try:
             row = change.row
-            if not row.entity_id.startswith("plate-"):
+            if not row.entity_id.startswith("plate-") or row.caused_by is not None:
                 return
+            newest = self._newest_row.get(row.entity_id)
+            if newest is not None and (row.t_ms, row.version) < newest:
+                return
+            self._newest_row[row.entity_id] = (row.t_ms, row.version)
             pass_zones = {zone.zone_id for zone in self.state.list_zones() if zone.kind == "pass"}
             if row.zone in pass_zones and row.entity_id not in self._at_pass:
                 self._at_pass.add(row.entity_id)
