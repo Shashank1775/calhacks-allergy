@@ -44,9 +44,10 @@ The example from the owner: a spoon touches an omelette dish and the omelette sh
 This is what makes sim worth having.
 
 - Expected answers come from what happened in the simulated world, **never** from the partner's graph or the verdict policy. Sim never imports `kitchen.graph` or `kitchen.verdict` internals. The only imports allowed are from `kitchen.shared`.
-- For generated scenarios (tag `generated`), an expected HOLD is a hard requirement: nobody may PASS a truly contaminated plate. An expected PASS is a quality target, so a false HOLD is tracked, not failed.
-- Scenarios tagged `observation-complete` emit an edge for every true transfer. Only those gate CI.
+- For generated scenarios (tag `generated`), `expected` is world truth. An expected HOLD is a hard requirement: nobody may PASS a truly contaminated plate. An expected PASS is a quality target, so a false HOLD is tracked, not failed.
+- Scenarios tagged `observation-complete` hide nothing that made a plate truly contaminated: no dropped edge, no failed wash on a dirty entity, and no scoop back-transfer the emitted direction misses. Only those gate CI.
 - Hand-written golden scenarios in `contracts/scenarios/` still require exact matches.
+- The true rates, the observation model and the exact tag strings are in [ADR 0008](../../docs/decisions/0008-sim-ground-truth-and-observation-model.md).
 
 ## Files
 
@@ -107,4 +108,4 @@ See [AGENTS.md §3](../../AGENTS.md#3-safety-rules).
 | Corpus size | Corpora live in `data/` (gitignored) with a `data-manifest.json`; the committed subset stays ≤ 1 MB |
 | Sim-to-real gap in change masks (real kitchens have steam, shadows, flicker, hands everywhere) | Shared change-mask function; domain randomization and noise; calibrate against real `change.npz` recordings in M2; the ConvLSTM is judged on real held-out clips, never on sim |
 | The model learns "overlap means transfer" | Hard negatives at a fixed share of every dataset; per-hard-negative metrics in the datasheet |
-| Scenario schema expresses hard vs soft expectations only via tags | ADR in sim-02; a contracts PR if a field is needed |
+| Scenario schema expresses hard vs soft expectations only via tags | ADR 0008 pins the tag strings and drafts an optional `generation` field (a contracts PR), needed before anything gates on generated corpora (M1) |
