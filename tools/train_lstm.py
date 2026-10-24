@@ -2,7 +2,7 @@
 
 Owner: platform (agents), standing in until the partner's kitchen/lstm/train.py exists
 Step:  ConvLSTM training
-Reads: a clip dataset from kitchen/sim/training_clips.py; the partner's InteractionNet, unchanged
+Reads: a clip dataset from kitchen/sim/training_clips.py; a model class from the partner's kitchen/lstm/model.py, unchanged
 Emits: <out>/best.pt and last.pt, metrics.jsonl (one line per epoch), summary.json (the best checkpoint on test)
 Rules: trains only on train, picks the checkpoint on val, scores test once at the end; never edits the partner's model
 
@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from kitchen.lstm.model import InteractionNet
+from kitchen.lstm import model as models
 
 HEADS = ("contact", "transferred")  # the model's two outputs, in order
 
@@ -106,6 +106,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None, help="use only the first N clips per split (smoke tests)")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--model", default="InteractionNet", help="a model class in kitchen/lstm/model.py")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -115,7 +116,8 @@ def main() -> None:
     print(f"loaded {[len(s['y']) for s in splits.values()]} clips in {time.time() - started:.0f} s", flush=True)
 
     train = splits["train"]
-    model = InteractionNet().to(args.device)
+    model = getattr(models, args.model)().to(args.device)
+    print(f"{args.model}: {sum(p.numel() for p in model.parameters())} parameters", flush=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     steps_per_epoch = math.ceil(len(train["y"]) / args.batch)
     schedule = torch.optim.lr_scheduler.OneCycleLR(
