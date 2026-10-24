@@ -17,7 +17,7 @@
 |---|---|
 | `bin_labels.py` | Label or prep sheet → `AllergenProfile` with probabilities and `unclear_ingredients` |
 | `chef_confirm.py` | Opens one confirmation per unclear ingredient, applies answers, and sets `confirmed_by_chef` when none remain |
-| `menu_import.py` | Optional Apify menu import that seeds prep-sheet text |
+| `menu_import.py` | Optional Apify menu import (Website Content Crawler, per [ADR 0013](../../docs/decisions/0013-cartesia-ink-and-apify-menu-import.md)) that seeds prep-sheet text |
 
 The HTTP endpoints (`/v1/profiles/bins`, `/confirm`, `/v1/menu/import`) live in [`kitchen/orders/api.py`](../orders/api.py).
 
@@ -65,4 +65,4 @@ Tests live in `kitchen/profiling/tests/`. Run `uv run pytest kitchen/profiling`.
 | What backs Jev, and whether it reads images (OQ-5) | The Jev spike answers this. Text labels first |
 | Coarse units hide exceptions (OQ-2) | Free-text ingredient on the parent unit until OQ-2 is answered |
 | Bins swapped between slots mid-shift | Out of scope for the demo (vision's identity rule). Raise it with the owner if it matters |
-| Apify Actor choice and cost unverified | Spike first. The feature is optional, and only seeds what the chef confirms |
+| Menu sites vary (JavaScript, PDF, bot walls) | [ADR 0013](../../docs/decisions/0013-cartesia-ink-and-apify-menu-import.md): Apify's own crawler, a capped run, and an error with nothing seeded when no text comes back. The feature is optional, and only seeds what the chef confirms |
