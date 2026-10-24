@@ -16,7 +16,7 @@ from hypothesis import strategies as st
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from kitchen.verdict.policy import clean_confidence, decide, reach_probabilities
+from kitchen.verdict.policy import clean_confidence, decide, reach_probabilities, ticket_problem
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
 FIXTURES = CONTRACTS / "fixtures" / "valid"
@@ -112,7 +112,7 @@ def test_fixture_hold_is_reproduced():
 
 
 def test_versions_are_recorded():
-    assert run()["versions"] == {"policy": "0.1.0", "graph": "0.1.0"}
+    assert run()["versions"] == {"policy": "0.1.1", "graph": "0.1.0"}
     assert run(graph=None)["versions"]["graph"] == "unavailable"
 
 
@@ -210,3 +210,61 @@ def test_fail_closed_on_malformed_reach(junk):
         assert verdict["decision"] == "hold"
         assert verdict["confidence"] == 0.0
     assert not list(VALIDATOR.iter_errors(verdict))
+
+
+MALFORMED_TICKETS = {
+    "nan-threshold": dict(TICKET, pass_threshold=float("nan")),
+    "threshold-below-zero": dict(TICKET, pass_threshold=-1),
+    "threshold-above-one": dict(TICKET, pass_threshold=1.5),
+    "forbidden-a-string": dict(TICKET, forbidden="peanut"),
+    "revision-a-string": dict(TICKET, revision="1"),
+    "revision-zero": dict(TICKET, revision=0),
+    "revision-a-bool": dict(TICKET, revision=True),
+    "no-forbidden": {key: value for key, value in TICKET.items() if key != "forbidden"},
+    "not-a-dict": "t7",
+}
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("bad", MALFORMED_TICKETS.values(), ids=MALFORMED_TICKETS.keys())
+def test_a_malformed_ticket_holds(bad):
+    """Fail closed: a ticket decide() can't trust, a NaN threshold above all (NaN fails every comparison, so it would
+    never trip a hold), holds with reason error even when the graph finds the forbidden allergen everywhere."""
+    verdict = run(ticket=bad, reach=reach(peanut=1.0))
+
+    assert verdict["decision"] == "hold"
+    assert verdict["confidence"] == 0.0
+    assert "error" in codes(verdict)
+    assert not list(VALIDATOR.iter_errors(verdict))
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("p", [float("nan"), float("inf"), -0.1, 1.5, "0.5", True])
+def test_a_reach_probability_that_isnt_one_holds(p):
+    """Fail closed: a graph answer that isn't a real probability holds instead of being compared."""
+    verdict = run(reach=[{"allergen_unit_id": "peanut", "probability": p, "chain": []}])
+
+    assert verdict["decision"] == "hold"
+    assert codes(verdict) == ["error"]
+
+
+@pytest.mark.safety
+def test_unknown_ancestors_must_be_a_list_of_ids():
+    assert run(unknown_ancestors="tool-spoon-9")["decision"] == "hold"
+
+
+junk = (
+    st.none() | st.booleans() | st.integers(-2, 3) | st.floats() | st.text(max_size=3) | st.lists(st.text(max_size=3))
+)
+
+
+@pytest.mark.safety
+@given(field=st.sampled_from(sorted(TICKET)), value=junk, r=reaches)
+def test_every_verdict_is_schema_valid_whatever_the_ticket_holds(field, value, r):
+    """Fail closed: whatever one ticket field holds, decide() returns a valid verdict, and a bad field never passes."""
+    bad = dict(TICKET, **{field: value})
+    verdict = run(ticket=bad, reach=r)
+
+    assert not list(VALIDATOR.iter_errors(verdict))
+    if verdict["decision"] == "pass":
+        assert ticket_problem(bad) is None

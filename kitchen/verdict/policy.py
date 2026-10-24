@@ -18,20 +18,48 @@ its own (the pass threshold comes from the ticket), so VerdictSettings arrives w
 """
 
 import logging
+import math
 from collections.abc import Sequence
+
+from jsonschema import ValidationError
+
+from kitchen.shared.models import validate
 
 logger = logging.getLogger(__name__)
 
-POLICY_VERSION = "0.1.0"
+POLICY_VERSION = "0.1.1"
 
 # The reason codes an unhealthy input can carry (verdict.schema.json); the service reports these, decide() adds the rest.
 INPUT_PROBLEM_CODES = ("stale_track", "missing_input", "error")
 
 
+def is_probability(value) -> bool:
+    """True for a real number from 0 to 1. False for NaN, which JSON Schema's minimum and maximum let through and
+    which fails every comparison, so a NaN threshold or probability would never trip a hold."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1
+
+
+def ticket_problem(ticket) -> str | None:
+    """Why a ticket can't be judged against, or None if it can: it must be a valid ticket with a real threshold."""
+    try:
+        validate(ticket, "ticket")
+    except ValidationError as error:
+        return error.message
+    if not is_probability(ticket["pass_threshold"]):
+        return f"pass_threshold {ticket['pass_threshold']!r} is not a probability"
+    return None
+
+
 def reach_probabilities(reach: list[dict]) -> dict[str, float]:
-    """Each allergen's probability at the plate. If the graph lists one twice, the larger counts (leans to HOLD)."""
+    """Each allergen's probability at the plate. If the graph lists one twice, the larger counts (leans to HOLD).
+
+    Raises ValueError for an entry that isn't a valid allergen_reach with a real probability, so decide() holds.
+    """
     probabilities = {}
     for entry in reach:
+        validate(entry, "allergen_reach")
+        if not is_probability(entry["probability"]):
+            raise ValueError(f"reach probability {entry['probability']!r} for {entry['allergen_unit_id']}")
         unit = entry["allergen_unit_id"]
         probabilities[unit] = max(probabilities.get(unit, 0.0), entry["probability"])
     return probabilities
@@ -77,10 +105,18 @@ def _decide(verdict_id, plate_id, trigger, decided_t_ms, ticket_id, ticket, reac
     reasons = []
     if ticket is None:
         reasons.append({"code": "missing_input", "detail": f"ticket {ticket_id} not found"})
+    elif (problem := ticket_problem(ticket)) is not None:
+        # Nothing on a malformed ticket can be trusted, its threshold least of all: judge it as if it were missing.
+        reasons.append({"code": "error", "detail": f"ticket {ticket_id} is malformed: {problem}"})
+        ticket = None
     if reach is None:
         reasons.append({"code": "error", "detail": "graph reachability unavailable"})
     if unknown_ancestors is None:
         reasons.append({"code": "error", "detail": "graph unknown ancestors unavailable"})
+    if unknown_ancestors is not None and not (
+        isinstance(unknown_ancestors, list) and all(isinstance(entity_id, str) for entity_id in unknown_ancestors)
+    ):
+        raise ValueError(f"unknown ancestors must be a list of entity IDs, got {unknown_ancestors!r}")
     for problem in problems:
         if problem["code"] not in INPUT_PROBLEM_CODES:
             raise ValueError(f"not an input problem: {problem['code']}")
@@ -146,9 +182,11 @@ def decide(
     graph's version. Any exception inside, from a bug or a malformed input, gives a HOLD with reason error.
     """
     try:
-        return _decide(
+        verdict = _decide(
             verdict_id, plate_id, trigger, decided_t_ms, ticket_id, ticket, reach, unknown_ancestors, problems, graph
         )
+        # The record must be a valid verdict; one that isn't (a bug, or an input nothing above caught) holds instead.
+        return validate(verdict, "verdict")
     except Exception as error:  # fail closed: whatever went wrong, the plate holds
         logger.exception("decide() failed for %s, holding", plate_id)
         revision = ticket.get("revision") if isinstance(ticket, dict) else None
@@ -158,7 +196,7 @@ def decide(
             trigger,
             decided_t_ms,
             ticket_id,
-            revision if isinstance(revision, int) and revision >= 1 else 1,
+            revision if type(revision) is int and revision >= 1 else 1,
             1.0,
             0.0,
             [{"code": "error", "detail": f"{type(error).__name__}: {error}"}],

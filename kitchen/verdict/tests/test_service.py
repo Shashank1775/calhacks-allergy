@@ -200,3 +200,86 @@ def test_fake_verdict_feed_replays_expected_verdicts(name):
     assert [(v["plate_id"], v["ticket_revision"], v["decision"]) for v in verdicts] == [
         (e["plate_id"], e["ticket_revision"], e["decision"]) for e in scenario["expected"]
     ]
+
+
+@pytest.mark.safety
+def test_an_exception_reading_inputs_still_records_a_hold():
+    """Fail closed: even an error read_inputs doesn't expect ends in a recorded HOLD with reason error."""
+    state, clock, _, service, _ = kitchen("wash-resets-knife")
+
+    def broken(plate_id, now):
+        raise RuntimeError("unexpected")
+
+    service.read_inputs = broken
+    clock.set(3000)
+
+    verdict = service.judge("plate-t2", "plate_at_pass")
+
+    assert verdict["decision"] == "hold"
+    assert state.list_verdicts() == [verdict]
+    assert any("RuntimeError" in reason.get("detail", "") for reason in verdict["reasons"])
+
+
+@pytest.mark.safety
+def test_a_malformed_ticket_still_records_a_hold():
+    """Fail closed: a ticket missing its forbidden list is a recorded HOLD with reason error, not silence."""
+    state, clock, _, _, _ = kitchen("wash-resets-knife")
+    real_get_ticket = state.get_ticket
+
+    def ticket_without_forbidden(ticket_id):
+        ticket = real_get_ticket(ticket_id)
+        del ticket["forbidden"]
+        return ticket
+
+    state.get_ticket = ticket_without_forbidden
+
+    move(state, clock, "plate-t2", "pass", 3000)
+
+    (verdict,) = state.list_verdicts()
+    assert verdict["decision"] == "hold"
+    assert "error" in codes(verdict)
+
+
+@pytest.mark.safety
+def test_an_amendment_is_retried_when_its_plates_cant_be_listed():
+    """Late changes recheck everything: if listing the amended ticket's plates fails, the recheck waits and happens."""
+    state, clock, _, service, scenario = kitchen("late-amendment-adds-dairy")
+    move(state, clock, "plate-t5", "pass", 3000)
+    real_list_verdicts = state.list_verdicts
+
+    def down(ticket_id=None):
+        raise RuntimeError("timeout (test)")
+
+    state.list_verdicts = down
+    clock.set(4000)
+    state.put_ticket(scenario["amendments"][0])
+    assert service.amended == {"t5"}
+
+    state.list_verdicts = real_list_verdicts
+    service.retry()
+
+    assert [(v["ticket_revision"], v["decision"]) for v in state.list_verdicts()] == [(1, "pass"), (2, "hold")]
+    assert service.amended == set()
+
+
+@pytest.mark.safety
+def test_a_verdict_that_cant_be_recorded_doesnt_block_later_holds():
+    """Fail closed: a verdict the database rejects for good is dropped, so the HOLDs after it still land."""
+    state, clock, _, service, _ = kitchen("wash-resets-knife")
+    real_record = state.record_verdict
+    rejected = []
+
+    def reject_first(verdict):
+        if not rejected:
+            rejected.append(verdict["verdict_id"])
+            raise ValueError("rejected for good (test)")
+        real_record(verdict)
+
+    state.record_verdict = reject_first
+    clock.set(3000)
+    service.judge("plate-t2", "plate_at_pass")
+    clock.set(3100)
+    later = service.judge("plate-t2", "ticket_amended")
+
+    assert rejected and service.pending == []
+    assert state.list_verdicts() == [later]
