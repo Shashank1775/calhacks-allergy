@@ -86,6 +86,12 @@ export type EntityState = {
 
 export type PlateBinding = { plate_id: EntityId; ticket_id: string; t_ms: number };
 
+export type Zone = {
+  zone_id: string;
+  kind: "bin_slot" | "plating_spot" | "wash" | "clean_stack" | "pass" | "other";
+  polygon: [number, number][];
+};
+
 export type Interaction = {
   event_id: string;
   t_start_ms: number;

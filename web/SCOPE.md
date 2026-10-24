@@ -2,15 +2,15 @@
 
 The running list for the web screens. When something lands, move it to **Built**. When you draw something that isn't wired up, wrap it in `<ToBeImplemented>` and add a row under **To be implemented**.
 
-Last updated: 2026-10-23.
+Last updated: 2026-10-24.
 
 ## Screens
 
 | Path | Screen | State |
 |---|---|---|
 | `/` | Home: what this is, the two sources (video file, live camera), links to the stations | Built. Video is picked and previewed locally only |
-| `/tablet` | New ticket (note → Laya parse → one-tap questions → send) | Built against MSW mocks made from the orders team's examples |
-| `/expo` | Tickets on the rail, plates on the pass, why a plate is held, start plate, camera panel | Built against `FakeStateSource` |
+| `/tablet` | New ticket (note → Laya parse → one-tap questions → send), and changing a sent ticket | Built; checked against the local runner's orders API |
+| `/expo` | The gate panel, tickets on the rail, plates on the pass, why a plate is held, start plate, the live camera | Built; the gate panel checked against the local runner |
 
 There's no bin setup screen: the architecture simplification cut chef confirmation, and the orders API change (#149) made the demo's bin profiles hard-coded, so `/bins/read` and `PUT /bins/{id}` are gone.
 
@@ -18,14 +18,20 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 
 - **Scaffold** per the [web framework decision](../docs/decisions/web-framework.md): Vite 8, React 19, TypeScript, plain CSS, no router. Node 24 pinned in `.nvmrc` and `engines`.
 - **State.** `StateSource` interface; `FakeStateSource` replays any golden scenario; `state_source_for()` returns no source for anything but an exact known value (fail closed); `useTableRows()` and `useFeedStatus()`.
+- **Local runner source.** `WEB_STATE_SOURCE=local` with an `http(s)` `WEB_STATE_URL`: `LocalStateSource` polls `tools/run_local.py`'s `GET /state` every 500 ms (one poll at a time, 2 s timeout) and shows REPLAY. Any failed poll (network error, timeout, error status, a body that isn't JSON or is missing a table) means FEED LOST, keeping the last rows, until a good poll comes back.
 - **One badge function.** `plate_badge()` is the only path to PASS: live feed, latest verdict, latest ticket revision. Otherwise HOLD, RECHECKING, FEED LOST or NO VERDICT YET.
 - **Banner.** FEED LOST with no source or a dropped feed, CONNECTING, and REPLAY whenever the data is a scenario.
 - **API clients** for orders and vision that never throw: every failure comes back as a code the screen shows.
 - **MSW mocks** built from the orders team's examples (`kitchen/orders/fakes/http/`) and the vision API table, for tests and for `WEB_MOCK_API=1` demos.
 - **Tablet: ticket entry.** Send stays disabled until the draft is `sendable` and every question has an answer; a `409 unanswered_questions` keeps the questions up; `409 number_in_use` says the table already has a ticket; `503 laya_unavailable` shows the error and keeps the note, never a guess.
 - **Expo.** Ticket chits with "start plate" and a distinct message for each vision 409; plate cards with stamps; held plates show every reason, the flagged allergens and the chain with per-step confidence.
+- **Gate panel** (`expo/gate_panel.tsx`, `gate.ts`): the plate at the pass in large type, PASS, HOLD, FAULT or WAITING, with the ticket's table and the hold's reasons. It applies the gate's own rules (kitchen/gate/service.py): FAULT when the feed is lost or vision's frames stop for 1 s, HOLD for two plates at the pass, and PASS only from `plate_badge()`.
+- **Vision health** (`vision_health.ts`): polls `GET /health` when `WEB_VISION_URL` is set, and calls it stale until `last_frame_t_ms` advances, as the gate does.
+- **Spoken holds** (`voice.ts`): the browser says "Hold seven, peanut" once per hold, with the gate's own number and allergen words. The expo screen's "turn on voice" button is needed because browsers only speak after a click.
+- **Tablet: changing a ticket** (`tablet/amend_ticket.tsx`): pick a sent ticket, type the change, answer Laya's questions, send. It uses the same send gate, plus a message for `409 ticket_changed`.
+- **Live camera** (`expo/camera_panel.tsx`): vision's `GET /stream.mjpg`, with each entity's latest box from `entity_state` colored by risk (unknown history and strong allergens red, weak amber, clean green). A broken stream says "camera offline" and changes no verdict.
 - **Home.** Video picker with local preview and a REPLAY marker; live camera card stamped 86'd.
-- **Tests.** 54 Vitest tests; the ones guarding a safety rule are named `safety: …`.
+- **Tests.** 114 Vitest tests; the ones guarding a safety rule are named `safety: …`.
 
 ## To be implemented
 
@@ -34,10 +40,8 @@ Each of these is drawn on screen with a "To be implemented" marker.
 | Item | Where | Waiting on |
 |---|---|---|
 | Send an uploaded video to vision | `home/video_source.tsx` | The Vision HTTP API has no upload endpoint. Needs a contracts change (vision, Director). Until then, run vision on the file locally |
-| Live camera feed | `home/camera_source.tsx` | Pi camera and Hailo (hardware), then `GET /stream.mjpg` |
-| Camera with overlays | `expo/camera_panel.tsx` | The live camera, plus `entity_state` rows from the partner's database |
+| Live camera on the home page | `home/camera_source.tsx` | Nothing: `/expo` already shows the stream; this card is still the 86'd placeholder |
 | Voice ticket entry (`POST /transcribe`) | `tablet/ticket_entry.tsx` | HTTPS on the iPad, for the microphone |
-| Amend a sent ticket (`POST /tickets/{id}/amend`) | `tablet/ticket_entry.tsx` | Nothing. Next up |
 
 ## Not started
 
@@ -48,7 +52,6 @@ Each of these is drawn on screen with a "To be implemented" marker.
 | Web job in CI (`npm --prefix web test`, `npm --prefix web run build`) | Platform |
 | Styling pass on the ticket-rail look | Nothing. Deliberately rough for now |
 | Self-hosted fonts, so the screens work offline | Nothing (demo hardening). Fonts load from Google Fonts today |
-| Show the vision feed's health (`GET /health`) on expo | Nothing. The gate already goes to `fault`; expo could say so too |
 
 ## Issues this covers
 
@@ -65,4 +68,5 @@ Each of these is drawn on screen with a "To be implemented" marker.
 
 - `FakeStateSource` builds verdicts from each scenario's `expected` entries, so confidence is 1 or 0, flagged probabilities are 1, and `versions.policy` is `fake-replay`. Real numbers arrive with the real database.
 - A plate with no verdict yet shows NO VERDICT YET. The web framework decision only lists HOLD, RECHECKING and FEED LOST; confirm the wording.
+- `LocalStateSource` checks the snapshot's outline (a scenario id and an array for each table), not each row. `plate_badge()` still shows PASS only for a verdict whose decision is pass for the ticket's current revision.
 - The production bundle carries the MSW browser chunk, though it only loads when `WEB_MOCK_API=1` in a dev build.

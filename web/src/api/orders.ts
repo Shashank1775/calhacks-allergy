@@ -16,3 +16,13 @@ export function answer_question(draft_id: string, question_id: string, value: un
 export function send_draft(draft_id: string, number: number) {
   return call_api<Ticket>(orders_url(), `/drafts/${draft_id}/send`, "POST", { number });
 }
+
+/** A new draft for revision + 1: the ticket's note plus the change, parsed again. */
+export function amend_ticket(ticket_id: string, note: string) {
+  return call_api<ParseResult>(orders_url(), `/tickets/${ticket_id}/amend`, "POST", { note });
+}
+
+/** Sends an amendment draft. It keeps its ticket's number, so none is sent. */
+export function send_amendment(draft_id: string) {
+  return call_api<Ticket>(orders_url(), `/drafts/${draft_id}/send`, "POST", {});
+}
