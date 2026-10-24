@@ -171,13 +171,15 @@
             "type": "array",
             "items": {
               "$ref": "common.schema.json#/$defs/allergen_unit_id"
-            }
+            },
+            "description": "Allergens that reach the plate strongly enough to matter for this verdict: what a correct graph must report (ProvenanceGraph.reach may list fainter ones too, e.g. a trace left after a wash)."
           },
           "reason_codes": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "The reason codes this verdict must include. A real verdict may carry more (low_confidence always comes with a flagged allergen), so tests check these are present, not that they are the only ones."
           },
           "chain_event_ids": {
             "type": "array",

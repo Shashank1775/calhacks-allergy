@@ -20,6 +20,9 @@ Every table has exactly **one** writer team, and each team writes only through i
 
 The logical `Entity` in the schema is the `entity` row joined with its latest `entity_state` (zone, box, allergens, unknown). A bin's allergens come from `bin_profile` until the graph writes a state for it. A plate's `ticket_id` comes from `plate_binding`.
 
+- **Who fills which `entity_state` fields.** Every row carries every field. The entity store owns `zone` and `box`; the graph owns `probabilities`, `unknown` and `caused_by`. Each writer copies the fields it doesn't own forward from the entity's latest row (or, for a bin with no row yet, from `bin_profile`), so a zone update can never wipe a bin's allergens.
+- **`allergen_profile.source` in the join.** A bin with no graph-written state takes its `bin_profile.source`. Otherwise: `unknown: true` gives `unknown_history`; a row caused by a `clean.wash` edge gives `wash_reset`; a row caused by any other edge gives `propagated`; and a row with no `caused_by` gives `shift_start_clean`.
+
 ## Tables
 
 | Table | Primary key | Indexed | Columns |

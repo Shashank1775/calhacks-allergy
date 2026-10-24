@@ -187,7 +187,7 @@ This table is the ownership map. Each folder's README lists its files, safety ru
 
 | | Default |
 |---|---|
-| Python | ≥ 3.11; vision pins 3.13, which is what the Pi runs. One package `kitchen`, one root `pyproject.toml` managed by **uv**, with extras `pi`, `ml`, `server`. `ruff check` and `ruff format` |
+| Python | ≥ 3.11. Laptops use 3.12 (`.python-version`); on the Pi, vision runs on the system Python 3.13, the only one with `hailo_platform` ([decision](docs/decisions/hailo-models.md)). One package `kitchen`, one root `pyproject.toml` managed by **uv**, with extras `pi`, `ml`, `server`. `ruff check` and `ruff format` |
 | Tests | `pytest`, in `kitchen/<step>/tests/`. Markers: `safety` (guards a safety rule), `hardware` (skipped in CI), `slow` (skipped in CI). Run with `uv run pytest kitchen/<step>` |
 | Web | React + TypeScript on Vite, Node ≥ 24.15 ([web framework decision](docs/decisions/web-framework.md)) |
 | Database | SpacetimeDB module (partner's choice of module language) |
