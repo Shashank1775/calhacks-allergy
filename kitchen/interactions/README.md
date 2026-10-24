@@ -1,59 +1,119 @@
 # kitchen/interactions: Who touched what (partner)
 
-**Owner:** the partner (a human). Agents never edit this folder. This README says what the agent teams expect from it, and what they give it.
+**Owner:** the partner (a human). The first version was written by an agent at the owner's request, on a `partner/` branch. This README says what the step does, what the agent teams can rely on, and how to run it.
 
 ## What this step does
 
 It turns tracked entity pairs into time-stamped, classified interactions: the edges of the provenance graph.
-- Pick candidate pairs that are near or overlapping: hand–tool, tool–bin, tool–plate, hand–bin, hand–plate.
-- For each pair, build a `PairWindow`:
-  - vector features (distance, overlap, zone kind, speeds, dwell, wrist proximity) for the zone rules;
-  - a **clip** (box A, box B, change mask, elapsed time) for the ConvLSTM in [`kitchen/lstm/`](../lstm/README.md).
-- Classify with zone rules (always available) or the ConvLSTM (once it wins the benchmark). Write each non-trivial interaction through `StateClient.record_interaction`.
 
-## What the agents rely on
+1. **Candidate pairs** (`candidates.py`). Per frame: hand–tool, tool–bin, tool–plate, hand–bin and hand–plate pairs whose boxes are within `candidate_max_gap` frame widths, with the actor (hand or tool) always as `a`. A tool or hand inside a wash zone is also paired with itself, because a wash is a self-loop.
+2. **Features** (`features.py`). One `interaction_features` row per pair per frame: center distance and speeds in frame widths (per second), overlap as intersection over the smaller box, `inside_zone`, `zone_kind` (never the zone ID), `dwell_ms`, `wrist_proximity`.
+3. **Pair windows** (`windows.py`). Per pair per frame, a `PairWindow`: the feature rows from the last `window_ms`, plus a clip of up to 16 steps over about 1 s, built only by `kitchen/shared/clips.build_clip` from the frames' boxes and vision's change masks.
+4. **Classify** (`zone_rules.py`, `classifier.py`). Zone rules always; a primary classifier (the ConvLSTM) only once adopted, with zone rules as the fallback.
+5. **Events** (`events.py`). Per-frame labels are merged into `interaction_event`s and written through `StateClient.record_interaction`, buffered while the database is down.
 
-- **Edges:** [`interaction_event`](../../contracts/schemas/interaction_event.schema.json) rows in the `interaction` table, written within about 500 ms of each event's end. The partner's graph and the agents' screens read them.
-- **The classifier interface:** [`InteractionClassifier`](../../contracts/apis.md#interactionclassifier), with `classify(PairWindow)`.
-- **The safety rules** in [AGENTS.md §3](../../AGENTS.md#3-safety-rules):
-  - **Invariant 6.** Features and clips carry no allergen data; clips carry no object pixels, classes or kinds.
-  - **Invariant 7.** Zone rules stay the fallback whenever the ConvLSTM fails, raises or times out.
-  - **Invariant 1.** Never drop events silently.
-  - **Invariant 5.** Events stay in time order, and a re-acquired entity uses its new ID.
-- **A wash is a self-loop:** `clean.wash` edges have `a_id == b_id`.
+## What's built
 
-## What the agents give you
+| Piece | State |
+|---|---|
+| `settings.py`: `InteractionSettings` | Built. Every constant of the step in one object (`INTERACTIONS_*` variables), each with a comment saying why. Logged at startup and fingerprinted into the zone-rules version |
+| `candidates.py` | Built |
+| `features.py`: `FeatureTracker` | Built. Every row validated against the schema |
+| `windows.py`: `WindowBuilder` | Built. Clips only when `with_clips` is on (see below) |
+| `zone_rules.py`: `ZoneRules` | Built. Passes the shared `InteractionClassifier` contract suite |
+| `classifier.py`: `FallbackClassifier` | Built. `classify_window(window)` returns `(labels, {"name", "version"})`; `fallback_count` for health |
+| `events.py`: `Segmenter`, `EventWriter`, `InteractionStep`, the CLI | Built |
+| `labels.py`, `benchmark.py` | Not built (labeled real clips, and the adoption benchmark) |
+| `events.py`: `live_consumer(state, clock)` | Built: the slot the local runner's live mode plugs into vision's frame loop. See "Running it live" |
 
-- **Frames and change masks (vision team).** An `ObservationFrame` for every frame, plus its change mask from the shared function, in-process on the Pi and in recordings (`frames.jsonl` + `change.npz`). Tasks: vision-01, vision-05, vision-13.
-- **The shared builders (platform team).** `kitchen/shared/change_mask.py` and `kitchen/shared/clips.py` (platform-12): use them for live clips, so live input matches the sim-trained model. `FakeClassifier` and the classifier contract tests (platform-06).
-- **Training clips (sim team).** Rendered, labeled clips with hard negatives (sim-12 to sim-15), and scenario event streams for testing (sim-05).
+### Zone rules
 
-## Suggested task list
+Read from the newest feature row and the window's rows; thresholds and their reasons are in `settings.py`.
 
-What the agents had planned for this folder is now on GitHub as issues labeled `owner:partner`:
-- zone rules v0;
-- hand-written frame fixtures;
-- candidate pairs and features;
-- the edge-direction ADR (OQ-9);
-- the event fixture pack;
-- the classifier wrapper with fallback;
-- the streaming pipeline;
-- tuning on recorded frames;
-- the labeled-clip format and labeling tool;
-- the benchmark;
-- real-clip export;
-- live pair windows.
+| Action | When | Probability | Direction |
+|---|---|---|---|
+| `transfer.scoop` | a tool overlaps a bin, inside that bin's slot, for `scoop_min_ms` (300) | 0.9 | `b_to_a` (bin to tool) |
+| `transfer.contact` | any pair overlaps (at least 0.1 of the smaller box) for `contact_min_ms` (200) | 0.8 | `both` |
+| `clean.wash` | a tool or hand paired with itself, in the wash zone for `wash_min_dwell_ms` (3000) | 0.95 | self-loop |
+| `unimportant` | anything else: hovering near, passing over | — | no edge |
 
-Use them, change them or close them; they're yours.
+A scoop is also a contact, so a tool in its bin gives both edges: the scoop moves food bin to tool, and the contact lets a dirty tool dirty the bin. `transfer.wipe` isn't produced yet: it moves both ways like a contact, which covers it until a rule can tell the two apart.
 
-## Until yours lands
+### Events
 
-The agents' end-to-end harness feeds the graph scenario event streams (from `contracts/scenarios/` and sim) instead of live edges, so nothing agent-side waits on you.
+- **Segmenting.** Hits on the same pair, action and classifier less than `merge_gap_ms` (300) apart are one event, from the first hit to the last. An event closes once its pair has gone `merge_gap_ms` without a hit, so it reaches the database within about 500 ms of its end. A transfer still going after `max_event_ms` (1000) is written and a new one started, so a plate carried to the pass by a dirty hand gets its edge before the hand lets go. A wash is never cut (two washes would clean twice).
+- **Probabilities.** A transfer keeps its highest per-frame probability; a wash its lowest, since a wash lowers risk. Transfers below `event_floor` (0.5) and washes below `wash_floor` (0.9) make no edge.
+- **Self-loops.** Only a self pair can make a `clean.wash`, and a self pair can make nothing else.
+- **IDs.** `ev-<t_start_ms>-<a_id>-<b_id>-<action>`: deterministic, so a replay writes no duplicates (`record_interaction` is idempotent by `event_id`).
+- **Order.** Each pair and action's events come out in time order with `t_start_ms <= t_end_ms`. Events of different pairs can close out of start order (a long contact closes after a short one that started later); the graph orders edges by `t_start_ms`, `t_end_ms`, `event_id`.
+- **Writing.** `EventWriter` keeps every event until `record_interaction` succeeds. On `StateUnavailable` it stops, and tries again no sooner than `retry_ms` (250) later by the injected `Clock`. `len(writer.pending)` is the buffer depth for health checks.
+
+### The classifier wrapper
+
+`FallbackClassifier(ZoneRules(settings), primary=None)`. With no primary (the default until the benchmark ADR adopts the ConvLSTM), zone rules answer everything. With a primary, zone rules answer instead, and `fallback_count` goes up, whenever:
+
+- the window has no clip (no change mask, a pair too young for two steps, or a clip that failed to build);
+- the primary raises, or returns anything other than a non-empty list of `(action, probability)` with probabilities in [0, 1];
+- the primary returns `clean.wash` (only zone rules judge washes);
+- the primary takes longer than `primary_timeout_ms` (100). It runs in a daemon thread; while a call is stuck, later windows go straight to zone rules without waiting.
+
+Self pairs (washes) always go to zone rules and don't count as fallbacks. Every event records the classifier that produced it.
+
+## Running it
+
+From frames on disk (a vision recording directory holds `frames.jsonl`, `change.npz` and `manifest.json`):
+
+```bash
+uv run python -m kitchen.interactions.events --frames frames.jsonl --zones zones.json --out events.jsonl
+uv run python -m kitchen.interactions.events --frames data/recordings/run1/frames.jsonl \
+    --change data/recordings/run1/change.npz --zones zones.json --out events.jsonl
+```
+
+- `--zones` is vision's zones file. Only zone IDs and kinds are used.
+- A `manifest.json` next to `frames.jsonl` supplies the camera frame size (for distances in frame widths and for letterboxing clip boxes) and the change-mask parameters. Without one, the defaults are 1280 × 720 and the shared change-mask defaults.
+- `--change` adds a clip to every window, so a replay runs the clip path an adopted ConvLSTM would read. Zone rules don't read clips, so it doesn't change the events today.
+- Settings come from `INTERACTIONS_*` variables, for example `INTERACTIONS_CONTACT_MIN_MS=250`.
+
+### Running it live
+
+`live_consumer(state, clock)` is a vision consumer: call it with each `FrameOutput`. It does the following:
+- Builds one `InteractionStep` at the first frame, from the zones in `state` and the frame size, so the calibration has to be written before the loop starts.
+- Writes each event it closes with `state.record_interaction`.
+- Raises any error instead of swallowing it, so live mode can hold every plate.
+- While the database is down, keeps the unsent events and raises `StateUnavailable` on every frame until they land.
+
+```python
+from kitchen.interactions.events import live_consumer
+
+consumers = [entity_store_consumer(store), live_consumer(state, clock)]
+```
+
+Zone rules answer unless you pass `classifier=FallbackClassifier(rules, primary)`, which is for after a primary has been adopted.
+
+Pass `with_clips=True` (and a `classifier=FallbackClassifier(rules, primary)`) only once a primary is adopted: drawing a clip per pair per frame costs about 1 ms on a laptop, several times that on the Pi, and zone rules never read them.
+
+## Safety rules
+
+See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). Tests guarding them carry the `safety` marker.
+
+- **Blind classifier.** Features come from geometry, kinds and zone kinds only; the schema refuses extra fields, and features carry `zone_kind`, never the zone ID. Clips are built only by the shared builder: box masks and the change mask, no pixels, classes or kinds.
+- **Rules stay as the fallback.** As above. Zone rules need nothing but features, so they always answer.
+- **Fail closed.** No event is dropped while the database is down. A window with no change mask gets no clip rather than a made-up one. An unknown zone ID is `other`, never a wash. A wash needs the wash zone, 3 s of dwell, a self pair and probability 0.9 or more; a brief pass through the sink is nothing.
+- **Time runs forward.** A frame not after the previous one is refused. `t_start_ms <= t_end_ms`, and each pair and action's events are in time order. A re-acquired entity has a new ID from vision, so its events are on the new ID.
+
+## Tests
+
+`uv run pytest kitchen/interactions`. The scenes in `tests/scenes.py` are hand-written keyframes (a knife scooping from a bin then touching a plate, a hover, a pass-over, a wash, a brief wash, a hand on a plate) rendered at 15, 30 and 60 FPS, each with the events worked out by hand. Also: the shared `InteractionClassifier` contract suite against zone rules, the wrapper's fallbacks (`FakeClassifier` raising, plus test doubles that hang or answer badly), never-drop with `FakeStateClient` failing on cue, the 500 ms edge latency on a `FakeClock`, and the CLI end to end.
+
+## Known gaps and open questions
+
+- **Clip timing.** Live change masks are per camera frame (about 33 ms at 30 FPS) while the sim clips the ConvLSTM trains on have masks about 62 ms apart, and a pair younger than a second gets a clip of fewer than 16 steps. Worth settling before the benchmark.
+- **ConvLSTM probabilities.** Its training picks low decision thresholds (about 0.1 to 0.2), but `event_floor` is 0.5: an adopted ConvLSTM's `classify` should return probabilities calibrated so 0.5 means "probably", or the floor needs a per-classifier value.
+- **`PairWindow.clip` and `tensor` can be `None`** here (no change mask, or clips off), though `contracts/apis.md` types them as always present. The wrapper never hands such a window to a primary.
+- OQ-9 (edge direction), OQ-12 (real clips), OQ-19 and OQ-20 (ConvLSTM outputs and clip geometry). See [AGENTS.md §11](../../AGENTS.md#11-open-questions).
 
 ## How to hand off
 
-- Open PRs from `partner/<slug>` branches. Any internal layout is fine; the skeleton files are only suggestions.
+- Open PRs from `partner/<slug>` branches.
 - The schemas and interfaces in `contracts/` are the deal. Changing them goes through the Director as an RFC.
-- Agents reach you with issues labeled `owner:partner`.
-
-Open questions that touch you: OQ-9 (edge direction), OQ-12 (real clips), OQ-19 and OQ-20 (ConvLSTM outputs and clip geometry). See [AGENTS.md §11](../../AGENTS.md#11-open-questions).
+- Agents reach the partner with issues labeled `owner:partner`.
