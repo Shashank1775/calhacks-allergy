@@ -125,7 +125,7 @@ export type Verdict = {
   ticket_revision: number;
   plate_id: EntityId;
   decided_t_ms: number;
-  trigger: "plate_at_pass" | "ticket_amended";
+  trigger: "plate_at_pass" | "ticket_amended" | "late_edge";
   decision: "pass" | "hold";
   confidence: number;
   pass_threshold: number;

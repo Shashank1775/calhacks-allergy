@@ -52,7 +52,7 @@ class StateClient(Protocol):
 ```
 
 - `Zone`, `PlateBinding`, `EntityState` and `ChangeEvent` are small dataclasses in `kitchen/shared/models.py` mirroring [state-tables.md](state-tables.md).
-- **Triggers are table changes.** "A plate reaches the pass" means a new `entity_state` row for a plate whose `zone` is a zone of kind `pass`; the verdict service watches `subscribe("entity_state", ...)` for that transition. "A ticket was amended" means a new `ticket` revision (`subscribe("ticket", ...)`). The gate service watches `subscribe("verdict", ...)`.
+- **Triggers are table changes.** "A plate reaches the pass" means a new `entity_state` row for a plate whose `zone` is a zone of kind `pass`; the verdict service watches `subscribe("entity_state", ...)` for that transition. "A ticket was amended" means a new `ticket` revision (`subscribe("ticket", ...)`). "An edge landed late" means a new `interaction` row that a plate's latest verdict didn't account for (`subscribe("interaction", ...)`): one whose `t_start_ms` is at or before that verdict, or one touching the plate while it waits at the pass. The plate is judged again from its full history, with trigger `late_edge` (safety rule: late changes recheck everything). Interaction edges are written after they're classified, so the last contact before the pass can land after the plate was judged. The gate service watches `subscribe("verdict", ...)`.
 - Every method raises `StateUnavailable` when the database can't be reached. On the verdict path that becomes HOLD (safety rule: fail closed).
 - Writes are idempotent by primary key.
 - **Fake:** dict-backed, same semantics including `subscribe` and append-only entity history, and can load a `scenario` file.
