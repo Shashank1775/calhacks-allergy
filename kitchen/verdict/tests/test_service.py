@@ -11,7 +11,9 @@ import pytest
 
 from kitchen.shared.clock import FakeClock
 from kitchen.shared.fakes import GOLDEN_SCENARIO_PATHS, FakeProvenanceGraph, FakeStateClient, load_scenario
+from kitchen.shared.interfaces import LayaCheckUnavailable
 from kitchen.shared.models import EntityState, Zone
+from kitchen.verdict.laya_check import FakeLayaCheck
 from kitchen.verdict.service import UNBOUND_TICKET_ID, FakeVerdictFeed, VerdictService
 
 SCENARIOS = {path.stem: path for path in GOLDEN_SCENARIO_PATHS}
@@ -36,6 +38,9 @@ class CountingGraph:
     def unknown_ancestors(self, plate_id, as_of_t_ms):
         return self.graph.unknown_ancestors(plate_id, as_of_t_ms)
 
+    def subgraph(self, plate_id, as_of_t_ms):
+        return self.graph.subgraph(plate_id, as_of_t_ms)
+
 
 def kitchen(name):
     """A started service over one golden scenario, with a pass zone and a plating spot. Returns its parts."""
@@ -44,7 +49,7 @@ def kitchen(name):
     state.set_zones([PASS_ZONE, PLATING])
     clock = FakeClock()
     graph = CountingGraph(FakeProvenanceGraph(scenario))
-    service = VerdictService(state, graph, clock)
+    service = VerdictService(state, graph, FakeLayaCheck(), clock)
     service.start()
     return state, clock, graph, service, scenario
 
@@ -218,6 +223,62 @@ def test_an_exception_reading_inputs_still_records_a_hold():
     assert verdict["decision"] == "hold"
     assert state.list_verdicts() == [verdict]
     assert any("RuntimeError" in reason.get("detail", "") for reason in verdict["reasons"])
+
+
+class ScriptedLaya:
+    """A LayaPlateCheck that gives a fixed answer, or raises LayaCheckUnavailable when `answer` is None."""
+
+    version = "scripted"
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.subgraphs = []
+
+    def check(self, subgraph, forbidden):
+        self.subgraphs.append(subgraph)
+        if self.answer is None:
+            raise LayaCheckUnavailable("model not loaded (test)")
+        return {unit: self.answer.get(unit, 0.0) for unit in forbidden}
+
+
+@pytest.mark.safety
+def test_a_failing_plate_check_holds_without_losing_the_graphs_answer():
+    """Fail closed: when Laya can't answer, the plate holds with laya_unavailable and the graph's flags still count."""
+    state, clock, _, service, _ = kitchen("knife-carries-peanut-to-plate")
+    service.plate_check = ScriptedLaya(None)
+
+    move(state, clock, "plate-t1", "pass", 3000)
+
+    (verdict,) = state.list_verdicts()
+    assert verdict["decision"] == "hold"
+    assert {"forbidden_allergen", "laya_unavailable"} <= set(codes(verdict))
+    assert verdict["chain"]  # the graph's chain survived the Laya failure
+    assert "laya" not in verdict["versions"]  # no checkpoint judged this plate
+
+
+@pytest.mark.safety
+def test_the_plate_check_can_hold_a_plate_the_graph_would_pass():
+    """Laya is stricter only, and that cuts one way: it can hold a plate the graph clears."""
+    state, clock, _, service, _ = kitchen("wash-resets-knife")
+    laya = ScriptedLaya({"peanut": 0.5})
+    service.plate_check = laya
+
+    move(state, clock, "plate-t2", "pass", 3000)
+
+    (verdict,) = state.list_verdicts()
+    assert verdict["decision"] == "hold"
+    assert codes(verdict) == ["laya_flagged"]
+    assert laya.subgraphs[0]["plate_id"] == "plate-t2"
+    assert laya.subgraphs[0]["as_of_t_ms"] == 3000
+
+
+def test_fake_laya_check_is_recorded_on_every_verdict():
+    state, clock, _, _, _ = kitchen("wash-resets-knife")
+    move(state, clock, "plate-t2", "pass", 3000)
+
+    (verdict,) = state.list_verdicts()
+    assert verdict["decision"] == "pass"
+    assert verdict["versions"]["laya"] == "fake"
 
 
 @pytest.mark.safety

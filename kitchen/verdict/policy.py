@@ -17,6 +17,11 @@ The policy, from kitchen/verdict/README.md:
     hold = not healthy or any flag or confidence < pass_threshold
 Every hold carries all its reasons, and decision is "pass" exactly when there are none. decide() needs no constants of
 its own (the pass threshold comes from the ticket), so VerdictSettings arrives with the verdict service.
+
+Laya's final plate check (laya_check.py) is stricter only. Its answer adds a laya_flagged reason for each forbidden
+allergen it puts at 1 - P <= pass_threshold, the same rule as the graph's numbers. No answer, or one decide() can't
+trust, adds laya_unavailable and counts as an unhealthy input. Laya never removes a reason, so it can turn a PASS into a
+HOLD but never the reverse.
 """
 
 import logging
@@ -26,10 +31,11 @@ from collections.abc import Sequence
 from jsonschema import ValidationError
 
 from kitchen.shared.models import validate
+from kitchen.verdict.laya_check import laya_hold_reasons
 
 logger = logging.getLogger(__name__)
 
-POLICY_VERSION = "0.1.1"
+POLICY_VERSION = "0.2.0"
 
 # The reason codes an unhealthy input can carry (verdict.schema.json); the service reports these, decide() adds the rest.
 INPUT_PROBLEM_CODES = ("stale_track", "missing_input", "error")
@@ -75,6 +81,21 @@ def clean_confidence(forbidden: list[str], probabilities: dict[str, float]) -> f
     return max(0.0, 1.0 - sum(probabilities.get(unit, 0.0) for unit in forbidden))
 
 
+def usable_plate_check(plate_check, forbidden: list[str]) -> bool:
+    """True when Laya answered for every forbidden allergen with a real probability between 0 and 1.
+
+    Anything else (no answer, a missing allergen, NaN, a value out of range or of the wrong type) can't be read safely:
+    NaN, for one, fails every comparison and would never flag. decide() holds with laya_unavailable instead.
+    """
+    if not isinstance(plate_check, dict):
+        return False
+    for unit in forbidden:
+        p = plate_check.get(unit)
+        if isinstance(p, bool) or not isinstance(p, int | float) or not 0.0 <= p <= 1.0:  # NaN fails the range check
+            return False
+    return True
+
+
 def _chain_for(reach: list[dict], units: list[str]) -> list[dict]:
     """The graph's chains for these allergens, in the ticket's order, taken from each allergen's most likely entry."""
     best = {}
@@ -102,7 +123,20 @@ def _verdict(verdict_id, plate_id, trigger, decided_t_ms, ticket_id, revision, t
     }
 
 
-def _decide(verdict_id, plate_id, trigger, decided_t_ms, ticket_id, ticket, reach, unknown_ancestors, problems, graph):
+def _decide(
+    verdict_id,
+    plate_id,
+    trigger,
+    decided_t_ms,
+    ticket_id,
+    ticket,
+    reach,
+    unknown_ancestors,
+    problems,
+    graph,
+    plate_check,
+    laya,
+):
     """decide() without the exception guard."""
     reasons = []
     if ticket is None:
@@ -131,19 +165,36 @@ def _decide(verdict_id, plate_id, trigger, decided_t_ms, ticket_id, ticket, reac
     revision = ticket["revision"] if ticket else 1
     probabilities = reach_probabilities(reach or [])
 
-    flagged = [
-        {"allergen_unit_id": unit, "probability": probabilities[unit]}
+    graph_flags = {
+        unit: probabilities[unit]
         for unit in forbidden
         if unit in probabilities and 1.0 - probabilities[unit] <= threshold
-    ]
-    flag_reasons = [{"code": "forbidden_allergen", "allergen_unit_id": item["allergen_unit_id"]} for item in flagged]
+    }
+    flag_reasons = [{"code": "forbidden_allergen", "allergen_unit_id": unit} for unit in graph_flags]
     if unknown_ancestors:
         reasons.append({"code": "unknown_history", "detail": ", ".join(sorted(unknown_ancestors))})
+
+    # Laya only ever adds: its flags join the graph's, and a missing or untrustworthy answer is one more unhealthy input.
+    laya_reasons = []
+    laya_answered = usable_plate_check(plate_check, forbidden)
+    if laya_answered:
+        laya_reasons = laya_hold_reasons(plate_check, forbidden, threshold)
+    else:
+        detail = (
+            "no answer" if plate_check is None else "an answer that isn't a probability for every forbidden allergen"
+        )
+        reasons.append({"code": "laya_unavailable", "detail": detail})
+    laya_flags = {reason["allergen_unit_id"]: plate_check[reason["allergen_unit_id"]] for reason in laya_reasons}
+    flagged = [
+        {"allergen_unit_id": unit, "probability": max(graph_flags.get(unit, 0.0), laya_flags.get(unit, 0.0))}
+        for unit in forbidden
+        if unit in graph_flags or unit in laya_flags
+    ]
 
     # Fail closed: an unhealthy input means we can't vouch for the plate at all.
     healthy = not reasons
     confidence = clean_confidence(forbidden, probabilities) if healthy else 0.0
-    reasons = flag_reasons + reasons
+    reasons = flag_reasons + laya_reasons + reasons
     if confidence < threshold:
         reasons.append({"code": "low_confidence", "detail": f"{confidence:.4g} < {threshold:.4g}"})
 
@@ -160,8 +211,16 @@ def _decide(verdict_id, plate_id, trigger, decided_t_ms, ticket_id, ticket, reac
         reasons,
         flagged=flagged,
         chain=_chain_for(reach or [], reached),
-        versions={"policy": POLICY_VERSION, "graph": graph or "unavailable"},
+        versions=_versions(graph, laya if laya_answered else None),
     )
+
+
+def _versions(graph, laya) -> dict:
+    """The verdict's versions: this policy, the graph, and the Laya checkpoint, recorded only when it answered."""
+    versions = {"policy": POLICY_VERSION, "graph": graph if isinstance(graph, str) and graph else "unavailable"}
+    if isinstance(laya, str) and laya:
+        versions["laya"] = laya
+    return versions
 
 
 def decide(
@@ -174,18 +233,33 @@ def decide(
     ticket: dict | None,
     reach: list[dict] | None,
     unknown_ancestors: list[str] | None,
+    plate_check: dict[str, float] | None,
     problems: Sequence[dict] = (),
     graph: str | None = None,
+    laya: str | None = None,
 ) -> dict:
     """PASS or HOLD for one plate against one ticket revision, as a verdict record (verdict.schema.json).
 
     `ticket`, `reach` and `unknown_ancestors` are None when they couldn't be read; each becomes a hold reason.
-    `problems` are the input-health reasons the service found (stale_track, missing_input, error). `graph` is the
-    graph's version. Any exception inside, from a bug or a malformed input, gives a HOLD with reason error.
+    `plate_check` is Laya's P(reached) per forbidden allergen, or None when Laya couldn't answer; it has no default, so
+    a caller can't skip the check by forgetting it. `problems` are the input-health reasons the service found
+    (stale_track, missing_input, error). `graph` and `laya` are versions. Any exception inside, from a bug or a
+    malformed input, gives a HOLD with reason error.
     """
     try:
         verdict = _decide(
-            verdict_id, plate_id, trigger, decided_t_ms, ticket_id, ticket, reach, unknown_ancestors, problems, graph
+            verdict_id,
+            plate_id,
+            trigger,
+            decided_t_ms,
+            ticket_id,
+            ticket,
+            reach,
+            unknown_ancestors,
+            problems,
+            graph,
+            plate_check,
+            laya,
         )
         # The record must be a valid verdict; one that isn't (a bug, or an input nothing above caught) holds instead.
         return validate(verdict, "verdict")
@@ -204,5 +278,5 @@ def decide(
             [{"code": "error", "detail": f"{type(error).__name__}: {error}"}],
             flagged=[],
             chain=[],
-            versions={"policy": POLICY_VERSION, "graph": graph if isinstance(graph, str) else "unavailable"},
+            versions=_versions(graph, None),
         )
