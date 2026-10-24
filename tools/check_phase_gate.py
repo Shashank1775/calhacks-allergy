@@ -41,7 +41,8 @@ def main() -> int:
 
     rules = load_owners()
     blocked = [
-        f for f in changed
+        f
+        for f in changed
         if f.startswith(GATED_PREFIXES) and Path(f).name not in ALLOWED_NAMES and owner_of(f, rules) != "partner"
     ]
     if blocked:

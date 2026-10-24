@@ -107,24 +107,60 @@ def task_body(t: dict, numbers: dict[str, int | str]) -> str:
 
 
 def team_board_body(team: str) -> str:
-    return "\n".join([
-        f"<!-- key: board-{team} -->",
-        f"Team board for **{team}**. The Manager rewrites this body every cycle (see AGENTS.md section 5).",
-        "Rules: AGENTS.md. Folder details: the README in each of the team's folders (AGENTS.md section 7).", "",
-        "## In flight", "_none_", "", "## Blocked", "_none_", "", "## Next up", "_none_", "",
-        "## Decisions", "_none_", "", "## Risks", "_none_", "", "— [director]",
-    ])
+    return "\n".join(
+        [
+            f"<!-- key: board-{team} -->",
+            f"Team board for **{team}**. The Manager rewrites this body every cycle (see AGENTS.md section 5).",
+            "Rules: AGENTS.md. Folder details: the README in each of the team's folders (AGENTS.md section 7).",
+            "",
+            "## In flight",
+            "_none_",
+            "",
+            "## Blocked",
+            "_none_",
+            "",
+            "## Next up",
+            "_none_",
+            "",
+            "## Decisions",
+            "_none_",
+            "",
+            "## Risks",
+            "_none_",
+            "",
+            "— [director]",
+        ]
+    )
 
 
 def program_board_body() -> str:
-    return "\n".join([
-        "<!-- key: board-program -->",
-        "Program board. The Director rewrites this body every cycle (see AGENTS.md section 5).", "",
-        "## Phase gate", "See AGENTS.md.", "",
-        "## Milestone status", "| Exit criterion | Status | Evidence |", "|---|---|---|", "", 
-        "## Cross-team blockers", "_none_", "", "## Open RFCs", "_none_", "",
-        "## Needs the owner", "_none_", "", "## Partner", "_Open owner:partner issues and needs-partner tasks._", "", "— [director]",
-    ])
+    return "\n".join(
+        [
+            "<!-- key: board-program -->",
+            "Program board. The Director rewrites this body every cycle (see AGENTS.md section 5).",
+            "",
+            "## Phase gate",
+            "See AGENTS.md.",
+            "",
+            "## Milestone status",
+            "| Exit criterion | Status | Evidence |",
+            "|---|---|---|",
+            "",
+            "## Cross-team blockers",
+            "_none_",
+            "",
+            "## Open RFCs",
+            "_none_",
+            "",
+            "## Needs the owner",
+            "_none_",
+            "",
+            "## Partner",
+            "_Open owner:partner issues and needs-partner tasks._",
+            "",
+            "— [director]",
+        ]
+    )
 
 
 class GitHub:
@@ -178,7 +214,9 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--repo", help="owner/name (default: current repo)")
     ap.add_argument("--delay", type=float, default=1.0, help="seconds between issue creations")
-    ap.add_argument("--update", action="store_true", help="rewrite existing task and epic issues whose title or body changed")
+    ap.add_argument(
+        "--update", action="store_true", help="rewrite existing task and epic issues whose title or body changed"
+    )
     args = ap.parse_args()
 
     tasks, epics = load_backlog()
@@ -193,8 +231,13 @@ def main() -> int:
             if args.update:
                 gh.update(numbers[key], t["title"], task_body(t, numbers))
             continue
-        labels = [f"team:{t['team']}", f"type:{t['type']}", f"prio:{t['prio']}",
-                  "status:blocked" if t.get("blocked_by") else "status:ready", *t.get("flags", [])]
+        labels = [
+            f"team:{t['team']}",
+            f"type:{t['type']}",
+            f"prio:{t['prio']}",
+            "status:blocked" if t.get("blocked_by") else "status:ready",
+            *t.get("flags", []),
+        ]
         numbers[key] = gh.create(t["title"], task_body(t, numbers), labels, MILESTONES[t["milestone"]])
 
     print("epics:")
@@ -205,14 +248,20 @@ def main() -> int:
                 continue
             mine = [k for k in order if tasks[k]["team"] == team and tasks[k]["milestone"] == epic["milestone"]]
             body = [f"<!-- key: {key} -->", "## Goals"] + [f"- {g}" for g in epic.get("goals", [])]
-            body += ["", "## Tasks"] + ([f"- [ ] #{numbers[k]} {tasks[k]['title']}" for k in mine] or
-                                        ["_To be broken down by the Manager when this milestone starts._"])
+            body += ["", "## Tasks"] + (
+                [f"- [ ] #{numbers[k]} {tasks[k]['title']}" for k in mine]
+                or ["_To be broken down by the Manager when this milestone starts._"]
+            )
             body += ["", "— [director]"]
             if key in numbers:
                 gh.update(numbers[key], epic["title"], "\n".join(body))
                 continue
-            numbers[key] = gh.create(epic["title"], "\n".join(body),
-                                     [f"team:{team}", "type:epic", "status:backlog"], MILESTONES[epic["milestone"]])
+            numbers[key] = gh.create(
+                epic["title"],
+                "\n".join(body),
+                [f"team:{team}", "type:epic", "status:backlog"],
+                MILESTONES[epic["milestone"]],
+            )
 
     print("boards:")
     for team in TEAMS:

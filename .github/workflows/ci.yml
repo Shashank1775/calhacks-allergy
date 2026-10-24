@@ -30,4 +30,34 @@ jobs:
       - name: Backlog is valid
         run: python tools/seed_issues.py --dry-run > /dev/null
 
-  # Python lint and test jobs for the kitchen package are added by the platform team (task platform-01).
+  # ruff over every Python file in the repo (rules in pyproject.toml).
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      # --locked fails the job if someone changed pyproject.toml without re-running `uv lock`.
+      - name: Install the dev tools
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+
+  # Every folder's tests, minus `hardware` (needs a real device) and `slow` (nightly).
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      # Every extra, so each folder's tests find the libraries its step needs.
+      - name: Install the kitchen package
+        run: uv sync --locked --all-extras
+      - name: Tests
+        run: uv run pytest -m 'not hardware and not slow'

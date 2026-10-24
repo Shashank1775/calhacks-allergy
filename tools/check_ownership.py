@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check that every file has exactly one owner (see OWNERS), and report which owners a branch touches.
 
+Usage:
   python3 tools/check_ownership.py                    # fail if any tracked file is unowned
   python3 tools/check_ownership.py --diff origin/main [--branch NAME]
       # list owners touched by this branch; fail if an agent branch touches partner paths
@@ -73,7 +74,8 @@ def main() -> int:
             print(f"{owner}: {len(by_owner[owner])} file(s)")
             for f in by_owner[owner]:
                 print(f"    {f}")
-        teams = {owner_of(f, rules) or "UNOWNED" for f in changed if f not in SHARED_SIDE_EFFECT_FILES} - {"director", "partner"}
+        teams = {owner_of(f, rules) or "UNOWNED" for f in changed if f not in SHARED_SIDE_EFFECT_FILES}
+        teams -= {"director", "partner"}
         if "contracts/" in {f[:10] for f in changed}:
             print("NOTE: touches contracts/ -> needs an RFC and the Director must merge (label contract-change)")
         if len(teams) > 1:
