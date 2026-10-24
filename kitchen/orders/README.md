@@ -17,7 +17,7 @@
 
 | File | What it does |
 |---|---|
-| `jev.py` | `JevClient` adapters: `FakeJev` (keyword parser) now, the real Jev adapter after the spike (OQ-5) |
+| `jev.py` | `JevClient` adapters: `FakeJev` (keyword parser) now, then the real adapter designed in [ADR 0012](../../docs/decisions/0012-what-backs-jev.md) once the owner decides OQ-5 |
 | `parse.py` | Normalize the note, check the cache, call Jev, and build the `ParseResult` draft |
 | `questions.py` | Turn low-confidence fields into questions, fill answers, and decide `sendable` |
 | `cache.py` | Normalized-note cache keyed by parser name and version |
@@ -75,7 +75,7 @@ Tests live in `kitchen/orders/tests/`. Run `uv run pytest kitchen/orders`. The e
 
 | Risk | Mitigation |
 |---|---|
-| What backs Jev is unknown (OQ-5) | Everything goes behind `JevClient`; `FakeJev` until the spike lands |
+| What backs Jev is undecided (OQ-5). The spike proposes TypeSafe's hosted Jev, pinned to one version ([ADR 0012](../../docs/decisions/0012-what-backs-jev.md)) | Everything goes behind `JevClient`; `FakeJev` until the owner decides |
 | Ambiguous notes ("no nuts": peanuts too?) | Ask, don't guess. Hard cases are in the eval set; the metric that matters is wrong-without-question = 0 |
 | Exceptions under coarse units ("coconut is fine" under `tree_nut`, OQ-2) | Stored as a free-text ingredient on the parent unit until OQ-2 is answered |
 | Speech-to-text errors ("says me" for sesame) | The server confirms the transcript; voice cases are in the eval set |
