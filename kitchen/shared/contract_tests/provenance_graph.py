@@ -34,6 +34,29 @@ def _ticket(scenario: dict, plate_id: str, revision: int) -> dict:
     return next(t for t in tickets if t["ticket_id"] == ticket_id and t["revision"] == revision)
 
 
+# How far a stored probability may drift from the scenario's: SpacetimeDB keeps them as f32 (about 1e-8 off).
+PROBABILITY_TOLERANCE = 1e-6
+
+
+def same_profile(actual: dict[str, float], expected: dict[str, float]) -> bool:
+    """Two allergen probability maps agree per unit, an unlisted unit counting as 0 (allergen_profile.schema.json)."""
+    units = set(actual) | set(expected)
+    return all(abs(actual.get(unit, 0.0) - expected.get(unit, 0.0)) <= PROBABILITY_TOLERANCE for unit in units)
+
+
+def flows_into(event: dict, entity_id: str) -> bool:
+    """True when the event's direction lets allergens move into entity_id (a wash of it counts too)."""
+    if event["action"] == "unimportant":
+        return False
+    if event["action"] == "clean.wash":
+        return event["a_id"] == entity_id
+    if event["b_id"] == entity_id:
+        return event["direction"] in ("a_to_b", "both")
+    if event["a_id"] == entity_id:
+        return event["direction"] in ("b_to_a", "both")
+    return False
+
+
 def _plates(scenario: dict) -> list[str]:
     """Every plate that reaches the pass in the scenario."""
     return [plate["plate_id"] for plate in scenario["plates_at_pass"]]
@@ -182,7 +205,7 @@ def test_subgraph_nodes_start_as_the_scenario_says(make_graph, scenario):
             if entity_id in bins:
                 assert node["origin"] == "shift_start", entity_id
                 assert start["unknown"] is False, entity_id
-                assert start["probabilities"] == bins[entity_id]["probabilities"], entity_id
+                assert same_profile(start["probabilities"], bins[entity_id]["probabilities"]), entity_id
             elif late.get(entity_id) == "unknown":
                 assert node["origin"] == "unknown", entity_id
                 assert start["unknown"] is True, entity_id
@@ -190,6 +213,24 @@ def test_subgraph_nodes_start_as_the_scenario_says(make_graph, scenario):
                 assert node["origin"] == late.get(entity_id, "shift_start"), entity_id
                 assert start["unknown"] is False, entity_id
                 assert not any(start["probabilities"].values()), entity_id
+
+
+@pytest.mark.contract
+@pytest.mark.safety
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_holds_every_edge_into_the_plate(make_graph, scenario):
+    """Every edge that moves allergens straight into the plate by as_of is a one-hop time-forward path, so it belongs
+    in the subgraph under any tie or direction rule. A graph that dropped it would leave Laya blind to that contact."""
+    graph = make_graph(scenario)
+    for plate_id in _plates(scenario):
+        as_of = _pass_time(scenario, plate_id)
+        returned = {edge["event_id"] for edge in graph.subgraph(plate_id, as_of)["edges"]}
+        required = {
+            event["event_id"]
+            for event in scenario["events"]
+            if event["t_start_ms"] <= as_of and flows_into(event, plate_id)
+        }
+        assert required <= returned, sorted(required - returned)
 
 
 @pytest.mark.contract
