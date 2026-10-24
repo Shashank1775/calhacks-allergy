@@ -1,0 +1,32 @@
+name: Task
+description: One unit of work for one Worker (fits a single PR of ~400 lines or less)
+labels: ["type:task", "status:backlog"]
+body:
+  - type: markdown
+    attributes:
+      value: Add exactly one `team:` label and a `prio:` label. See docs/agents/WORKFLOW.md#writing-an-issue.
+  - type: textarea
+    id: goal
+    attributes: { label: Goal, description: The outcome, not the method. One or two sentences. }
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: A checklist a reviewer can verify. Include the command or test that proves each item.
+      value: "- [ ] "
+    validations: { required: true }
+  - type: textarea
+    id: contracts
+    attributes: { label: Contracts, description: Schemas and interfaces produced or consumed. }
+  - type: textarea
+    id: out_of_scope
+    attributes: { label: Out of scope, description: Where to stop. }
+    validations: { required: true }
+  - type: textarea
+    id: deps
+    attributes: { label: Dependencies, description: "'Blocked by #N' lines, or none.", value: none }
+  - type: textarea
+    id: signature
+    attributes: { label: Filed by, placeholder: "— [manager/<team>]" }
+    validations: { required: true }

@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # Required by the protect-main ruleset (tools/bootstrap_github.sh). Keep this job name stable.
+  contracts-and-ownership:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema
+      - name: Validate contracts, fixtures and golden scenarios
+        run: python tools/validate_contracts.py
+      - name: Every file has an owner
+        run: python tools/check_ownership.py
+      - name: Owners touched by this PR
+        if: github.event_name == 'pull_request'
+        run: python tools/check_ownership.py --diff origin/${{ github.base_ref }}
+      - name: Phase gate
+        if: github.event_name == 'pull_request'
+        run: python tools/check_phase_gate.py --diff origin/${{ github.base_ref }}
+      - name: Backlog is valid
+        run: python tools/seed_issues.py --dry-run > /dev/null
+
+  # Per-component lint and test jobs are added by the platform team (task platform-01).

@@ -1,0 +1,12 @@
+{
+  "event_id": "e-000123",
+  "t_start_ms": 183580,
+  "t_end_ms": 184400,
+  "a_id": "tool-knife-17",
+  "b_id": "bin-4",
+  "action": "transfer.scoop",
+  "probability": 0.91,
+  "direction": "b_to_a",
+  "classifier": { "name": "zone_rules", "version": "0.1.0" },
+  "evidence": { "frame_start": 5507, "frame_end": 5532 }
+}

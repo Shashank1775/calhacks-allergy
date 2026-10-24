@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "laya_response.schema.json",
+  "title": "LayaResponse",
+  "description": "Laya's answer: which allergens reached the plate, and the chain back to each source. Producer: Laya model. Consumer: provenance verdict policy (may only tighten, invariant 2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["model", "plate_id", "allergens", "latency_ms"],
+  "properties": {
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
+    },
+    "plate_id": { "$ref": "common.schema.json#/$defs/entity_id" },
+    "allergens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["allergen_unit_id", "probability", "chain"],
+        "properties": {
+          "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
+          "probability": { "$ref": "common.schema.json#/$defs/probability" },
+          "chain": { "type": "array", "items": { "$ref": "chain_step.schema.json" } }
+        }
+      }
+    },
+    "latency_ms": { "type": "integer", "minimum": 0 }
+  }
+}

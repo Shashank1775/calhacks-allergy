@@ -1,0 +1,260 @@
+{
+  "team": "intake",
+  "epics": [
+    {
+      "milestone": "M0",
+      "title": "intake: M0 Foundations",
+      "goals": [
+        "FakeJev, the parse pipeline and the intake HTTP API skeleton run and emit valid parse_result (intake-01)",
+        "Ticket-note eval set and scorer exist; wrong-without-question is the headline metric",
+        "Normalized-note parse cache works offline after the first parse",
+        "Vendor spikes written up: Jev (OQ-5), Cartesia Ink, Apify"
+      ]
+    },
+    {
+      "milestone": "M1",
+      "title": "intake: M1 Vertical Slice",
+      "goals": [
+        "Question flow with the send gate: /send refuses any draft with an open question (invariant 3)",
+        "Send writes ticket, ticket_constraint and ticket_exception through StateClient",
+        "Amendments write revision + 1 with the full constraint set (invariant 9)",
+        "Bin profiling and chef confirmation on FakeJev write bin_profile",
+        "/v1/transcribe works on the TextFileTranscriber fake",
+        "Intake runs in the platform e2e harness and against a real local SpacetimeDB"
+      ]
+    },
+    {
+      "milestone": "M2",
+      "title": "intake: M2 Live on Pi",
+      "goals": [
+        "Intake service runs on the demo LAN against live SpacetimeDB",
+        "Shift-start profiling workflow run with real bin labels",
+        "Latency budgets met: parse <= 3 s online, <= 50 ms cached"
+      ]
+    },
+    {
+      "milestone": "M3",
+      "title": "intake: M3 Models",
+      "goals": [
+        "Real Jev adapter scores the eval set at the owner's threshold with zero wrong constraints above threshold",
+        "Jev bin profiling from label photos and prep sheets, unclear items routed to chef confirmation",
+        "Cartesia Ink live behind Transcriber; transcript confirmed by the server before parsing"
+      ]
+    },
+    {
+      "milestone": "M4",
+      "title": "intake: M4 Demo Hardening",
+      "goals": [
+        "Offline mode: warm cache and manual-entry fallback with no internet",
+        "Failure drill: Jev down leads to questions or manual entry, never a guess",
+        "Optional: Apify menu import seeds prep sheets"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "key": "intake-01",
+      "milestone": "M0",
+      "title": "intake: FakeJev, parse pipeline and HTTP API skeleton",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": ["platform-01", "platform-02", "platform-03"],
+      "goal": "A runnable intake service where POST /v1/parse turns a note into a valid parse_result using a deterministic FakeJev, and every other intake endpoint exists with its contract shape.",
+      "acceptance": [
+        "FakeJev implements JevClient.parse_note with a keyword parser covering the nine allergen units, severity words and 'traces'/'fine' phrasing: `uv run --package intake pytest components/intake -k fake_jev` passes",
+        "Pipeline normalizes the note, calls JevClient, and adds a question for every field below question_threshold: `pytest -k pipeline_questions` passes",
+        "POST /v1/parse returns JSON that validates against parse_result.schema.json for every note in tests/fixtures/notes_smoke.jsonl: `pytest -k api_parse_contract` passes",
+        "All other endpoints in contracts/apis.md#intake-http-api exist and return 501 with the standard error body: `pytest -k api_stubs` passes",
+        "Example responses for /v1/parse (ok, with questions) are written to components/intake/fakes/http/ and validate: `python3 tools/validate_contracts.py` still passes and `pytest -k http_fakes_valid` passes",
+        "README documents how to run the service locally and the HTTP framework choice"
+      ],
+      "contracts": ["parse_result", "JevClient", "Intake HTTP API"],
+      "out_of_scope": ["Cache (intake-05)", "Answers and send logic (intake-06)", "Any real Jev or vendor call", "Writing to StateClient"]
+    },
+    {
+      "key": "intake-02",
+      "milestone": "M0",
+      "title": "intake: Build the ticket-note eval set and scorer",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["good-first-task"],
+      "blocked_by": [],
+      "goal": "A labeled set of at least 60 ticket notes with expected constraints and exceptions, plus a scorer that reports per-field accuracy and the count of wrong constraints that were not turned into questions.",
+      "acceptance": [
+        "components/intake/eval/notes.jsonl has >= 60 notes, each with expected constraints, exceptions and an 'ambiguous' flag where a question is the right answer",
+        "Hard cases covered and tagged: 'no nuts' (peanut ambiguity), 'dairy-free but butter ok', negation ('not allergic to eggs'), misspellings ('seseme'), voice transcription errors ('says me' for sesame), multiple allergens in one note, severity words, 'traces are fine'",
+        "Scorer `uv run --package intake intake-eval` prints per-field accuracy and wrong_without_question, and exits non-zero when wrong_without_question > 0",
+        "Scorer runs against FakeJev once intake-01 lands; until then it is tested on a trivial stub parser: `pytest -k eval_scorer` passes",
+        "Every expected allergen ID exists in contracts/allergen_units.json: `pytest -k eval_units_known` passes"
+      ],
+      "contracts": ["parse_result", "allergen_units.json"],
+      "out_of_scope": ["Tuning FakeJev to pass the whole set", "Real Jev runs"]
+    },
+    {
+      "key": "intake-03",
+      "milestone": "M0",
+      "title": "intake: Spike: verify what backs Jev and how to call it",
+      "type": "spike",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": [],
+      "goal": "Answer OQ-5 for Jev as far as agents can: what model or service backs it, how to call it, cost, latency, offline story, and an adapter sketch for JevClient. Anything only the owner can supply goes to status:needs-human.",
+      "acceptance": [
+        "components/intake/docs/jev-spike.md answers: provider or model, auth, request/response shape, rate limits, cost per parse, observed or documented latency, offline options, and whether image input works for bin labels",
+        "Every claim cites its source (doc link or owner comment); unverified claims are marked as such",
+        "A proposed real-adapter design that keeps the JevClient signature unchanged, and lists the confidence signal Jev can give per field",
+        "Questions for the owner are posted on the issue and the issue moves to status:needs-human if keys or a choice are needed"
+      ],
+      "contracts": ["JevClient"],
+      "out_of_scope": ["Production adapter code", "Committing keys or sample responses containing keys"]
+    },
+    {
+      "key": "intake-04",
+      "milestone": "M0",
+      "title": "intake: Spike: verify Cartesia Ink and Apify menu import",
+      "type": "spike",
+      "prio": "p2",
+      "flags": [],
+      "blocked_by": [],
+      "goal": "Document how Cartesia Ink speech-to-text and an Apify Actor for menu import would be called, so the Transcriber adapter and /v1/menu/import can be built later without guesswork.",
+      "acceptance": [
+        "components/intake/docs/vendor-spike.md covers, for Cartesia Ink: auth, audio formats, streaming vs batch, latency, cost, offline behavior; for Apify: which Actor, input/output shape, cost, run time",
+        "Every claim cites its source; unverified claims are marked",
+        "Adapter sketches keep the Transcriber signature and the /v1/menu/import contract unchanged",
+        "Owner questions posted on the issue (keys, accounts) with status:needs-human if needed"
+      ],
+      "contracts": ["Transcriber", "Intake HTTP API"],
+      "out_of_scope": ["Production adapter code", "Creating vendor accounts"]
+    },
+    {
+      "key": "intake-05",
+      "milestone": "M0",
+      "title": "intake: Add normalized-note parse cache with offline fallback",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": ["intake-01"],
+      "goal": "Cache parse results by normalized note so a repeated note parses instantly and works offline, and make a cache miss with Jev unavailable fail clearly instead of guessing.",
+      "acceptance": [
+        "Normalization rules (case, whitespace, punctuation, unicode) documented and unit-tested: `pytest -k normalize` passes",
+        "Second parse of the same note returns cached=true in <= 50 ms and survives a service restart: `pytest -k cache_hit_persists` passes",
+        "JevUnavailable with a cache hit returns the cached result: `pytest -k cache_offline_hit` passes",
+        "JevUnavailable with no cache hit returns error code jev_unavailable and writes nothing: `pytest -k cache_offline_miss -m safety` passes",
+        "Cache key includes parser name and version so a parser upgrade never serves stale results: `pytest -k cache_versioned` passes"
+      ],
+      "contracts": ["parse_result", "JevClient"],
+      "out_of_scope": ["Cache eviction tuning", "Sharing the cache across machines"]
+    },
+    {
+      "key": "intake-06",
+      "milestone": "M1",
+      "title": "intake: Implement question answers and the send gate",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["safety-critical"],
+      "blocked_by": ["intake-01"],
+      "goal": "Answers fill their target fields, sendable flips only when every question is answered, and /send refuses any draft with an open question (invariant 3).",
+      "acceptance": [
+        "POST /v1/drafts/{id}/answers fills the targeted constraint, exception or new constraint and returns an updated parse_result that validates: `pytest -k answers_fill_target` passes",
+        "POST /v1/drafts/{id}/send returns 409 unanswered_questions while any question is open: `pytest -k send_gate -m safety` passes",
+        "Property test (hypothesis): for arbitrary JevClient outputs, every field below question_threshold has a question after the pipeline runs, and send is refused until all are answered: `pytest -k send_gate_property -m safety` passes",
+        "Answering with a value not among the question's options returns 422: `pytest -k answers_invalid_option` passes",
+        "Example responses for answers and the 409 error are added to fakes/http/: `pytest -k http_fakes_valid` passes"
+      ],
+      "contracts": ["parse_result", "Intake HTTP API"],
+      "out_of_scope": ["Writing the ticket to state (intake-07)", "Tablet UI (experience)"]
+    },
+    {
+      "key": "intake-07",
+      "milestone": "M1",
+      "title": "intake: Apply sent tickets to state via StateClient",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["safety-critical"],
+      "blocked_by": ["intake-06", "platform-04"],
+      "goal": "A successful send writes the ticket, its constraints and exceptions through StateClient.put_ticket, with the pass threshold set from the strictest severity on the ticket.",
+      "acceptance": [
+        "Send calls put_ticket with a Ticket that validates against ticket.schema.json: `pytest -k apply_contract` passes against InMemoryStateClient",
+        "Default threshold comes from the strictest severity using the OQ-4 defaults in one config object, logged at startup: `pytest -k apply_threshold_default` passes",
+        "StateUnavailable on put_ticket returns an error to the caller and the draft stays unsent: `pytest -k apply_state_down -m safety` passes",
+        "Sending the same draft twice does not create two tickets: `pytest -k apply_idempotent` passes",
+        "Example response for a successful send added to fakes/http/"
+      ],
+      "contracts": ["ticket", "StateClient", "Intake HTTP API"],
+      "out_of_scope": ["Real SpacetimeDB (intake-10)", "Amendments (intake-08)"]
+    },
+    {
+      "key": "intake-08",
+      "milestone": "M1",
+      "title": "intake: Support ticket amendments at revision + 1",
+      "type": "task",
+      "prio": "p1",
+      "flags": ["safety-critical"],
+      "blocked_by": ["intake-07"],
+      "goal": "POST /v1/tickets/{id}/amend opens a new draft at revision + 1 that goes through the same question flow, and sending it writes a new revision with the full constraint set (invariant 9).",
+      "acceptance": [
+        "Amend returns a parse_result draft pre-filled with the previous revision's constraints plus the new note's: `pytest -k amend_draft` passes",
+        "Sending the amendment writes revision + 1 with the complete constraint set; previous revision rows are untouched: `pytest -k amend_revision -m safety` passes",
+        "An amendment can never remove a constraint without an explicit answered question confirming the removal: `pytest -k amend_no_silent_drop -m safety` passes",
+        "Example responses added to fakes/http/"
+      ],
+      "contracts": ["ticket", "parse_result", "Intake HTTP API"],
+      "out_of_scope": ["Triggering the recheck (provenance subscribes to ticket revisions)"]
+    },
+    {
+      "key": "intake-09",
+      "milestone": "M1",
+      "title": "intake: Bin profiling and chef confirmation on FakeJev",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": ["intake-01", "platform-04"],
+      "goal": "Shift-start bin profiling through POST /v1/profiles/bins and chef confirmation through /confirm, writing bin_profile and opening chef confirmations for unclear ingredients.",
+      "acceptance": [
+        "FakeJev.profile_bin returns an allergen_profile from label or prep-sheet text: `pytest -k profile_bin_fake` passes",
+        "POST /v1/profiles/bins writes bin_profile via StateClient.put_bin_profile and returns a valid allergen_profile: `pytest -k profiles_api_contract` passes",
+        "Each unclear ingredient opens one chef confirmation; /confirm updates the profile and sets confirmed_by_chef when none remain: `pytest -k chef_confirm_flow` passes",
+        "StateClient has no chef-confirmation methods yet: a type:rfc issue is filed for platform/state to add them, and this task uses a local adapter behind a TODO linked to that RFC",
+        "Example responses added to fakes/http/"
+      ],
+      "contracts": ["allergen_profile", "StateClient", "Intake HTTP API"],
+      "out_of_scope": ["Image input and real Jev (M3)", "Apify menu import (M4)"]
+    },
+    {
+      "key": "intake-10",
+      "milestone": "M1",
+      "title": "intake: Run intake against a real local SpacetimeDB",
+      "type": "task",
+      "prio": "p2",
+      "flags": [],
+      "blocked_by": ["intake-07", "state-03"],
+      "goal": "Prove the send and profiling paths work with the real StateClient against a local SpacetimeDB, not only the in-memory fake.",
+      "acceptance": [
+        "An integration test (marked slow) sends a ticket and reads it back through the real StateClient: `uv run --package intake pytest components/intake -m slow -k real_state` passes locally with the state team's documented setup",
+        "README documents the env vars needed to point intake at a local SpacetimeDB",
+        "PR body includes the command output from a local run"
+      ],
+      "contracts": ["ticket", "allergen_profile", "StateClient"],
+      "out_of_scope": ["Running SpacetimeDB in CI unless platform already supports it"]
+    },
+    {
+      "key": "intake-11",
+      "milestone": "M1",
+      "title": "intake: Add Transcriber fake and /v1/transcribe endpoint",
+      "type": "task",
+      "prio": "p2",
+      "flags": ["good-first-task"],
+      "blocked_by": ["intake-01"],
+      "goal": "Voice tickets work end to end on a fake: /v1/transcribe returns text from TextFileTranscriber, and voice-source notes go through the same parse and question flow.",
+      "acceptance": [
+        "TextFileTranscriber implements Transcriber and returns canned transcripts keyed by audio fixture: `pytest -k transcriber_fake` passes",
+        "POST /v1/transcribe accepts audio/wav and returns {\"text\": ...}: `pytest -k api_transcribe` passes",
+        "A note parsed with source=voice yields parse_result.source == 'voice': `pytest -k parse_voice_source` passes",
+        "Example responses added to fakes/http/"
+      ],
+      "contracts": ["Transcriber", "parse_result", "Intake HTTP API"],
+      "out_of_scope": ["Real Cartesia Ink (M3)", "Microphone capture (experience)"]
+    }
+  ]
+}

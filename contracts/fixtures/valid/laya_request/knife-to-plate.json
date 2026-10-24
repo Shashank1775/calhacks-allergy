@@ -1,0 +1,15 @@
+{
+  "plate_id": "plate-t7",
+  "ticket_id": "t7",
+  "as_of_t_ms": 190000,
+  "forbidden": ["peanut"],
+  "nodes": [
+    { "entity_id": "bin-4", "kind": "bin", "label": "satay sauce", "initial_profile": { "probabilities": { "peanut": 0.98 }, "unknown": false, "source": "jev" } },
+    { "entity_id": "tool-knife-17", "kind": "tool", "label": "knife", "initial_profile": { "probabilities": {}, "unknown": false, "source": "shift_start_clean" } },
+    { "entity_id": "plate-t7", "kind": "plate", "label": "ticket 7", "initial_profile": { "probabilities": {}, "unknown": false, "source": "shift_start_clean" } }
+  ],
+  "edges": [
+    { "event_id": "e-000123", "t_start_ms": 183580, "a_id": "tool-knife-17", "b_id": "bin-4", "action": "transfer.scoop", "probability": 0.91, "direction": "b_to_a" },
+    { "event_id": "e-000131", "t_start_ms": 186020, "a_id": "tool-knife-17", "b_id": "plate-t7", "action": "transfer.contact", "probability": 0.88, "direction": "both" }
+  ]
+}

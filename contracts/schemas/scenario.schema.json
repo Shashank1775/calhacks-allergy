@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scenario.schema.json",
+  "title": "Scenario",
+  "description": "A golden kitchen scenario with known ground truth. Producer: sim (and hand-written by any team via PR to contracts/scenarios). Consumers: provenance tests, platform end-to-end harness, Laya evaluation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scenario_id",
+    "description",
+    "bins",
+    "tickets",
+    "events",
+    "plates_at_pass",
+    "expected"
+  ],
+  "properties": {
+    "scenario_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entity_id",
+          "label",
+          "allergen_profile"
+        ],
+        "properties": {
+          "entity_id": {
+            "$ref": "common.schema.json#/$defs/entity_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "allergen_profile": {
+            "$ref": "allergen_profile.schema.json"
+          }
+        }
+      }
+    },
+    "late_entities": {
+      "description": "Entities first seen after shift start. origin clean_stack means it came from a designated clean-plate or clean-utensil zone and starts clean; anything else has unknown history (invariant 8).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entity_id",
+          "first_seen_t_ms"
+        ],
+        "properties": {
+          "entity_id": {
+            "$ref": "common.schema.json#/$defs/entity_id"
+          },
+          "first_seen_t_ms": {
+            "$ref": "common.schema.json#/$defs/t_ms"
+          },
+          "origin": {
+            "enum": [
+              "clean_stack",
+              "unknown"
+            ],
+            "default": "unknown"
+          }
+        }
+      }
+    },
+    "tickets": {
+      "type": "array",
+      "items": {
+        "$ref": "ticket.schema.json"
+      }
+    },
+    "plate_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plate_id",
+          "ticket_id",
+          "t_ms"
+        ],
+        "properties": {
+          "plate_id": {
+            "$ref": "common.schema.json#/$defs/entity_id"
+          },
+          "ticket_id": {
+            "type": "string"
+          },
+          "t_ms": {
+            "$ref": "common.schema.json#/$defs/t_ms"
+          }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "interaction_event.schema.json"
+      }
+    },
+    "amendments": {
+      "type": "array",
+      "items": {
+        "$ref": "ticket.schema.json"
+      }
+    },
+    "plates_at_pass": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plate_id",
+          "ticket_id",
+          "t_ms"
+        ],
+        "properties": {
+          "plate_id": {
+            "$ref": "common.schema.json#/$defs/entity_id"
+          },
+          "ticket_id": {
+            "type": "string"
+          },
+          "t_ms": {
+            "$ref": "common.schema.json#/$defs/t_ms"
+          }
+        }
+      }
+    },
+    "expected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plate_id",
+          "ticket_revision",
+          "decision",
+          "allergens_reached"
+        ],
+        "properties": {
+          "plate_id": {
+            "$ref": "common.schema.json#/$defs/entity_id"
+          },
+          "ticket_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "decision": {
+            "enum": [
+              "pass",
+              "hold"
+            ]
+          },
+          "allergens_reached": {
+            "type": "array",
+            "items": {
+              "$ref": "common.schema.json#/$defs/allergen_unit_id"
+            }
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "chain_event_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "draft_id": "d-0007",
+  "note": "severe nut allergy, coconut is fine",
+  "source": "typed",
+  "parser": { "name": "jev", "version": "0.0.0-example" },
+  "cached": false,
+  "constraints": [
+    {
+      "allergen_unit_id": "tree_nut",
+      "severity": "anaphylactic",
+      "trace_sensitive": true,
+      "confidence": { "allergen_unit_id": 0.72, "severity": 0.93, "trace_sensitive": 0.61 }
+    }
+  ],
+  "exceptions": [ { "allergen_unit_id": "tree_nut", "ingredient": "coconut", "confidence": 0.95 } ],
+  "questions": [
+    {
+      "question_id": "q1",
+      "target": { "kind": "new_constraint", "field": "allergen_unit_id" },
+      "prompt": "Does \"nut\" include peanuts?",
+      "options": [ { "label": "Yes, peanuts too", "value": "peanut" }, { "label": "Tree nuts only", "value": null } ]
+    },
+    {
+      "question_id": "q2",
+      "target": { "kind": "constraint", "index": 0, "field": "trace_sensitive" },
+      "prompt": "Does trace contact matter?",
+      "options": [ { "label": "Yes, even traces", "value": true }, { "label": "Only direct ingredients", "value": false } ]
+    }
+  ],
+  "question_threshold": 0.85,
+  "sendable": false
+}

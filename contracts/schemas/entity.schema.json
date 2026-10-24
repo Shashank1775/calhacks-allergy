@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "entity.schema.json",
+  "title": "Entity",
+  "description": "A tracked bin, tool, hand or plate. Producer: perception (position fields), intake (bin profiles), provenance (propagated profiles). Synced to SpacetimeDB at about 5 Hz.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entity_id",
+    "kind",
+    "label",
+    "zone",
+    "box",
+    "origin",
+    "first_seen_t_ms",
+    "last_seen_t_ms",
+    "allergen_profile"
+  ],
+  "properties": {
+    "entity_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "kind": {
+      "$ref": "common.schema.json#/$defs/entity_kind"
+    },
+    "label": {
+      "type": "string",
+      "description": "Human label: bin contents, tool class, hand side, or plate's ticket."
+    },
+    "zone": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Zone ID the entity is in, e.g. slot-4, plating-spot, wash, pass."
+    },
+    "box": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/box"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "track_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "origin": {
+      "enum": [
+        "shift_start",
+        "clean_stack",
+        "unknown"
+      ],
+      "description": "How the entity entered the shift (invariant 8). Set once by perception; never changes. Only shift_start and clean_stack start clean."
+    },
+    "first_seen_t_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "last_seen_t_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "ticket_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Plates only: set when the cook taps start ticket."
+    },
+    "allergen_profile": {
+      "$ref": "allergen_profile.schema.json"
+    }
+  }
+}

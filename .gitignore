@@ -1,0 +1,38 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# large artifacts live outside git (docs/agents/WORKFLOW.md#data-and-large-files)
+data/
+*.mp4
+*.mov
+*.h264
+*.hef
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+
+# agent worktrees and local settings
+.claude/worktrees/
+.claude/settings.local.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# node
+node_modules/
+dist/
+
+# rust / spacetimedb
+target/
+
+# os
+.DS_Store

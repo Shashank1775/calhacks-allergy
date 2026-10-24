@@ -1,0 +1,114 @@
+{
+  "scenario_id": "knife-carries-peanut-to-plate",
+  "description": "Knife scoops satay (peanut), then touches the plate of a peanut-allergic ticket. Must hold, with the two-step chain.",
+  "tags": [
+    "invariant-2",
+    "basic-transfer"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-1",
+      "label": "satay sauce",
+      "allergen_profile": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    },
+    {
+      "entity_id": "bin-3",
+      "label": "steamed rice",
+      "allergen_profile": {
+        "probabilities": {},
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t1",
+      "number": 1,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "peanut allergy",
+      "pass_threshold": 0.99,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "anaphylactic",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t1",
+      "ticket_id": "t1",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "tool-knife-1",
+      "b_id": "bin-1",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "tool-knife-1",
+      "b_id": "plate-t1",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t1",
+      "ticket_id": "t1",
+      "t_ms": 3000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t1",
+      "ticket_revision": 1,
+      "decision": "hold",
+      "allergens_reached": [
+        "peanut"
+      ],
+      "reason_codes": [
+        "exact_flag"
+      ],
+      "chain_event_ids": [
+        "e1",
+        "e2"
+      ]
+    }
+  ]
+}

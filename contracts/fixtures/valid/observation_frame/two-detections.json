@@ -1,0 +1,10 @@
+{
+  "frame_id": 5526,
+  "t_ms": 184220,
+  "camera_id": "cam0",
+  "fps_estimate": 31.4,
+  "detections": [
+    { "track_id": 17, "entity_id": "tool-knife-17", "kind": "tool", "class_name": "knife", "box": [0.41, 0.52, 0.47, 0.71], "confidence": 0.81, "zone": "slot-4" },
+    { "track_id": 3, "entity_id": "hand-p1-right", "kind": "hand", "class_name": "wrist", "box": [0.43, 0.49, 0.49, 0.56], "confidence": 0.77, "zone": "slot-4", "person_id": "p1", "wrist": [0.46, 0.52, 0.88] }
+  ]
+}

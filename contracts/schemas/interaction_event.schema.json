@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interaction_event.schema.json",
+  "title": "InteractionEvent",
+  "description": "A classified interaction: one time-stamped edge in the provenance graph. Producer: interactions (live) and sim (synthetic). Consumer: provenance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "t_start_ms",
+    "t_end_ms",
+    "a_id",
+    "b_id",
+    "action",
+    "probability",
+    "direction",
+    "classifier"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "t_start_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "t_end_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "a_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "b_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "action": {
+      "$ref": "common.schema.json#/$defs/action",
+      "description": "For clean.wash the event is a self-loop: b_id equals a_id, the washed entity."
+    },
+    "probability": {
+      "$ref": "common.schema.json#/$defs/probability"
+    },
+    "direction": {
+      "description": "Which way allergens can move. Contact and wipe are usually both; a scoop moves bin -> tool. Ignored for clean.wash.",
+      "enum": [
+        "a_to_b",
+        "b_to_a",
+        "both"
+      ]
+    },
+    "classifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "zone_rules",
+            "lstm",
+            "sim_ground_truth",
+            "manual"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frame_start": {
+          "type": "integer"
+        },
+        "frame_end": {
+          "type": "integer"
+        },
+        "clip_uri": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "allergen_profile.schema.json",
+  "title": "AllergenProfile",
+  "description": "Probability that an entity carries each allergen unit. Bins: set by intake profiling. Tools, hands, plates: clean at shift start, then updated by provenance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["probabilities", "unknown", "source"],
+  "properties": {
+    "probabilities": {
+      "description": "Allergen unit ID -> probability. Units not listed are 0, unless unknown is true.",
+      "type": "object",
+      "propertyNames": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
+      "additionalProperties": { "$ref": "common.schema.json#/$defs/probability" }
+    },
+    "unknown": {
+      "description": "True when the entity's history is unknown (appeared mid-shift, re-acquired track). Treated as possibly carrying every allergen (invariant 8).",
+      "type": "boolean"
+    },
+    "source": { "enum": ["jev", "chef", "menu_seed", "shift_start_clean", "propagated", "wash_reset", "unknown_history"] },
+    "unclear_ingredients": {
+      "description": "Ingredients Jev could not place; each needs a one-time chef confirmation.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "confirmed_by_chef": { "type": "boolean" }
+  }
+}

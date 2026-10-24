@@ -1,0 +1,24 @@
+{
+  "entity_id": "tool-knife-17",
+  "kind": "tool",
+  "label": "knife",
+  "zone": "slot-4",
+  "box": [
+    0.41,
+    0.52,
+    0.47,
+    0.71
+  ],
+  "track_id": 17,
+  "origin": "shift_start",
+  "first_seen_t_ms": 0,
+  "last_seen_t_ms": 184220,
+  "ticket_id": null,
+  "allergen_profile": {
+    "probabilities": {
+      "peanut": 0.83
+    },
+    "unknown": false,
+    "source": "propagated"
+  }
+}

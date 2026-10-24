@@ -1,0 +1,23 @@
+{
+  "verdict_id": "v-t7-1",
+  "ticket_id": "t7",
+  "ticket_revision": 1,
+  "plate_id": "plate-t7",
+  "decided_t_ms": 190050,
+  "trigger": "plate_at_pass",
+  "decision": "hold",
+  "mode": "full",
+  "confidence": 0.21,
+  "pass_threshold": 0.99,
+  "reasons": [
+    { "code": "exact_flag", "allergen_unit_id": "peanut" },
+    { "code": "model_flag", "allergen_unit_id": "peanut" },
+    { "code": "low_confidence", "detail": "0.21 < 0.99" }
+  ],
+  "flagged": [ { "allergen_unit_id": "peanut", "probability": 0.79, "flagged_by": ["exact", "laya"] } ],
+  "chain": [
+    { "step": 1, "event_id": "e-000123", "from_id": "bin-4", "to_id": "tool-knife-17", "t_ms": 183580, "action": "transfer.scoop", "allergen_unit_id": "peanut", "step_confidence": 0.91 },
+    { "step": 2, "event_id": "e-000131", "from_id": "tool-knife-17", "to_id": "plate-t7", "t_ms": 186020, "action": "transfer.contact", "allergen_unit_id": "peanut", "step_confidence": 0.88 }
+  ],
+  "versions": { "policy": "0.1.0", "exact": "0.1.0", "laya": "0.0.0-example", "classifier": "zone_rules-0.1.0" }
+}

@@ -1,0 +1,389 @@
+{
+  "team": "perception",
+  "epics": [
+    {
+      "milestone": "M0",
+      "title": "perception: M0 Foundations",
+      "goals": [
+        "Replay a video file on a laptop CPU into valid ObservationFrame JSONL (perception-01)",
+        "Answer whether Hailo-8 can run YOLOv8 detection plus pose at 30 FPS, with owner-measured numbers",
+        "Entity identity rules with safety tests: re-acquired tracks always get new IDs (invariant 8)",
+        "Zone and slot calibration format, a calibration tool, and an RFC for the missing zone schema and StateClient.set_zones",
+        "Publish a recorded frame JSONL fixture pack that interactions uses in tests"
+      ]
+    },
+    {
+      "milestone": "M1",
+      "title": "perception: M1 Vertical Slice",
+      "goals": [
+        "In-memory entity store and 5 Hz sync through StateClient, fake then real",
+        "POST /v1/plates/start binds exactly one plate and refuses otherwise",
+        "GET /v1/health and GET /stream.mjpg",
+        "Frame recorder with byte-identical replay",
+        "FakePerceptionAPI so experience can build the start-ticket button and overlays"
+      ]
+    },
+    {
+      "milestone": "M2",
+      "title": "perception: M2 Live on Pi",
+      "goals": [
+        "Hailo backend live at 30+ FPS with tracking, verified by the owner on the device",
+        "picamera2 source and calibration on the real counter",
+        "A recorded live session replays deterministically through the pipeline",
+        "A stale health endpoint drives the pass gate to fault"
+      ]
+    },
+    {
+      "milestone": "M3",
+      "title": "perception: M3 Models",
+      "goals": [
+        "Measure the ID-switch rate on owner recordings and reduce it (mount, track buffer)",
+        "Fine-tune the detector or remap classes only if COCO tools and bowls prove too weak overhead"
+      ]
+    },
+    {
+      "milestone": "M4",
+      "title": "perception: M4 Demo Hardening",
+      "goals": [
+        "Failure drills: camera unplug, Hailo crash, network loss each end in gate fault or hold, never pass",
+        "Lighting robustness pass and fully offline operation"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "key": "perception-01",
+      "milestone": "M0",
+      "title": "perception: replay a video on CPU into ObservationFrame JSONL",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": [
+        "platform-01",
+        "platform-02",
+        "platform-03"
+      ],
+      "goal": "A laptop with no Pi can turn a kitchen video into tracked ObservationFrame JSONL, so every downstream team has realistic input from day one. The Detector interface introduced here is what the Hailo backend plugs into later.",
+      "acceptance": [
+        "`uv run --package perception python -m perception.replay --video <file> --out frames.jsonl` writes one ObservationFrame per processed frame",
+        "A Detector interface exists, with a CPU backend using pretrained YOLOv8 detection (knife, spoon, fork, bowl) plus YOLOv8 pose wrists. Tracking runs through ByteTrack behind a Tracker interface",
+        "Hands are emitted as kind=hand, class_name=wrist, with person_id and wrist [x, y, conf]. Bowls are emitted as kind=plate. Tools as kind=tool",
+        "Every line validates: `uv run --package perception pytest components/perception/tests/test_replay_contract.py`",
+        "Frame t_ms comes from the injected Clock (video timestamps) and is strictly increasing: covered by a `safety` test",
+        "Running the replay twice on the same input produces identical JSONL: `pytest -k deterministic`",
+        "The sample clip is referenced in `components/perception/data-manifest.json` (not committed). A tiny fixture of 50 KB or less is committed under tests/fixtures/",
+        "README documents the command and the AGPL-3.0 note for ultralytics. A `status:needs-human` question to the owner about licensing is filed"
+      ],
+      "contracts": [
+        "observation_frame",
+        "Clock"
+      ],
+      "out_of_scope": [
+        "Hailo backend",
+        "Bins and zones (slot identity comes in perception-03 and perception-04)",
+        "SpacetimeDB sync",
+        "HTTP endpoints"
+      ]
+    },
+    {
+      "key": "perception-02",
+      "milestone": "M0",
+      "title": "perception: spike Hailo-8 YOLOv8 det+pose feasibility and FPS",
+      "type": "spike",
+      "prio": "p0",
+      "flags": [
+        "hardware"
+      ],
+      "blocked_by": [],
+      "goal": "Find out, with measurements, whether compiled HEFs exist for YOLOv8 detection and YOLOv8 pose on the Hailo-8, and what FPS we get running both on one Hailo-8 with the Pi camera.",
+      "acceptance": [
+        "The issue has a written answer: HEF names and sources, and the exact Pi OS, HailoRT and Python versions",
+        "A benchmark script `components/perception/scripts/hailo_bench.py`, plus step-by-step owner instructions posted on the issue",
+        "Owner-posted FPS for detection alone, pose alone, and both together, at at least two input resolutions",
+        "A recommendation (both every frame / pose every Nth frame / smaller models / CPU fallback), with a team ADR drafted if the plan deviates from ARCHITECTURE"
+      ],
+      "contracts": [],
+      "out_of_scope": [
+        "Production Hailo backend code",
+        "Tracking integration"
+      ]
+    },
+    {
+      "key": "perception-03",
+      "milestone": "M0",
+      "title": "perception: zone calibration format, tool and zone RFC",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": [
+        "platform-01"
+      ],
+      "goal": "Bin slots, the plating spot, the wash station and the pass are defined once as normalized polygons, and every detection gets a zone. The zone table currently has no contract schema, so this task also proposes one.",
+      "acceptance": [
+        "Zone file format (zone_id, kind in bin_slot | plating_spot | wash | pass | other, polygon of normalized points), with a validator test",
+        "`uv run --package perception python -m perception.zones.calibrate --image <still.jpg> --out zones.json` lets a person click polygons and save them",
+        "Point-in-polygon zone assignment for detections, with unit tests covering edges and overlapping zones (deterministic tie-break)",
+        "A sample zones.json is committed under tests/fixtures/ for interactions and experience",
+        "A `type:rfc` issue proposes a `zone` schema in contracts/ and `StateClient.set_zones`, since both are missing from contracts today"
+      ],
+      "contracts": [
+        "observation_frame",
+        "zone (proposed)"
+      ],
+      "out_of_scope": [
+        "Writing zones to SpacetimeDB",
+        "Auto-detecting taped slots"
+      ]
+    },
+    {
+      "key": "perception-04",
+      "milestone": "M0",
+      "title": "perception: entity identity rules with new-ID-on-reacquire",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "platform-02"
+      ],
+      "goal": "Map tracker IDs to stable entity IDs (bin-<slot>, tool-<class>-<n>, hand-p<k>-left/right, plate-<n>) so a lost and re-acquired track is always a new entity with unknown history (invariant 8).",
+      "acceptance": [
+        "An identity module assigns entity_id and first_seen_t_ms from track IDs, classes, slots and pose person IDs",
+        "`safety` test: a track lost beyond the track buffer and re-acquired gets a new entity_id, with first_seen_t_ms equal to when it reappeared",
+        "`safety` property test (hypothesis): entity IDs are never reused within a shift, over random track lifetimes",
+        "`safety` test: a person re-acquired by pose gets new hand IDs",
+        "Every entity gets origin: shift_start (seen before shift start), clean_stack (first seen leaving a clean_stack zone) or unknown (anything else, including re-acquired tracks). `safety` test: a re-acquired track is always unknown",
+        "Bins take their ID from their slot zone (bin-4 is whatever sits in slot-4). The README documents that swapping bins between slots mid-shift is unsupported",
+        "`uv run --package perception pytest components/perception -m safety` passes"
+      ],
+      "contracts": [
+        "observation_frame",
+        "entity"
+      ],
+      "out_of_scope": [
+        "Any re-identification or merging of tracks (that would need an RFC and the safety reviewer)",
+        "Allergen profiles"
+      ]
+    },
+    {
+      "key": "perception-05",
+      "milestone": "M0",
+      "title": "perception: publish recorded frame JSONL fixture pack",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": [
+        "perception-01",
+        "perception-04"
+      ],
+      "goal": "Ship the fake that consumers test against: small, real, recorded ObservationFrame JSONL clips covering the core interaction shapes.",
+      "acceptance": [
+        "At least 3 fixtures under `components/perception/tests/fixtures/pack/`: knife scoop in a bin slot, hand touching a plate, and a tool leaving the frame and re-entering (new entity ID)",
+        "Each fixture is 100 KB or less, validates against observation_frame, and has a README line saying what happens and when",
+        "A replay source can stream a fixture pack file in-process: `pytest -k fixture_pack`",
+        "Announced on the interactions Team board with paths"
+      ],
+      "contracts": [
+        "observation_frame"
+      ],
+      "out_of_scope": [
+        "Labels or expected events (interactions owns those)"
+      ]
+    },
+    {
+      "key": "perception-06",
+      "milestone": "M1",
+      "title": "perception: entity store and 5 Hz sync via StateClient",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": [
+        "platform-04",
+        "perception-04"
+      ],
+      "goal": "Keep every frame's entities in memory on the Pi and push entity rows to SpacetimeDB at about 5 Hz through StateClient.upsert_entities, without ever blocking the frame loop.",
+      "acceptance": [
+        "An in-memory store holds the latest Entity per entity_id, plus a bounded frame history (configurable)",
+        "Sync calls upsert_entities at 5 Hz \u00b110%, measured with FakeClock in a test, in batches of 30 entities or fewer",
+        "StateUnavailable is retried with backoff. The frame loop never blocks on sync (test with a slow fake). Sync lag is exposed for /v1/health",
+        "Stale entities keep last_seen_t_ms and are never deleted",
+        "Fake-swap test runs replay \u2192 store \u2192 sync against InMemoryStateClient: `pytest -k sync`"
+      ],
+      "contracts": [
+        "entity",
+        "StateClient"
+      ],
+      "out_of_scope": [
+        "Real SpacetimeDB (perception-11)",
+        "Allergen profile fields (intake and provenance tables)"
+      ]
+    },
+    {
+      "key": "perception-07",
+      "milestone": "M1",
+      "title": "perception: POST /v1/plates/start binds exactly one plate",
+      "type": "task",
+      "prio": "p0",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "perception-03",
+        "perception-06"
+      ],
+      "goal": "When the cook taps start ticket, bind the single plate in the plating-spot zone to the ticket and write plate_binding. Never guess.",
+      "acceptance": [
+        "Exactly one plate in plating_spot calls StateClient.bind_plate(plate_id, ticket_id, t_ms) and returns {plate_id}",
+        "No plate returns 409 no_plate_at_spot. Two or more plates return 409 multiple_plates_at_spot. Both are `safety` tests",
+        "A plate already bound to a different ticket is refused, never silently rebound. The error code is proposed via RFC, since it's not in apis.md yet",
+        "Error bodies follow {\"error\": {\"code\", \"message\"}}",
+        "`uv run --package perception pytest components/perception -k plates_start` passes against InMemoryStateClient"
+      ],
+      "contracts": [
+        "Perception HTTP API",
+        "StateClient",
+        "plate_binding"
+      ],
+      "out_of_scope": [
+        "The start-ticket button UI (experience)",
+        "Plate tracking improvements"
+      ]
+    },
+    {
+      "key": "perception-08",
+      "milestone": "M1",
+      "title": "perception: GET /v1/health and GET /stream.mjpg",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "safety-critical"
+      ],
+      "blocked_by": [
+        "perception-01"
+      ],
+      "goal": "Expose liveness for the pass gate (which faults when health goes stale) and the raw camera stream for overlays.",
+      "acceptance": [
+        "/v1/health returns {fps, hailo, last_frame_t_ms}. last_frame_t_ms stops advancing when frames stop (`safety` test with a stalled source)",
+        "/stream.mjpg serves MJPEG from the active source. A smoke test reads at least 3 JPEG parts",
+        "Endpoints never block the frame loop (test with a slow client)",
+        "README shows curl commands for both"
+      ],
+      "contracts": [
+        "Perception HTTP API"
+      ],
+      "out_of_scope": [
+        "Burned-in overlays (OQ-6)",
+        "Gate fault logic (experience)"
+      ]
+    },
+    {
+      "key": "perception-09",
+      "milestone": "M1",
+      "title": "perception: frame recorder with byte-identical replay",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": [
+        "perception-01"
+      ],
+      "goal": "Record any source's ObservationFrames to JSONL with a session manifest, and replay them so downstream output is identical. This underpins M2's deterministic live-session replay.",
+      "acceptance": [
+        "`python -m perception.record --source <video|camera> --out <dir>` writes frames.jsonl plus manifest.json (source, versions, zones file hash, shift start, model versions)",
+        "Record then replay round-trips byte-identically: `pytest -k roundtrip`",
+        "The replay source preserves recorded t_ms and can pace in real time or run as fast as possible",
+        "Large recordings go to data/ (gitignored), with a manifest entry format documented"
+      ],
+      "contracts": [
+        "observation_frame"
+      ],
+      "out_of_scope": [
+        "Video storage or compression",
+        "Labeling (interactions)"
+      ]
+    },
+    {
+      "key": "perception-10",
+      "milestone": "M1",
+      "title": "perception: FakePerceptionAPI for experience",
+      "type": "task",
+      "prio": "p1",
+      "flags": [
+        "good-first-task"
+      ],
+      "blocked_by": [
+        "platform-01"
+      ],
+      "goal": "Give experience a stand-in for the Pi so they can build the start-ticket button, the gate fault logic and overlays without hardware.",
+      "acceptance": [
+        "`uv run --package perception python -m perception.fake_api --port 8080` serves the three Perception HTTP API endpoints",
+        "/v1/plates/start answers from a script file (success, no_plate_at_spot, multiple_plates_at_spot) in sequence",
+        "/v1/health can be made stale on command, to exercise gate fault",
+        "/stream.mjpg loops a generated test pattern (no committed video)",
+        "Contract tests check response shapes against apis.md: `pytest -k fake_api`"
+      ],
+      "contracts": [
+        "Perception HTTP API"
+      ],
+      "out_of_scope": [
+        "Real detection",
+        "Entity sync"
+      ]
+    },
+    {
+      "key": "perception-11",
+      "milestone": "M1",
+      "title": "perception: sync entities to local SpacetimeDB via real StateClient",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": [
+        "state-03",
+        "perception-06"
+      ],
+      "goal": "Swap the fake for the real StateClient, and prove replayed entities land in a local SpacetimeDB at the target rate.",
+      "acceptance": [
+        "Replay of the fixture pack, then store, then real StateClient: rows are visible in the entity table (query shown in the PR)",
+        "5 Hz sustained for 10 minutes of replay without a growing backlog (log excerpt in the PR)",
+        "Killing the DB mid-run raises StateUnavailable, health shows sync lag, and sync recovers when the DB returns",
+        "The command to reproduce is in the README"
+      ],
+      "contracts": [
+        "StateClient",
+        "entity"
+      ],
+      "out_of_scope": [
+        "Hailo",
+        "Running on the Pi"
+      ]
+    },
+    {
+      "key": "perception-12",
+      "milestone": "M1",
+      "title": "perception: Hailo detector backend behind Detector interface",
+      "type": "task",
+      "prio": "p2",
+      "flags": [
+        "hardware"
+      ],
+      "blocked_by": [
+        "perception-02",
+        "perception-01"
+      ],
+      "goal": "Implement the Hailo-8 backend chosen by the perception-02 spike behind the same Detector interface as the CPU backend, so M2 only has to flip a config switch.",
+      "acceptance": [
+        "A Hailo backend implements Detector. CPU and Hailo outputs share one contract test run on a recorded image set (Hailo half skipped in CI via the `hardware` marker)",
+        "Backend choice is config-only (PERCEPTION_DETECTOR=cpu|hailo)",
+        "An owner test script on the issue: exact commands to run on the Pi, and the expected FPS and output",
+        "Issue moves to status:needs-human until the owner posts results"
+      ],
+      "contracts": [
+        "observation_frame"
+      ],
+      "out_of_scope": [
+        "picamera2 source (M2)",
+        "Performance tuning beyond the spike's recommendation"
+      ]
+    }
+  ]
+}

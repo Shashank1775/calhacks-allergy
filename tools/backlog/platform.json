@@ -1,0 +1,304 @@
+{
+  "team": "platform",
+  "epics": [
+    {
+      "milestone": "M0",
+      "title": "platform: M0 Foundations",
+      "goals": [
+        "uv workspace with glob members and per-component CI: ruff, pytest, contract validation, ownership check",
+        "py_common: Pydantic models generated from contracts/schemas, with a CI drift check",
+        "py_common: every Protocol in contracts/apis.md, the *Unavailable exceptions, and an injectable Clock",
+        "InMemoryStateClient with failure injection, plus a scenario loader that loads all golden scenarios",
+        "Shared StateClient contract test suite, parametrized over implementations",
+        "TypeScript types generated from the schemas for experience",
+        "PR-level ownership and label checks; idempotent bootstrap scripts; .claude/agents lint"
+      ]
+    },
+    {
+      "milestone": "M1",
+      "title": "platform: M1 Vertical Slice",
+      "goals": [
+        "tools/e2e harness: typed note to FakeJev to answered question to ticket to scenario events to provenance to verdict to ConsoleGate and ConsoleSpeaker",
+        "Every golden scenario passes through the harness in rules_only mode, in CI on every PR touching provenance or contracts",
+        "Nightly CI run of sim-generated scenarios",
+        "e2e harness runs against the real StateClient and a local SpacetimeDB"
+      ]
+    },
+    {
+      "milestone": "M2",
+      "title": "platform: M2 Live on Pi",
+      "goals": [
+        "Deterministic replay check: the same recorded JSONL produces identical verdicts on every run",
+        "One-command stack start for laptop and Pi (the Pi half is hardware, verified by the owner)"
+      ]
+    },
+    {
+      "milestone": "M3",
+      "title": "platform: M3 Models",
+      "goals": [
+        "CI plumbing that posts model evaluations (Laya vs exact reachability, LSTM vs zone rules) as artifacts",
+        "Checker that every model artifact carries a data-manifest.json"
+      ]
+    },
+    {
+      "milestone": "M4",
+      "title": "platform: M4 Demo Hardening",
+      "goals": [
+        "Failure-drill harness: kill each component, assert HOLD or fault, never PASS",
+        "Offline-mode check: the stack runs with no network after setup",
+        "Demo runbook tooling"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "key": "platform-01",
+      "milestone": "M0",
+      "title": "platform: uv workspace and per-component CI",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": [],
+      "goal": "Give every team a Python workspace and a CI that lints, tests and checks contracts and ownership for each component, so teams can add packages without editing root config.",
+      "acceptance": [
+        "Root pyproject.toml declares a uv workspace with members globbed as components/* and libs/*; `uv sync` succeeds on a clean checkout (paste output)",
+        "Extends the existing .github/workflows/ci.yml with jobs: `ruff check`, `ruff format --check`, `uv run pytest` per workspace member, `python3 tools/validate_contracts.py`, `python3 tools/check_ownership.py`",
+        "Pytest markers `safety`, `hardware`, `slow` registered at the root; `hardware` and `slow` are deselected in the PR job",
+        "Jobs are path-filtered so a change in one component does not run every component's tests",
+        "Proven on the PR: link a CI run that fails on a deliberately broken test commit and passes after reverting it",
+        "uv cache enabled via astral-sh/setup-uv"
+      ],
+      "contracts": [],
+      "out_of_scope": [
+        "Creating any component package (each team creates its own)",
+        "TypeScript CI (platform-07)",
+        "Running golden scenarios (platform-11)"
+      ]
+    },
+    {
+      "key": "platform-02",
+      "milestone": "M0",
+      "title": "platform: generate Pydantic models from contract schemas",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": ["platform-01"],
+      "goal": "Every Python team imports one generated set of models (py_common.models) that matches contracts/schemas exactly, so no team hand-writes its own copy.",
+      "acceptance": [
+        "`uv run python tools/codegen/gen_models.py` regenerates libs/py-common/src/py_common/models/ from contracts/schemas/*.schema.json",
+        "Generated models use extra='forbid'; a test parses every file in contracts/fixtures/valid/<schema>/ with its model and round-trips it (`uv run pytest libs/py-common -k fixtures`)",
+        "Every file in contracts/fixtures/invalid/ is rejected by its model, including has-allergen-field.json (test marked safety)",
+        "CI drift check: regenerating on a clean checkout produces no git diff, otherwise the job fails",
+        "The PR records which generator was used and whether cross-file $ref and the verdict if/then rules are handled; any rule not generated is enforced by a hand-written validator with a test"
+      ],
+      "contracts": ["all schemas in contracts/schemas"],
+      "out_of_scope": [
+        "TypeScript types (platform-07)",
+        "Changing any schema (that is an RFC)",
+        "Protocols and fakes (platform-03, platform-04)"
+      ]
+    },
+    {
+      "key": "platform-03",
+      "milestone": "M0",
+      "title": "platform: py_common Protocols and injectable Clock",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": ["platform-02"],
+      "goal": "Publish every interface from contracts/apis.md as typing.Protocol classes, plus a Clock, so teams code against stable signatures and replay stays deterministic.",
+      "acceptance": [
+        "py_common.interfaces exposes StateClient, JevClient, LayaClient, Transcriber, Speaker, GateDriver and InteractionClassifier with the exact signatures in contracts/apis.md, typed with py_common.models",
+        "Exceptions StateUnavailable, JevUnavailable, LayaUnavailable exported from py_common.errors; ChangeEvent model for subscribe()",
+        "py_common.clock exposes a Clock protocol, SystemClock and ManualClock (advance/set); a test shows ManualClock drives t_ms deterministically",
+        "`uv run pyright libs/py-common` passes in basic mode",
+        "A test asserts each Protocol's method names match the list in contracts/apis.md, so drift is caught"
+      ],
+      "contracts": ["contracts/apis.md"],
+      "out_of_scope": [
+        "Any implementation, real or fake, other than ManualClock and SystemClock",
+        "Adding methods not in contracts/apis.md (raise an RFC instead)"
+      ]
+    },
+    {
+      "key": "platform-04",
+      "milestone": "M0",
+      "title": "platform: InMemoryStateClient and scenario loader",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": ["platform-03"],
+      "goal": "Ship the reference fake for StateClient and a loader for scenario files, so every Python team can build and test with no database.",
+      "acceptance": [
+        "py_common.fakes.InMemoryStateClient implements every StateClient method, including subscribe() delivering ChangeEvents on insert and update",
+        "Failure injection: set_unavailable(True) and fail_next(n) make methods raise StateUnavailable (test)",
+        "upsert_entities never deletes and never overwrites first_seen_t_ms (test marked safety); amendments keep prior ticket revisions (test)",
+        "list_interactions returns events ordered by t_start_ms; duplicate event_id is a no-op",
+        "py_common.scenarios.load_scenario(path) populates bins, late entities, tickets, plate bindings and events; all five files in contracts/scenarios/ load (`uv run pytest libs/py-common -k scenario`)",
+        "Scenario iteration yields events and plates-at-pass in time order"
+      ],
+      "contracts": ["StateClient", "scenario", "ticket", "entity", "interaction_event", "verdict"],
+      "out_of_scope": [
+        "The real StateClient (state-03)",
+        "Computing verdicts or propagating allergens (provenance)"
+      ]
+    },
+    {
+      "key": "platform-05",
+      "milestone": "M1",
+      "title": "platform: end-to-end harness on fakes (tools/e2e)",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": ["platform-04", "provenance-02", "intake-01"],
+      "goal": "Prove the pieces fit: run each golden scenario and a typed-note ticket through intake, state, provenance and the output fakes, and compare against the expected verdicts.",
+      "acceptance": [
+        "`uv run python -m tools.e2e --all-scenarios` runs every file in contracts/scenarios/ on InMemoryStateClient in rules_only mode and exits non-zero on any mismatch with `expected` (decision, allergens reached, reason codes, chain event IDs)",
+        "`uv run python -m tools.e2e --note \"peanut allergy, traces matter\"` goes through FakeJev, answers any questions from a scripted answer file, sends the ticket, and prints the stored Ticket",
+        "Verdicts drive ConsoleGate and ConsoleSpeaker if experience has shipped them; otherwise the harness prints the verdict and notes the missing fake",
+        "Each component is used only through its published interface or entry point; the harness imports no team internals",
+        "Output is deterministic under ManualClock (two runs, identical output, shown in the PR)"
+      ],
+      "contracts": ["scenario", "parse_result", "ticket", "verdict", "StateClient", "GateDriver", "Speaker"],
+      "out_of_scope": [
+        "Real SpacetimeDB (platform-12)",
+        "CI wiring (platform-11)",
+        "Laya or full mode"
+      ]
+    },
+    {
+      "key": "platform-06",
+      "milestone": "M0",
+      "title": "platform: shared StateClient contract test suite",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": ["platform-04"],
+      "goal": "One pytest suite, parametrized over StateClient implementations, defines the behavior both the fake and the real client must have.",
+      "acceptance": [
+        "py_common.testing.state_contract exposes a parametrizable suite covering every StateClient method, idempotent writes by primary key, time-ordered list_interactions, preserved first_seen_t_ms, kept ticket revisions, and StateUnavailable on failure",
+        "The suite passes against InMemoryStateClient (`uv run pytest libs/py-common -k state_contract`)",
+        "README section explains how state plugs in the real client via a fixture"
+      ],
+      "contracts": ["StateClient"],
+      "out_of_scope": [
+        "Running the suite against a real database (state-03 does that)"
+      ]
+    },
+    {
+      "key": "platform-07",
+      "milestone": "M0",
+      "title": "platform: generate TypeScript types from contract schemas",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": ["platform-01"],
+      "goal": "Give experience generated TypeScript types for every contract message, so web apps never hand-write contract shapes.",
+      "acceptance": [
+        "libs/ts-contracts with `npm run gen` that writes .d.ts types for every schema in contracts/schemas",
+        "`npx tsc --noEmit` type-checks a test file that imports every valid fixture as its generated type",
+        "CI job: regenerating produces no git diff, and tsc passes",
+        "The PR records the generator used and any schema features it could not express"
+      ],
+      "contracts": ["all schemas in contracts/schemas"],
+      "out_of_scope": [
+        "SpacetimeDB table bindings (state-08)",
+        "Any experience app code"
+      ]
+    },
+    {
+      "key": "platform-08",
+      "milestone": "M0",
+      "title": "platform: make bootstrap and seed scripts idempotent",
+      "type": "task",
+      "prio": "p2",
+      "flags": [],
+      "blocked_by": [],
+      "goal": "tools/bootstrap_github.sh and tools/seed_issues.py can be re-run safely, so labels, milestones, boards and backlog issues never duplicate.",
+      "acceptance": [
+        "Both scripts support --dry-run that prints every action without calling GitHub",
+        "A second real run creates zero new labels, milestones or issues (paste the summary line of both runs)",
+        "seed_issues.py validates every tools/backlog/*.json against the documented shape and reports unknown blocked_by keys before creating anything"
+      ],
+      "contracts": [],
+      "out_of_scope": [
+        "Changing label names or the backlog shape (Director decision)"
+      ]
+    },
+    {
+      "key": "platform-09",
+      "milestone": "M0",
+      "title": "platform: lint .claude/agents definitions in CI",
+      "type": "task",
+      "prio": "p2",
+      "flags": ["good-first-task"],
+      "blocked_by": ["platform-01"],
+      "goal": "Catch broken agent definitions before they break a launch.",
+      "acceptance": [
+        "tools/check_agents.py parses the YAML frontmatter of every .claude/agents/*.md and fails on missing name or description, duplicate names, or unknown keys from a documented allowlist",
+        "Runs in CI; `python3 tools/check_agents.py` passes on main"
+      ],
+      "contracts": [],
+      "out_of_scope": [
+        "Editing agent prompts (Director owns their content)"
+      ]
+    },
+    {
+      "key": "platform-10",
+      "milestone": "M0",
+      "title": "platform: PR checks for cross-team and contract labels",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": ["platform-01"],
+      "goal": "CI enforces the lane rules: a PR touching more than one team's paths needs `cross-team`, and one touching contracts/ needs `contract-change`.",
+      "acceptance": [
+        "CI job runs `python3 tools/check_ownership.py --diff origin/main` and posts the touched teams in the job summary",
+        "Fails if more than one team is touched without the cross-team label, or contracts/ is touched without contract-change (uv.lock regeneration is exempt)",
+        "Demonstrated on the PR with a throwaway commit that trips the check"
+      ],
+      "contracts": [],
+      "out_of_scope": [
+        "Required-review enforcement (labels are the approval mechanism, see WORKFLOW.md)"
+      ]
+    },
+    {
+      "key": "platform-11",
+      "milestone": "M1",
+      "title": "platform: CI job running golden and generated scenarios",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": ["platform-05", "sim-01"],
+      "goal": "Every PR touching provenance, contracts or tools/e2e runs all golden scenarios end to end, and sim-generated scenarios run nightly.",
+      "acceptance": [
+        "`golden-scenarios` CI job runs `uv run python -m tools.e2e --all-scenarios` on PRs touching components/provenance/, contracts/ or tools/e2e/",
+        "Nightly scheduled job generates a batch with the sim generator and runs it through the harness; failures open or update a type:bug issue",
+        "Job summary lists each scenario with pass or fail"
+      ],
+      "contracts": ["scenario", "verdict"],
+      "out_of_scope": [
+        "Writing scenarios (sim, any team via PR)"
+      ]
+    },
+    {
+      "key": "platform-12",
+      "milestone": "M1",
+      "title": "platform: run e2e against the real StateClient",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": ["platform-05", "state-03"],
+      "goal": "Satisfy the M1 exit item that the vertical slice runs on a real local SpacetimeDB, not only the fake.",
+      "acceptance": [
+        "`uv run python -m tools.e2e --all-scenarios --state real` uses state's StateClient against a local DB started by state's dev script",
+        "Results match the InMemoryStateClient run scenario by scenario",
+        "CI job installs the SpacetimeDB CLI with state's script and runs it; if the CLI cannot run on CI runners, the PR says so and the job is a documented local-only command"
+      ],
+      "contracts": ["StateClient", "scenario"],
+      "out_of_scope": [
+        "Changing the StateClient implementation (state)"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "scenario_id": "unknown-tool-mid-shift",
+  "description": "A spoon first appears mid-shift, not from the clean stack (unknown history), and touches the plate. Must hold even though no allergen edge is observed.",
+  "tags": [
+    "invariant-8",
+    "fail-closed"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-3",
+      "label": "steamed rice",
+      "allergen_profile": {
+        "probabilities": {},
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "late_entities": [
+    {
+      "entity_id": "tool-spoon-9",
+      "first_seen_t_ms": 1500,
+      "origin": "unknown"
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t4",
+      "number": 4,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no sesame",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "sesame",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t4",
+      "ticket_id": "t4",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "tool-spoon-9",
+      "b_id": "plate-t4",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t4",
+      "ticket_id": "t4",
+      "t_ms": 3000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t4",
+      "ticket_revision": 1,
+      "decision": "hold",
+      "allergens_reached": [
+        "sesame"
+      ],
+      "reason_codes": [
+        "unknown_history"
+      ]
+    }
+  ]
+}

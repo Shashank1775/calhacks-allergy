@@ -1,0 +1,150 @@
+{
+  "scenario_id": "late-amendment-adds-dairy",
+  "description": "A hand touches butter, then the plate. Revision 1 forbids only peanut and passes. Revision 2 adds milk and must hold on recheck of the full history.",
+  "tags": [
+    "invariant-9"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-1",
+      "label": "satay sauce",
+      "allergen_profile": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    },
+    {
+      "entity_id": "bin-2",
+      "label": "butter",
+      "allergen_profile": {
+        "probabilities": {
+          "milk": 0.99
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t5",
+      "number": 5,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no peanut",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t5",
+      "ticket_id": "t5",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "hand-p1-right",
+      "b_id": "bin-2",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "hand-p1-right",
+      "b_id": "plate-t5",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t5",
+      "ticket_id": "t5",
+      "t_ms": 3000
+    }
+  ],
+  "amendments": [
+    {
+      "ticket_id": "t5",
+      "number": 5,
+      "revision": 2,
+      "status": "amended",
+      "created_t_ms": 4000,
+      "source": "typed",
+      "note": "no peanut, also no dairy",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        },
+        {
+          "allergen_unit_id": "milk",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t5",
+      "ticket_revision": 1,
+      "decision": "pass",
+      "allergens_reached": [
+        "milk"
+      ]
+    },
+    {
+      "plate_id": "plate-t5",
+      "ticket_revision": 2,
+      "decision": "hold",
+      "allergens_reached": [
+        "milk"
+      ],
+      "reason_codes": [
+        "exact_flag"
+      ],
+      "chain_event_ids": [
+        "e1",
+        "e2"
+      ]
+    }
+  ]
+}

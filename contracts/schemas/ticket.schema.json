@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ticket.schema.json",
+  "title": "Ticket",
+  "description": "A sent ticket and its constraints, as stored in SpacetimeDB (logical view of the ticket + ticket_constraint tables). Producer: intake. Consumers: provenance, experience.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ticket_id", "number", "revision", "status", "created_t_ms", "source", "note", "pass_threshold", "constraints", "exceptions"],
+  "properties": {
+    "ticket_id": { "type": "string", "pattern": "^t[0-9a-z-]+$" },
+    "number": { "type": "integer", "minimum": 0, "description": "Short number spoken by the gate, e.g. 7 for \"Hold seven\"." },
+    "revision": { "type": "integer", "minimum": 1, "description": "Bumped on every amendment. A verdict is tied to one revision." },
+    "status": { "enum": ["sent", "amended", "closed"] },
+    "created_t_ms": { "$ref": "common.schema.json#/$defs/t_ms" },
+    "source": { "enum": ["typed", "voice"] },
+    "note": { "type": "string" },
+    "pass_threshold": {
+      "description": "Minimum clean-confidence required to pass. Defaults by the strictest severity on the ticket (OQ-4).",
+      "$ref": "common.schema.json#/$defs/probability"
+    },
+    "constraints": {
+      "description": "Forbidden allergens. Never forbidden contacts (invariant 4).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["allergen_unit_id", "severity", "trace_sensitive", "confidence"],
+        "properties": {
+          "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
+          "severity": { "$ref": "common.schema.json#/$defs/severity" },
+          "trace_sensitive": { "type": "boolean" },
+          "confidence": { "$ref": "common.schema.json#/$defs/probability" }
+        }
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["allergen_unit_id", "ingredient"],
+        "properties": {
+          "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
+          "ingredient": { "type": "string" }
+        }
+      }
+    }
+  }
+}

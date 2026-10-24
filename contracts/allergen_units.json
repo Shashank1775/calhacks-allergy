@@ -1,0 +1,15 @@
+{
+  "$comment": "Seed data for the SpacetimeDB allergen_unit table: the nine major US allergens. default_severity values are placeholders pending OQ-3 in docs/OPEN_QUESTIONS.md.",
+  "version": "0.1.0",
+  "units": [
+    { "id": "milk",      "name": "Milk",                "default_severity": "allergy", "parent_id": null },
+    { "id": "egg",       "name": "Egg",                 "default_severity": "allergy", "parent_id": null },
+    { "id": "fish",      "name": "Fish",                "default_severity": "allergy", "parent_id": null },
+    { "id": "shellfish", "name": "Crustacean shellfish", "default_severity": "allergy", "parent_id": null },
+    { "id": "tree_nut",  "name": "Tree nuts",           "default_severity": "allergy", "parent_id": null },
+    { "id": "peanut",    "name": "Peanuts",             "default_severity": "allergy", "parent_id": null },
+    { "id": "wheat",     "name": "Wheat",               "default_severity": "allergy", "parent_id": null },
+    { "id": "soy",       "name": "Soybeans",            "default_severity": "allergy", "parent_id": null },
+    { "id": "sesame",    "name": "Sesame",              "default_severity": "allergy", "parent_id": null }
+  ]
+}

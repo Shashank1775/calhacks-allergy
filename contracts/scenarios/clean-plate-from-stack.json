@@ -1,0 +1,72 @@
+{
+  "scenario_id": "clean-plate-from-stack",
+  "description": "A plate first appears mid-shift, taken from the clean-plate stack zone, is bound to a ticket and goes to the pass with no contacts. It starts clean (invariant 8 exception), so it passes. Contrast with unknown-tool-mid-shift.",
+  "tags": [
+    "invariant-8"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-1",
+      "label": "satay sauce",
+      "allergen_profile": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "late_entities": [
+    {
+      "entity_id": "plate-t6",
+      "first_seen_t_ms": 1500,
+      "origin": "clean_stack"
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t6",
+      "number": 6,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no peanut",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t6",
+      "ticket_id": "t6",
+      "t_ms": 1600
+    }
+  ],
+  "events": [],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t6",
+      "ticket_id": "t6",
+      "t_ms": 3000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t6",
+      "ticket_revision": 1,
+      "decision": "pass",
+      "allergens_reached": []
+    }
+  ]
+}

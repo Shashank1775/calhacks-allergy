@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "parse_result.schema.json",
+  "title": "ParseResult",
+  "description": "What intake's parse step returns for one ticket note. Producer: intake. Consumers: intake apply step, experience tablet UI.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["draft_id", "note", "source", "parser", "cached", "constraints", "exceptions", "questions", "question_threshold", "sendable"],
+  "properties": {
+    "draft_id": { "type": "string" },
+    "note": { "type": "string", "description": "Text as typed, or as transcribed by Cartesia Ink." },
+    "source": { "enum": ["typed", "voice"] },
+    "parser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
+    },
+    "cached": { "type": "boolean", "description": "True when served from the normalized-note cache." },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["allergen_unit_id", "severity", "trace_sensitive", "confidence"],
+        "properties": {
+          "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
+          "severity": { "$ref": "common.schema.json#/$defs/severity" },
+          "trace_sensitive": { "type": "boolean" },
+          "confidence": {
+            "description": "Per-field confidence. A field below question_threshold must have a question.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["allergen_unit_id", "severity", "trace_sensitive"],
+            "properties": {
+              "allergen_unit_id": { "$ref": "common.schema.json#/$defs/probability" },
+              "severity": { "$ref": "common.schema.json#/$defs/probability" },
+              "trace_sensitive": { "$ref": "common.schema.json#/$defs/probability" }
+            }
+          }
+        }
+      }
+    },
+    "exceptions": {
+      "description": "Ingredients the guest says are fine, e.g. coconut under tree_nut.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["allergen_unit_id", "ingredient", "confidence"],
+        "properties": {
+          "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
+          "ingredient": { "type": "string" },
+          "confidence": { "$ref": "common.schema.json#/$defs/probability" }
+        }
+      }
+    },
+    "questions": {
+      "description": "One-tap questions. The ticket cannot be sent while any is unanswered (invariant 3).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question_id", "target", "prompt", "options"],
+        "properties": {
+          "question_id": { "type": "string" },
+          "target": {
+            "description": "Which field the answer fills.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "field"],
+            "properties": {
+              "kind": { "enum": ["constraint", "exception", "new_constraint"] },
+              "index": { "type": "integer", "minimum": 0 },
+              "field": { "type": "string" }
+            }
+          },
+          "prompt": { "type": "string" },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["label", "value"],
+              "properties": { "label": { "type": "string" }, "value": {} }
+            }
+          },
+          "answer": { "description": "Absent until answered." }
+        }
+      }
+    },
+    "question_threshold": { "$ref": "common.schema.json#/$defs/probability" },
+    "sendable": { "type": "boolean", "description": "True only when every question has an answer." }
+  }
+}

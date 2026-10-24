@@ -1,0 +1,22 @@
+name: Cross-team request
+description: Ask another team for something (a field, a fake, a fix, a behavior)
+labels: ["type:request", "status:backlog"]
+body:
+  - type: markdown
+    attributes:
+      value: Label it with the **receiving** team's `team:` label. Link it from your blocked issue.
+  - type: textarea
+    id: need
+    attributes: { label: What we need, description: Be concrete. Include the contract or interface involved. }
+    validations: { required: true }
+  - type: textarea
+    id: why
+    attributes: { label: Why, description: What it unblocks, and which issue is waiting on it. }
+    validations: { required: true }
+  - type: input
+    id: when
+    attributes: { label: Needed by, description: Milestone, e.g. M1 }
+  - type: textarea
+    id: signature
+    attributes: { label: Filed by, placeholder: "— [manager/<team>]" }
+    validations: { required: true }

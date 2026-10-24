@@ -1,0 +1,118 @@
+{
+  "scenario_id": "wash-resets-knife",
+  "description": "Knife scoops satay, is washed, then touches the plate. Passes for a ticket with threshold 0.95 under any transfer efficiency k <= 1.",
+  "tags": [
+    "wash-reset"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-1",
+      "label": "satay sauce",
+      "allergen_profile": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    },
+    {
+      "entity_id": "bin-3",
+      "label": "steamed rice",
+      "allergen_profile": {
+        "probabilities": {},
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t2",
+      "number": 2,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no peanut",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t2",
+      "ticket_id": "t2",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "tool-knife-1",
+      "b_id": "bin-1",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 1600,
+      "t_end_ms": 2000,
+      "a_id": "tool-knife-1",
+      "b_id": "tool-knife-1",
+      "action": "clean.wash",
+      "probability": 0.98,
+      "direction": "a_to_b",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e3",
+      "t_start_ms": 2400,
+      "t_end_ms": 2800,
+      "a_id": "tool-knife-1",
+      "b_id": "plate-t2",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t2",
+      "ticket_id": "t2",
+      "t_ms": 3000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t2",
+      "ticket_revision": 1,
+      "decision": "pass",
+      "allergens_reached": []
+    }
+  ]
+}

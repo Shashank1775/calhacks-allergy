@@ -1,0 +1,104 @@
+{
+  "scenario_id": "time-order-blocks-path",
+  "description": "Knife touches the plate first and only later scoops satay. No time-forward path exists, so peanut cannot have reached the plate.",
+  "tags": [
+    "invariant-5"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-1",
+      "label": "satay sauce",
+      "allergen_profile": {
+        "probabilities": {
+          "peanut": 0.98
+        },
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    },
+    {
+      "entity_id": "bin-3",
+      "label": "steamed rice",
+      "allergen_profile": {
+        "probabilities": {},
+        "unknown": false,
+        "source": "chef",
+        "confirmed_by_chef": true
+      }
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t3",
+      "number": 3,
+      "revision": 1,
+      "status": "sent",
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no peanut",
+      "pass_threshold": 0.95,
+      "constraints": [
+        {
+          "allergen_unit_id": "peanut",
+          "severity": "allergy",
+          "trace_sensitive": true,
+          "confidence": 0.99
+        }
+      ],
+      "exceptions": []
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t3",
+      "ticket_id": "t3",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 1000,
+      "t_end_ms": 1400,
+      "a_id": "tool-knife-1",
+      "b_id": "plate-t3",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "tool-knife-1",
+      "b_id": "bin-1",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t3",
+      "ticket_id": "t3",
+      "t_ms": 3000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t3",
+      "ticket_revision": 1,
+      "decision": "pass",
+      "allergens_reached": []
+    }
+  ]
+}

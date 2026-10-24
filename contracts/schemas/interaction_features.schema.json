@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interaction_features.schema.json",
+  "title": "InteractionFeatures",
+  "description": "Features for one candidate pair at one frame. A classifier window is a time-ordered list of these for the same pair. Contains NO allergen fields (invariant 6); additionalProperties is false so none can be added without an RFC.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "t_ms",
+    "frame_id",
+    "a_id",
+    "b_id",
+    "a_kind",
+    "b_kind",
+    "distance",
+    "overlap",
+    "inside_zone",
+    "zone_kind",
+    "speed_a",
+    "speed_b",
+    "dwell_ms",
+    "wrist_proximity"
+  ],
+  "properties": {
+    "t_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "frame_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "a_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "b_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "a_kind": {
+      "$ref": "common.schema.json#/$defs/entity_kind"
+    },
+    "b_kind": {
+      "$ref": "common.schema.json#/$defs/entity_kind"
+    },
+    "distance": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Box-center distance in normalized frame widths."
+    },
+    "overlap": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Intersection over the smaller box."
+    },
+    "inside_zone": {
+      "type": "boolean",
+      "description": "a is inside the zone that b occupies (e.g. a tool inside a bin slot)."
+    },
+    "zone_kind": {
+      "enum": [
+        "bin_slot",
+        "plating_spot",
+        "wash",
+        "clean_stack",
+        "pass",
+        "other",
+        "none"
+      ],
+      "description": "Zone type only; never the zone ID, so the classifier cannot learn which bin is which."
+    },
+    "speed_a": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Box-center speed in normalized frame widths per second."
+    },
+    "speed_b": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Box-center speed in normalized frame widths per second."
+    },
+    "dwell_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How long the pair has been within candidate range."
+    },
+    "wrist_proximity": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Distance from the nearest wrist to the pair; null if no wrist nearby."
+    }
+  }
+}

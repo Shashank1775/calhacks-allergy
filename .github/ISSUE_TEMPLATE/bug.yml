@@ -1,0 +1,22 @@
+name: Bug
+description: Something is wrong on main
+labels: ["type:bug", "status:backlog"]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happens, description: Include the exact command and output. }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: What should happen }
+    validations: { required: true }
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This could let a plate PASS that should HOLD (label safety-critical and prio:p0)
+  - type: textarea
+    id: signature
+    attributes: { label: Filed by, placeholder: "— [worker/<team>/wN]" }
+    validations: { required: true }

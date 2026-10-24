@@ -1,0 +1,16 @@
+{
+  "t_ms": 184220,
+  "frame_id": 5526,
+  "a_id": "tool-knife-17",
+  "b_id": "bin-4",
+  "a_kind": "tool",
+  "b_kind": "bin",
+  "distance": 0.03,
+  "overlap": 0.64,
+  "inside_zone": true,
+  "zone_kind": "bin_slot",
+  "speed_a": 0.12,
+  "speed_b": 0.0,
+  "dwell_ms": 640,
+  "wrist_proximity": 0.02
+}

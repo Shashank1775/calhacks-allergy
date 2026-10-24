@@ -1,0 +1,281 @@
+{
+  "team": "interactions",
+  "epics": [
+    {
+      "milestone": "M0",
+      "title": "interactions: M0 Foundations",
+      "goals": [
+        "Hand-written frame fixtures with expected events, so we can start before perception lands",
+        "Candidate pairs and allergen-blind feature extraction (invariant 6)",
+        "Zone-rule classifier v0 turning frame JSONL into InteractionEvent JSONL (interactions-01)",
+        "ADR on edge direction and the wash self-loop convention (OQ-9)",
+        "Recorded event JSONL fixture pack that provenance tests against"
+      ]
+    },
+    {
+      "milestone": "M1",
+      "title": "interactions: M1 Vertical Slice",
+      "goals": [
+        "FallbackClassifier: rules always available (invariant 7)",
+        "Streaming pipeline writing edges through StateClient within 500 ms of event end",
+        "Rules re-tuned and regression-tested on perception's recorded frame pack",
+        "Labeled clip dataset format, validator and labeling tool v0 (OQ-12)",
+        "Benchmark harness with a cost-weighted score, plus feature-window export"
+      ]
+    },
+    {
+      "milestone": "M2",
+      "title": "interactions: M2 Live on Pi",
+      "goals": [
+        "Live on the Pi within the 500 ms edge-latency budget",
+        "Rules tuned on owner recordings of the real counter",
+        "Wash detection checked at the real wash station (owner verified)"
+      ]
+    },
+    {
+      "milestone": "M3",
+      "title": "interactions: M3 Models",
+      "goals": [
+        "Labeled dataset from owner clips with a session-level train/held-out split",
+        "LSTM trained on feature windows, running on the Pi CPU within budget",
+        "Frozen held-out benchmark of LSTM vs zone rules",
+        "Adoption ADR: adopt the LSTM only if it wins on the cost-weighted score"
+      ]
+    },
+    {
+      "milestone": "M4",
+      "title": "interactions: M4 Demo Hardening",
+      "goals": [
+        "Drills: LSTM crash, slow inference and DB outage fall back to rules or a buffer, never silence",
+        "Regression suite frozen for the demo"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "key": "interactions-01",
+      "milestone": "M0",
+      "title": "interactions: zone-rule classifier v0 over frame JSONL",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["safety-critical"],
+      "blocked_by": ["interactions-02", "interactions-03"],
+      "goal": "Turn ObservationFrame JSONL into InteractionEvent JSONL with hand-tuned zone rules and event segmentation. This is the always-available classifier everything else falls back to (invariant 7).",
+      "acceptance": [
+        "`uv run --package interactions python -m interactions.run --frames <frames.jsonl> --zones <zones.json> --out events.jsonl` works end to end",
+        "Rules: tool inside a bin_slot with overlap and dwell near a wrist gives transfer.scoop (direction bin to tool). Sustained overlap of a hand or tool with a plate or bin gives transfer.contact (both). Sustained moving overlap across a plate gives transfer.wipe (both). Dwell in the wash zone gives clean.wash as a self-loop (a_id == b_id)",
+        "The segmenter merges per-frame hits into events with t_start_ms <= t_end_ms and deterministic event_ids. Events come out in t_start_ms order per pair (`safety` test)",
+        "Every expected event in the interactions-02 fixtures is matched within a 200 ms tolerance, and the near-miss fixture yields no event with probability >= 0.5: `pytest -k rules_fixtures`",
+        "clean.wash needs the wash zone, a minimum dwell and probability >= the configured wash floor. A `safety` test shows a brief pass through the wash zone yields no wash",
+        "Every output line validates against interaction_event, with classifier {name: zone_rules, version}",
+        "All rule constants live in one config object, logged at startup and encoded in classifier.version"
+      ],
+      "contracts": ["observation_frame", "interaction_features", "interaction_event", "InteractionClassifier"],
+      "out_of_scope": ["LSTM", "StateClient writes (interactions-07)", "Streaming and latency (interactions-07)"]
+    },
+    {
+      "key": "interactions-02",
+      "milestone": "M0",
+      "title": "interactions: hand-written frame fixtures with expected events",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["good-first-task"],
+      "blocked_by": ["platform-01"],
+      "goal": "Unblock rule development before perception-01 lands, with tiny, readable frame JSONL scenes whose correct events are known.",
+      "acceptance": [
+        "At least 4 fixtures under `components/interactions/tests/fixtures/frames/`: knife scoop from a bin slot, hand touching a plate, tool dwelling in the wash zone, and a near miss (tool passes over a plate without dwell)",
+        "Each fixture has 30 frames or fewer, validates against observation_frame, and has a sibling `<name>.expected.json` listing the expected events (action, pair, direction, approximate t_start_ms and t_end_ms)",
+        "A matching zones.json fixture with bin_slot, plating_spot and wash zones",
+        "`uv run --package interactions pytest components/interactions -k fixtures_valid` passes"
+      ],
+      "contracts": ["observation_frame", "interaction_event"],
+      "out_of_scope": ["Recorded or real video", "Classifier code"]
+    },
+    {
+      "key": "interactions-03",
+      "milestone": "M0",
+      "title": "interactions: candidate pairs and allergen-blind features",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["safety-critical"],
+      "blocked_by": ["platform-02", "platform-03"],
+      "goal": "Generate candidate pairs (hand-tool, tool-bin, tool-plate, hand-bin, hand-plate) and compute InteractionFeatures per pair per frame, with no path for allergen information to leak in (invariant 6).",
+      "acceptance": [
+        "Only the five pair types are generated, and only within a configurable distance or overlap. Unit tests cover each pair type and the cutoff",
+        "Features use normalized distance, overlap as intersection over the smaller box, inside_zone, zone_kind (never the zone ID), speeds in normalized units per second, dwell_ms, and wrist_proximity or null",
+        "Every feature row validates against interaction_features (additionalProperties false): `pytest -k features_contract`",
+        "`safety` import-lint test: the features and classifier modules never import or read bin_profile, entity_risk, allergen units or StateClient reads",
+        "`safety` property test: features are identical whatever the bin allergen profiles are",
+        "Features are stable across 15, 30 and 60 FPS resamplings of the same scene, within tolerance"
+      ],
+      "contracts": ["observation_frame", "interaction_features"],
+      "out_of_scope": ["Classification", "Feature windows for the LSTM (interactions-12)"]
+    },
+    {
+      "key": "interactions-04",
+      "milestone": "M0",
+      "title": "interactions: ADR on edge direction and wash self-loop (OQ-9)",
+      "type": "spike",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": [],
+      "goal": "Settle with provenance which way allergens move on each action, and how a wash event (which has no partner entity) is represented.",
+      "acceptance": [
+        "An ADR PR in docs/adr/ covers contact and wipe as both, scoop as source to tool, and wash as a self-loop with a_id == b_id and direction ignored, with the alternatives considered",
+        "The provenance Manager posts ACK on the issue",
+        "A `type:rfc` issue is filed to document the wash self-loop convention in the interaction_event schema description",
+        "OQ-9 is marked for the Director to move to Resolved once merged"
+      ],
+      "contracts": ["interaction_event"],
+      "out_of_scope": ["Changing contracts directly", "Propagation math (provenance)"]
+    },
+    {
+      "key": "interactions-05",
+      "milestone": "M0",
+      "title": "interactions: publish recorded event JSONL fixture pack",
+      "type": "task",
+      "prio": "p0",
+      "flags": [],
+      "blocked_by": ["interactions-01"],
+      "goal": "Ship the fake that provenance and the e2e harness test against: event JSONL produced by the real zone-rule classifier on known scenes.",
+      "acceptance": [
+        "At least 4 event fixtures under `components/interactions/tests/fixtures/events/`, generated by `interactions.run` from the interactions-02 frames, with the regeneration command in the README",
+        "Every line validates against interaction_event",
+        "A test regenerates them and fails on drift: `pytest -k event_pack_fresh`",
+        "Announced on the provenance Team board with paths"
+      ],
+      "contracts": ["interaction_event"],
+      "out_of_scope": ["Synthetic events (sim)", "Golden scenarios in contracts/"]
+    },
+    {
+      "key": "interactions-06",
+      "milestone": "M1",
+      "title": "interactions: FallbackClassifier that always lands on zone rules",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["safety-critical"],
+      "blocked_by": ["interactions-01", "platform-03"],
+      "goal": "Wrap any primary classifier (the LSTM later) so that load failure, exceptions or timeouts fall back to zone rules, and each event names the classifier that produced it (invariant 7).",
+      "acceptance": [
+        "Both zone_rules and FallbackClassifier implement the InteractionClassifier Protocol",
+        "`safety` tests: a primary that is missing, raises, or exceeds the timeout yields zone_rules output, with classifier.name = zone_rules on the event",
+        "A healthy primary's events carry its own name and version",
+        "Fallbacks are logged and counted, and the count is exposed for health reporting",
+        "`uv run --package interactions pytest components/interactions -m safety` passes"
+      ],
+      "contracts": ["InteractionClassifier", "interaction_event"],
+      "out_of_scope": ["Training any LSTM", "Choosing which classifier is primary (adoption ADR, M3)"]
+    },
+    {
+      "key": "interactions-07",
+      "milestone": "M1",
+      "title": "interactions: streaming pipeline writing edges via StateClient",
+      "type": "task",
+      "prio": "p0",
+      "flags": ["safety-critical"],
+      "blocked_by": ["interactions-01", "platform-04"],
+      "goal": "Consume ObservationFrames in-process, emit events incrementally and write them through StateClient.record_interactions within 500 ms of event end, never dropping one silently.",
+      "acceptance": [
+        "The pipeline accepts a frame iterator (in-process on the Pi, or JSONL replay) and emits events as segments close",
+        "Event end to record_interactions within 500 ms, measured with FakeClock in a test",
+        "Batched writes with deterministic, idempotent event_ids. Replaying the same frames twice writes no duplicates",
+        "`safety` test: on StateUnavailable, events are buffered and retried, and none are lost once the fake recovers. Buffer depth is exposed for health",
+        "Fake-swap test runs frame fixtures through the pipeline into InMemoryStateClient, and its interactions match the event pack: `pytest -k pipeline_e2e`"
+      ],
+      "contracts": ["observation_frame", "interaction_event", "StateClient"],
+      "out_of_scope": ["Real SpacetimeDB integration on the Pi (M2)", "LSTM"]
+    },
+    {
+      "key": "interactions-08",
+      "milestone": "M1",
+      "title": "interactions: tune rules on perception's recorded frame pack",
+      "type": "task",
+      "prio": "p1",
+      "flags": ["safety-critical"],
+      "blocked_by": ["perception-01", "interactions-01"],
+      "goal": "Move from hand-written frames to perception's recorded fixture pack (published after perception-01), label the expected events, and lock them in as a regression suite.",
+      "acceptance": [
+        "Expected-event files for each scene in perception's fixture pack, committed under our tests/fixtures/",
+        "Rules re-tuned, with constants changed only in the config object. The PR shows matches and misses before and after",
+        "Regression test `pytest -k recorded_pack` passes. No expected transfer is missed, and no false clean.wash occurs",
+        "The scene where a tool leaves and re-enters produces events on the new entity ID, never the old one"
+      ],
+      "contracts": ["observation_frame", "interaction_event"],
+      "out_of_scope": ["Collecting new recordings", "LSTM"]
+    },
+    {
+      "key": "interactions-09",
+      "milestone": "M1",
+      "title": "interactions: labeled clip dataset format and validator",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": ["platform-01"],
+      "goal": "Define how real recordings and their labels are stored and split, so the owner can start recording (OQ-12) and the benchmark can't leak.",
+      "acceptance": [
+        "Team ADR in docs/adr/: session layout (perception recorder manifest, frames.jsonl, labels.jsonl with pair, action, direction, t_start_ms, t_end_ms, labeler), and a split policy by session, never by clip",
+        "`uv run --package interactions python -m interactions.dataset.validate <dir>` checks the layout, label validity against frames, and overlaps",
+        "A held-out manifest format with a content hash, so the held-out set can be frozen",
+        "A tiny labeled sample session committed under tests/fixtures/ (100 KB or less) passes validation",
+        "An owner-facing recording guide posted on the issue (what to film, how long, naming)"
+      ],
+      "contracts": ["observation_frame", "interaction_event"],
+      "out_of_scope": ["Labeling UI (interactions-10)", "Video storage (data/ only, never git)"]
+    },
+    {
+      "key": "interactions-10",
+      "milestone": "M1",
+      "title": "interactions: labeling tool v0 for candidate segments",
+      "type": "task",
+      "prio": "p2",
+      "flags": [],
+      "blocked_by": ["interactions-09", "interactions-03"],
+      "goal": "Let a person label actions quickly by stepping through candidate-pair segments from a recorded session, writing labels.jsonl in the dataset format.",
+      "acceptance": [
+        "`python -m interactions.labeling --session <dir>` steps through candidate segments, takes one keypress per action (contact, scoop, wipe, wash, unimportant, skip), and writes labels.jsonl",
+        "Shows the video frame with both boxes when video is available, and falls back to a text view otherwise",
+        "Output passes the interactions-09 validator: `pytest -k labeling_output`",
+        "Resumable: re-running skips already-labeled segments"
+      ],
+      "contracts": ["interaction_features"],
+      "out_of_scope": ["Web UI", "Multi-labeler agreement metrics"]
+    },
+    {
+      "key": "interactions-11",
+      "milestone": "M1",
+      "title": "interactions: benchmark harness with cost-weighted score",
+      "type": "task",
+      "prio": "p1",
+      "flags": ["safety-critical"],
+      "blocked_by": ["interactions-09", "interactions-01"],
+      "goal": "A frozen, reproducible way to compare classifiers on held-out labeled sessions. It decides LSTM adoption in M3 (invariant 7).",
+      "acceptance": [
+        "`python -m interactions.training.benchmark --classifier zone_rules --heldout <manifest>` writes report.json plus report.md",
+        "Event-level matching with temporal IoU, and per-action precision and recall",
+        "A cost-weighted score where a missed transfer and a false clean.wash carry the heaviest weights. The weights are documented in the team ADR",
+        "Refuses to run if the held-out manifest hash doesn't match the frozen one",
+        "Runs on the sample session in CI: `pytest -k benchmark_smoke`"
+      ],
+      "contracts": ["interaction_event"],
+      "out_of_scope": ["Training the LSTM", "The adoption decision itself (M3 ADR)"]
+    },
+    {
+      "key": "interactions-12",
+      "milestone": "M1",
+      "title": "interactions: export per-pair feature windows to JSONL",
+      "type": "task",
+      "prio": "p2",
+      "flags": [],
+      "blocked_by": ["interactions-03"],
+      "goal": "Produce the LSTM's training input: time-ordered windows of InteractionFeatures per pair, in a format sim can also generate synthetically.",
+      "acceptance": [
+        "`python -m interactions.training.export_windows --frames <jsonl> --out windows.jsonl --len <n> --stride <k>` writes one window per line",
+        "Every row in every window validates against interaction_features. A window never mixes pairs",
+        "Window spec (length, stride, padding) documented in the README and shared on the sim Team board",
+        "`pytest -k windows` covers boundaries and short tracks"
+      ],
+      "contracts": ["interaction_features"],
+      "out_of_scope": ["Model training", "Labels join (done at training time)"]
+    }
+  ]
+}
