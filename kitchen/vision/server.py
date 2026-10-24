@@ -7,7 +7,8 @@ Reads: the latest FrameOutput and RGB frame (VisionStatus, updated by the frame 
 Emits: the Vision HTTP API (contracts/apis.md), with the standard error body and CORS for VISION_CORS_ORIGINS only
 Rules: fail closed: /health last_frame_t_ms stops advancing when frames stop, so the gate can go to fault;
        /plates/start never guesses, every refusal is a 409 with the contract's code;
-       endpoints never block the frame loop: update() only swaps references, JPEGs are encoded in the HTTP thread
+       endpoints never block the frame loop: update() only swaps references, JPEGs are encoded in the HTTP thread;
+       open streams never stall /health or /plates/start: they wait for frames on their own few threads
 
     uv run python -m kitchen.vision.server --fake --port 8002     # FakeVisionAPI: test pattern, no camera or models
     curl localhost:8002/health                                     # {"fps": ..., "detector": ..., "last_frame_t_ms": ...}
@@ -19,8 +20,10 @@ import argparse
 import logging
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections import deque
+from collections.abc import AsyncIterator, Callable
 
+import anyio
 import numpy as np
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -44,6 +47,10 @@ FPS_SMOOTHING = 0.1
 # frozen picture that looks live, and a disconnected client's thread is freed.
 STREAM_IDLE_S = 5.0
 
+# How many threads all open streams share to wait for frames and encode them. Streams never use the pool that runs
+# /health and /plates/start, so a room full of open streams can't stall the gate's health check or "start plate".
+STREAM_THREADS = 8
+
 # The contract error code for each HTTP error FastAPI raises itself (unknown path, wrong method).
 HTTP_ERROR_CODES = {404: "not_found", 405: "method_not_allowed"}
 
@@ -58,10 +65,12 @@ class VisionStatus:
     one it has already passed here.
     """
 
-    def __init__(self, detector: str):
+    def __init__(self, detector: str, history_ms: int = VisionSettings.track_lost_ms):
         self.detector = detector
+        self.history_ms = history_ms
         self._new_frame = threading.Condition()
         self._observation = None
+        self._history: deque = deque()  # observations within history_ms of the newest, oldest first
         self._rgb = None
         self._frame_number = 0  # counts update() calls; the stream uses it, since frame_id may restart with a source
         self._fps = 0.0
@@ -80,6 +89,9 @@ class VisionStatus:
                 interval_ms = observation["t_ms"] - self._observation["t_ms"]
                 self._fps = smoothed_fps(self._fps, interval_ms)
             self._observation = observation
+            self._history.append(observation)
+            while self._history[0]["t_ms"] < observation["t_ms"] - self.history_ms:
+                self._history.popleft()
             self._rgb = rgb
             self._frame_number += 1
             self._new_frame.notify_all()
@@ -88,6 +100,12 @@ class VisionStatus:
         """The most recent ObservationFrame, or None before the first frame."""
         with self._new_frame:
             return self._observation
+
+    def recent_observations(self) -> list[dict]:
+        """The ObservationFrames within history_ms of the newest, oldest first (empty before the first frame), so
+        "start plate" can count a plate the detector missed in the latest frame."""
+        with self._new_frame:
+            return list(self._history)
 
     def health(self) -> dict:
         """The /health body: exactly fps, detector and last_frame_t_ms (contracts/apis.md).
@@ -139,11 +157,14 @@ def encode_jpeg(rgb: np.ndarray) -> bytes:
     return jpeg.tobytes()
 
 
-def mjpeg_parts(status: VisionStatus, idle_s: float) -> Iterator[bytes]:
-    """One multipart MJPEG part per new frame, ending once no new frame has come for idle_s."""
+async def mjpeg_parts(status: VisionStatus, idle_s: float, threads: anyio.CapacityLimiter) -> AsyncIterator[bytes]:
+    """One multipart MJPEG part per new frame, ending once no new frame has come for idle_s.
+
+    The wait for each frame runs on one of `threads`, never on the event loop (it blocks) or on the default pool.
+    """
     frame_number = 0
     while True:
-        frame = status.next_jpeg(frame_number, idle_s)
+        frame = await anyio.to_thread.run_sync(status.next_jpeg, frame_number, idle_s, limiter=threads)
         if frame is None:
             return
         frame_number, jpeg = frame
@@ -191,6 +212,7 @@ def create_app(
         raise ValueError("CORS origins must be listed; a wildcard is not allowed")
 
     app = FastAPI(title="Vision API")
+    stream_threads = anyio.CapacityLimiter(STREAM_THREADS)
     app.add_middleware(
         CORSMiddleware, allow_origins=cors_origins, allow_methods=["GET", "POST"], allow_headers=["Content-Type"]
     )
@@ -231,7 +253,7 @@ def create_app(
     @app.get("/stream.mjpg")
     def stream():
         media_type = f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}"
-        return StreamingResponse(mjpeg_parts(status, stream_idle_s), media_type=media_type)
+        return StreamingResponse(mjpeg_parts(status, stream_idle_s, stream_threads), media_type=media_type)
 
     return app
 

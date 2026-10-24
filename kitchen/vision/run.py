@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     push_zones(state, zones)
 
     loop = build_frame_loop(settings, zones, consumers=[])
-    status = VisionStatus(loop.detector.backend) if args.serve else None
+    status = VisionStatus(loop.detector.backend, settings.track_lost_ms) if args.serve else None
     loop.status = status
     closers = []
     if args.out:
@@ -273,7 +273,13 @@ def main(argv: list[str] | None = None) -> int:
 
         def bind(ticket_id: str) -> str:
             return start_plate(
-                state, status.latest_observation(), zones, ticket_id, clock.now_ms(), settings.plate_bind_max_age_ms
+                state,
+                status.recent_observations(),
+                zones,
+                ticket_id,
+                clock.now_ms(),
+                settings.plate_bind_max_age_ms,
+                settings.track_lost_ms,
             )
 
         app = create_app(status, bind, parse_cors_origins(settings.cors_origins))
