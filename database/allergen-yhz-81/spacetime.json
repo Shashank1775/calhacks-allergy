@@ -1,0 +1,5 @@
+{
+  "database": "allergen-yhz81",
+  "server": "local",
+  "module-path": "./spacetimedb"
+}
