@@ -6,15 +6,18 @@ Step:  provenance graph
 Reads: kitchen.graph (LiveRisk, ProvenanceGraph); FakeStateClient, FakeClock and the golden scenarios (kitchen.shared);
        VerdictService (kitchen.verdict), to show a risk row doesn't judge a plate again
 Emits: nothing
-Rules: known-clean source (unknown history shows unknown until a wash); fail closed (an error writes nothing and never
-       shows clean); the verdict is untouched (no row changes what the graph answers or moves an entity)
+Rules: known-clean source (unknown history shows unknown until a wash, and an entity the database doesn't hold yet
+       is waited for, never shown clean); fail closed (an error writes nothing and never shows clean); the verdict is
+       untouched (no row changes what the graph answers or moves an entity)
 """
 
+import threading
 import time
 
 import pytest
 
 from kitchen.graph import LiveRisk, ProvenanceGraph
+from kitchen.graph.risk import IDLE_PER_BUSY, wait_after_update
 from kitchen.shared.clock import FakeClock
 from kitchen.shared.fakes import GOLDEN_SCENARIO_PATHS, FakeStateClient, load_scenario
 from kitchen.shared.fakes.scenarios import scenario_entity
@@ -288,6 +291,131 @@ def test_an_entity_the_database_lacks_waits_for_its_registration():
     shift.state.register_entity(scenario_entity("tool-spoon-9", "unknown", 500))
     assert shift.risk.update_once() is True
     assert shift.shown("tool-spoon-9")["sesame"] == pytest.approx(0.02)
+
+
+@pytest.mark.safety
+def test_an_edge_that_lands_before_the_entity_registers_is_shown_once_it_does():
+    """Known-clean source: a hand that dipped into satay touches a clean-stack plate the entity store hasn't registered
+    yet (it registers within a tick of seeing it). The placeholder an edge names looks the same unregistered as it
+    does untouched, so the update must still wait for the plate: registered clean, it would show clean."""
+    shift = Shift(
+        [
+            edge("e-dip", 1000, "hand-p1-left", "bin-1", direction="b_to_a"),
+            edge("e-touch", 2000, "hand-p1-left", "plate-t9"),
+        ]
+    )
+
+    assert shift.risk.update_once() is False
+    assert shift.rows_of("plate-t9") == []
+
+    shift.state.register_entity(scenario_entity("plate-t9", "clean_stack", 2500))
+    assert shift.risk.update_once() is True
+    assert shift.shown("plate-t9")["peanut"] == pytest.approx(0.98 * 0.9 * 0.9, abs=1e-3)
+    reach = {
+        record["allergen_unit_id"]: record["probability"]
+        for record in ProvenanceGraph(shift.state).reach("plate-t9", LATER)
+    }
+    assert reach["peanut"] == pytest.approx(
+        shift.shown("plate-t9")["peanut"], abs=1e-3
+    )  # the overlay agrees with the verdict
+
+
+@pytest.mark.safety
+def test_a_tool_that_scooped_before_it_registered_shows_the_scoop_once_it_does():
+    shift = Shift([edge("e-scoop-9", 1000, "tool-ladle-9", "bin-1", "transfer.scoop", 0.95, "b_to_a")])
+
+    assert shift.risk.update_once() is False
+
+    shift.state.register_entity(scenario_entity("tool-ladle-9", "clean_stack", 1500))
+    assert shift.risk.update_once() is True
+    assert shift.shown("tool-ladle-9")["peanut"] == pytest.approx(0.931)
+
+
+@pytest.mark.safety
+def test_the_background_thread_waits_for_the_entity_to_register():
+    shift = Shift(
+        [
+            edge("e-dip", 1000, "hand-p1-left", "bin-1", direction="b_to_a"),
+            edge("e-touch", 2000, "hand-p1-left", "plate-t9"),
+        ]
+    )
+    shift.risk.start(hz=100)
+    try:
+        assert wait_until(lambda: shift.shown("hand-p1-left").get("peanut", 0) > 0.8)  # the hand is up to date
+        time.sleep(0.1)  # and the thread has had several ticks with the plate still missing
+        shift.state.register_entity(scenario_entity("plate-t9", "clean_stack", 2500))
+
+        assert wait_until(lambda: shift.shown("plate-t9").get("peanut", 0) > 0.7)
+    finally:
+        shift.risk.stop()
+
+
+@pytest.mark.safety
+def test_a_risk_row_never_carries_an_older_position_than_the_store_just_wrote():
+    """The entity store writes the plate's move to the pass between LiveRisk's read of the plate and its write. A risk
+    row that copied the older zone would take the plate back off the pass for the verdict service (a second
+    plate_at_pass judgment) and for the gate. The store takes the same lock around its rows, so its row waits for the
+    risk row and comes after it."""
+    shift = Shift(
+        [
+            edge("e-dip", 700, "hand-p1-left", "bin-1", direction="b_to_a"),
+            edge("e-touch", 900, "hand-p1-left", "plate-t1"),
+        ]
+    )
+    shift.state.move_entity(EntityState("plate-t1", 1, 800, "plating-spot", BOX, {}, False))
+    lock = threading.Lock()
+    risk = LiveRisk(shift.state, shift.clock, write_lock=lock)
+
+    def store_moves_the_plate_to_the_pass():
+        with lock:
+            shift.state.move_entity(EntityState("plate-t1", 2, 1000, "pass", BOX, {}, False))
+
+    real_get_entity = shift.state.get_entity
+    store_threads = []
+
+    def get_entity_as_the_store_moves_the_plate(entity_id):
+        entity = real_get_entity(entity_id)
+        if entity_id == "plate-t1" and not store_threads:
+            store_threads.append(threading.Thread(target=store_moves_the_plate_to_the_pass))
+            store_threads[0].start()
+            store_threads[0].join(timeout=0.3)  # a store that isn't held up writes inside the gap
+        return entity
+
+    shift.state.get_entity = get_entity_as_the_store_moves_the_plate
+    risk.update_once()
+    store_threads[0].join()
+
+    rows = shift.rows_of("plate-t1")
+    assert [row.t_ms for row in rows] == sorted(row.t_ms for row in rows)  # no row takes the plate back in time
+    assert any(row.caused_by == "e-touch" for row in rows)
+    now = real_get_entity("plate-t1")
+    assert (now["zone"], now["last_seen_t_ms"]) == ("pass", 1000)
+
+
+def test_the_update_period_stretches_with_the_time_an_update_takes():
+    assert wait_after_update(period_s=0.2, took_s=0.01) == 0.2  # a quick update: the rate cap sets the pace
+    assert wait_after_update(period_s=0.2, took_s=0.5) == pytest.approx(0.5 * IDLE_PER_BUSY)  # a slow one: it idles
+
+
+def test_a_slow_update_cannot_keep_the_thread_busy():
+    """A long shift makes every update slower. The thread idles IDLE_PER_BUSY times as long as an update took, so it
+    never takes more than 1 / (1 + IDLE_PER_BUSY) of the camera's CPU."""
+    shift = Shift([scoop()])
+    calls = []
+
+    def slow_update_that_wants_another():
+        calls.append(1)
+        time.sleep(0.05)
+        return False  # asks to be run again at once
+
+    shift.risk.update_once = slow_update_that_wants_another
+    shift.risk.start(hz=100)
+    try:
+        time.sleep(0.6)
+    finally:
+        shift.risk.stop()
+
+    assert len(calls) <= 4  # 0.05 s of work + 0.2 s of idle each; unthrottled it would be about 10
 
 
 def test_it_updates_in_the_background_when_an_edge_lands():
