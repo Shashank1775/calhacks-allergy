@@ -1,72 +1,58 @@
 # SpacetimeDB tables and reducers
 
-Logical spec. The **partner** implements it as a SpacetimeDB module in `database/` and may choose physical types (structs, `Vec`, JSON strings) as long as the [`StateClient`](apis.md#stateclient) and generated TypeScript bindings expose these fields.
+Logical spec. The **partner** implements it as a SpacetimeDB module (Rust) in `database/allergen-yhz-81/`, database `allergen-yhz81`. The module may use its own physical names (for example `id` for `entity_id`, `p` for `probability`, or a list of `{allergen_id, p}` pairs for `probabilities`) as long as the [`StateClient`](apis.md#stateclient) and the generated TypeScript bindings expose these fields.
 
 ## Writers
 
-Every table has exactly **one** writer team. The module enforces this by checking the caller's identity against a `writer` registry, so a bug in one team cannot corrupt another team's table.
+Every table has exactly **one** writer team, and each team writes only through its own `StateClient` methods.
 
 | Table | Writer | Readers | Schema |
 |---|---|---|---|
-| `allergen_unit` | partner database (seed from `allergen_units.json`) | all | `allergen_units.json` |
-| `shift` | partner database (`start_shift`) | all | — |
+| `allergen` | partner database (seeded from `allergen_units.json`) | all | [`allergen_units.json`](allergen_units.json) |
 | `zone` | vision (calibration) | all | — |
 | `ticket` | orders | verdict, partner graph, outputs | `ticket` |
-| `ticket_constraint` | orders | verdict, partner graph, outputs | `ticket.constraints[]` |
-| `ticket_exception` | orders | verdict, partner graph, outputs | `ticket.exceptions[]` |
-| `bin_profile` | orders | verdict, partner graph, outputs | `allergen_profile` |
-| `chef_confirmation` | orders | outputs | — |
-| `entity` | partner entity store | all | `entity` minus `allergen_profile` |
+| `bin_profile` | orders | partner graph, verdict, outputs | `allergen_profile` |
+| `entity` | partner entity store | all | `entity` (identity fields) |
+| `entity_state` | partner (entity store and graph) | all | `entity` (zone, box and allergen profile over time) |
 | `plate_binding` | vision | verdict, partner graph, outputs | `scenario.plate_bindings[]` |
 | `interaction` | partner interactions | partner graph, outputs | `interaction_event` |
-| `entity_risk` | partner graph | outputs | `allergen_profile` (live, propagated) |
-| `verdict` | verdict | outputs | `verdict` minus `chain` |
-| `verdict_step` | verdict | outputs | `verdict.chain[]` |
-| `mistake_pattern` | verdict | outputs | `mistake_pattern` |
+| `verdict` | verdict | outputs | `verdict` |
 
-The logical `Entity.allergen_profile` in the schema is the join: `bin_profile` for bins, `entity_risk` for everything else, and `{unknown: true}` for entities with `origin: unknown` that nothing has reset yet.
+The logical `Entity` in the schema is the `entity` row joined with its latest `entity_state` (zone, box, allergens, unknown). A bin's allergens come from `bin_profile` until the graph writes a state for it. A plate's `ticket_id` comes from `plate_binding`.
 
 ## Tables
 
 | Table | Primary key | Indexed | Columns |
 |---|---|---|---|
-| `allergen_unit` | `id` | | `name`, `default_severity`, `parent_id?` |
-| `shift` | `shift_id` | | `wall_clock_start`, `active` |
+| `allergen` | `id` | | `name`, `default_severity` |
 | `zone` | `zone_id` | `kind` | `kind` (`bin_slot`, `plating_spot`, `wash`, `clean_stack`, `pass`, `other`), `polygon` (normalized points) |
-| `ticket` | `(ticket_id, revision)` | `ticket_id`, `status` | `number`, `status`, `created_t_ms`, `source`, `note`, `pass_threshold`, `is_latest` |
-| `ticket_constraint` | `(ticket_id, revision, allergen_unit_id)` | `ticket_id` | `severity`, `trace_sensitive`, `confidence` |
-| `ticket_exception` | `(ticket_id, revision, allergen_unit_id, ingredient)` | `ticket_id` | |
-| `bin_profile` | `entity_id` | | `probabilities`, `source`, `unclear_ingredients`, `confirmed_by_chef` |
-| `chef_confirmation` | `confirmation_id` | `entity_id` | `ingredient`, `status` (`open`, `answered`), `allergen_unit_ids` |
-| `entity` | `entity_id` | `kind`, `zone` | `label`, `zone`, `box`, `track_id`, `origin`, `first_seen_t_ms`, `last_seen_t_ms` |
+| `ticket` | `ticket_id` | | `revision`, `number`, `note`, `source`, `created_t_ms`, `pass_threshold`, `forbidden` (allergen IDs) |
+| `bin_profile` | `entity_id` | | `probabilities`, `unknown`, `source` |
+| `entity` | `entity_id` | `kind` | `kind`, `label`, `origin`, `first_seen_t_ms` |
+| `entity_state` | `state_id` (auto) | `(entity_id, t_ms)` | `entity_id`, `version`, `t_ms`, `zone`, `box`, `probabilities`, `unknown`, `caused_by` (the `event_id` that changed it, or none) |
 | `plate_binding` | `plate_id` | `ticket_id` | `ticket_id`, `t_ms` |
-| `interaction` | `event_id` | `t_start_ms`, `a_id`, `b_id` | all `interaction_event` fields |
-| `entity_risk` | `entity_id` | | `probabilities`, `unknown`, `source`, `t_ms` |
-| `verdict` | `verdict_id` | `ticket_id`, `plate_id` | all `verdict` fields except `chain` |
-| `verdict_step` | `(verdict_id, step)` | `verdict_id` | all `chain_step` fields |
-| `mistake_pattern` | `pattern_id` | `allergen_unit_id` | all `mistake_pattern` fields |
+| `interaction` | `event_id` | `t_start_ms` | `t_end_ms`, `a_id`, `b_id`, `action`, `probability`, `direction`, `classifier` |
+| `verdict` | `verdict_id` | `ticket_id`, `plate_id` | all `verdict` fields, including its `chain` |
 
-Every ticket revision is kept, in all three ticket tables, so any verdict can be re-explained against the exact revision it judged. `put_ticket` sets `is_latest` on the new revision and clears it on the previous one in the same transaction.
+- **History is append-only.** `entity` rows are written once and `entity_state` rows are never edited or deleted; a change is a new row. The graph and late-change rechecks read the full history from these rows and from `interaction`.
+- **A ticket row holds the latest revision.** An amendment replaces it with `revision + 1`. Each verdict records the revision it judged, and anything acting on an older revision's verdict holds.
+- **Each shift starts with an empty database.** Tools, hands and plates start clean because vision gives them `origin: shift_start`.
 
 ## Reducers
 
 | Reducer | Caller | Effect |
 |---|---|---|
-| `seed_allergen_units(units)` | partner database (init) | Upsert `allergen_unit` |
-| `start_shift(shift_id, wall_clock_start)` | partner database (shift CLI, run by a person at shift start) | New active shift. Tools, hands and plates start clean |
-| `set_zones(zones)` | vision | Replace calibration |
-| `put_ticket(ticket)` | orders | Insert, or amend with `revision + 1` and new constraint rows |
+| `register_entity(entity)` | partner entity store | Insert once. Registering again is a no-op; `first_seen_t_ms` and `origin` never change |
+| `move_entity(state)` | partner entity store (zone, box) and graph (allergens) | Append an `entity_state` row |
+| `record_interaction(event)` | partner interactions | Insert; a duplicate `event_id` is a no-op |
+| `put_ticket(ticket)` | orders | Insert, or replace with the next revision |
 | `put_bin_profile(entity_id, profile)` | orders | Upsert |
-| `open_chef_confirmation(entity_id, ingredient)` / `answer_chef_confirmation(id, allergen_unit_ids)` | orders | |
-| `upsert_entities(entities)` | partner entity store | Batched at ~5 Hz. Never deletes; stale entities keep `last_seen_t_ms` |
-| `bind_plate(plate_id, ticket_id, t_ms)` | vision | |
-| `record_interactions(events)` | partner interactions | Insert; duplicate `event_id` is a no-op |
-| `put_entity_risk(entity_id, profile, t_ms)` | partner graph | Upsert |
-| `record_verdict(verdict, steps)` | verdict | Insert verdict and its chain atomically |
-| `put_mistake_pattern(pattern)` | verdict | Upsert |
+| `set_zones(zones)` | vision | Replace calibration |
+| `bind_plate(plate_id, ticket_id, t_ms)` | vision | Insert; a plate binds once |
+| `record_verdict(verdict)` | verdict | Insert, chain included |
 
 ## Throughput (proposed)
 
-- `upsert_entities`: about 5 calls per second, up to ~30 entities each.
-- `record_interactions`: bursts of up to ~20 per second.
-- Expo board subscriptions: `entity`, `entity_risk`, `verdict`, `verdict_step`, `mistake_pattern`, `ticket`.
+- `move_entity`: about 5 times a second for up to ~30 entities.
+- `record_interaction`: bursts of up to ~20 a second.
+- Expo board subscriptions: `entity`, `entity_state`, `ticket`, `verdict`.

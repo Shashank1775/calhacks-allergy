@@ -5,7 +5,6 @@ Step:  shared
 Reads: the installed kitchen package
 Emits: nothing
 Rules: none; this only proves the project and CI are wired up
-Tasks: platform-01
 """
 
 from pathlib import Path

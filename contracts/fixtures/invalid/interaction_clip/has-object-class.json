@@ -60,5 +60,5 @@
     "dtype": "uint8"
   },
   "a_class": "spoon",
-  "$comment": "Must fail: the learned classifier never sees object classes (invariant 6)."
+  "$comment": "Must fail: the learned classifier never sees object classes (safety rule: blind classifier)."
 }

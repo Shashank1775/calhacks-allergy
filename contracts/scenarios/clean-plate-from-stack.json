@@ -1,8 +1,8 @@
 {
   "scenario_id": "clean-plate-from-stack",
-  "description": "A plate first appears mid-shift, taken from the clean-plate stack zone, is bound to a ticket and goes to the pass with no contacts. It starts clean (invariant 8 exception), so it passes. Contrast with unknown-tool-mid-shift.",
+  "description": "A plate first appears mid-shift, taken from the clean-plate stack zone, is bound to a ticket and goes to the pass with no contacts. It starts clean (the known-clean-source exception), so it passes. Contrast with unknown-tool-mid-shift.",
   "tags": [
-    "invariant-8"
+    "known-clean-source"
   ],
   "bins": [
     {
@@ -13,8 +13,7 @@
           "peanut": 0.98
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     }
   ],
@@ -30,20 +29,13 @@
       "ticket_id": "t6",
       "number": 6,
       "revision": 1,
-      "status": "sent",
       "created_t_ms": 0,
       "source": "typed",
       "note": "no peanut",
       "pass_threshold": 0.95,
-      "constraints": [
-        {
-          "allergen_unit_id": "peanut",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "peanut"
+      ]
     }
   ],
   "plate_bindings": [

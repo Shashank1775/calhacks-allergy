@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "interaction_clip.schema.json",
   "title": "InteractionClip",
-  "description": "Metadata for one candidate pair's input to the learned interaction classifier (ConvLSTM / ConvGRU). The tensor itself is a file (npz, key `x`, shape [T, C, H, W]) next to this metadata. Channels are box masks and a change mask only: no pixels of the objects, no object class or kind, no allergen information (invariant 6), so the model learns interaction, not appearance. Built by kitchen/shared/clips.py from live data (interactions) and from rendered sim worlds (sim), so training and live input match. Consumer: partner LSTM. Labels are present only on training and benchmark clips.",
+  "description": "Metadata for one candidate pair's input to the learned interaction classifier (ConvLSTM / ConvGRU). The tensor itself is a file (npz, key `x`, shape [T, C, H, W]) next to this metadata. Channels are box masks and a change mask only: no pixels of the objects, no object class or kind, no allergen information (safety rule: blind classifier), so the model learns interaction, not appearance. Built by kitchen/shared/clips.py from live data (interactions) and from rendered sim worlds (sim), so training and live input match. Consumer: partner LSTM. Labels are present only on training and benchmark clips.",
   "type": "object",
   "additionalProperties": false,
   "required": [

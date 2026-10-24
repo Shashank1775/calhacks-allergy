@@ -1,5 +1,5 @@
 {
-  "$comment": "Must fail: invariant 6, the classifier input is allergen-blind.",
+  "$comment": "Must fail: the classifier input is allergen-blind (safety rule: blind classifier).",
   "t_ms": 184220, "frame_id": 5526, "a_id": "tool-knife-17", "b_id": "bin-4", "a_kind": "tool", "b_kind": "bin",
   "distance": 0.03, "overlap": 0.64, "inside_zone": true, "zone_kind": "bin_slot", "speed_a": 0.12, "speed_b": 0.0,
   "dwell_ms": 640, "wrist_proximity": 0.02, "b_peanut_probability": 0.98

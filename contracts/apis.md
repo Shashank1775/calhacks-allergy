@@ -1,20 +1,21 @@
 # APIs and interfaces
 
-Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`, ...) are the models generated from [`schemas/`](schemas/) into `kitchen/shared/models.py`. Every interface has a **fake**, so any part can be tested without the real thing.
+Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`, ...) are the models generated from [`schemas/`](schemas/) into `kitchen/shared/models.py`. Every interface has a **fake**, named `Fake<Thing>`, so any part can be tested without the real thing.
 
 | Interface | Real implementation | Fake | Fake owner |
 |---|---|---|---|
-| [`StateClient`](#stateclient) | **partner** (`database/` + client) | `InMemoryStateClient` | platform |
+| [`StateClient`](#stateclient) | **partner** (`database/` + client) | `FakeStateClient` | platform |
 | [`EntityStore`](#entitystore) | **partner** (`kitchen/entities/`) | `FakeEntityStore` | platform |
 | [`ProvenanceGraph`](#provenancegraph) | **partner** (`kitchen/graph/`) | `FakeProvenanceGraph` | platform |
-| [`InteractionClassifier`](#interactionclassifier) | **partner** (zone rules in `kitchen/interactions/`, ConvLSTM / ConvGRU in `kitchen/lstm/`) | `ScriptedClassifier` | platform |
+| [`InteractionClassifier`](#interactionclassifier) | **partner** (zone rules in `kitchen/interactions/`, ConvLSTM in `kitchen/lstm/`) | `FakeClassifier` | platform |
 | [Change mask and clip builder](#change-mask-and-clips) | platform (`kitchen/shared/change_mask.py`, `kitchen/shared/clips.py`) | none needed: pure functions | platform |
 | [`LayaParser`](#layaparser) | orders | `FakeLayaParser` | orders |
-| Verdict feed (`verdict`, `verdict_step`, `entity_risk`, `mistake_pattern` rows) | verdict, partner graph | `ScriptedVerdictSource` (replays scenario verdicts into `InMemoryStateClient`) | verdict |
-| [`Transcriber`](#transcriber-and-speaker) | orders | `TextFileTranscriber` | orders |
-| [`Speaker`](#transcriber-and-speaker) | outputs | `ConsoleSpeaker` | outputs |
-| [`GateDriver`](#gatedriver) | outputs | `ConsoleGate`, `MockGPIOGate` | outputs |
-| [`Clock`](#clock) | platform | `FixedClock` | platform |
+| Verdict feed (`verdict` rows) | verdict | `FakeVerdictFeed` (replays scenario verdicts into `FakeStateClient`) | verdict |
+| [`Transcriber`](#transcriber-and-speaker) | orders | `FakeTranscriber` | orders |
+| [`Speaker`](#transcriber-and-speaker) | outputs | `FakeSpeaker` | outputs |
+| [`GateDriver`](#gatedriver) | outputs | `FakeGate` | outputs |
+| [`Clock`](#clock) | platform | `FakeClock` | platform |
+| [Vision HTTP API](#vision-http-api-on-the-pi) | vision | `FakeVisionAPI` | vision |
 
 Fakes for partner-owned parts are written by the platform team against this file. The partner's real code must pass the same contract tests the fakes pass (`kitchen/shared/contract_tests/`).
 
@@ -22,47 +23,39 @@ All Protocols live in `kitchen/shared/interfaces.py` (owner: platform).
 
 ## StateClient
 
-Real: **partner**. Fake: `InMemoryStateClient` (platform). Every Python component talks to SpacetimeDB only through this.
+Real: **partner**. Fake: `FakeStateClient` (platform). Every Python component talks to SpacetimeDB only through this.
 
 ```python
 class StateClient(Protocol):
-    # shift (partner's shift CLI, run by a person at shift start)
-    def start_shift(self, shift_id: str, wall_clock_start: datetime) -> None: ...
-
-    # writes: each method has exactly one calling team (state-tables.md#writers)
-    def put_ticket(self, ticket: Ticket) -> None: ...                                   # orders; amendment = same ticket_id, revision + 1
+    # writes: each method has exactly one calling team (state-tables.md#writers); names match the module's reducers
+    def put_ticket(self, ticket: Ticket) -> None: ...                                   # orders; an amendment replaces it with revision + 1
     def put_bin_profile(self, entity_id: str, profile: AllergenProfile) -> None: ...    # orders
-    def open_chef_confirmation(self, entity_id: str, ingredient: str) -> str: ...       # orders; returns confirmation_id
-    def answer_chef_confirmation(self, confirmation_id: str, allergen_unit_ids: list[str]) -> None: ...  # orders
     def set_zones(self, zones: list[Zone]) -> None: ...                                 # vision (calibration)
-    def bind_plate(self, plate_id: str, ticket_id: str, t_ms: int) -> None: ...         # vision ("start ticket")
-    def upsert_entities(self, entities: list[Entity]) -> None: ...                      # partner entity store, ~5 Hz
-    def record_interactions(self, events: list[InteractionEvent]) -> None: ...          # partner interactions
-    def put_entity_risk(self, entity_id: str, profile: AllergenProfile, t_ms: int) -> None: ...  # partner graph
+    def bind_plate(self, plate_id: str, ticket_id: str, t_ms: int) -> None: ...         # vision ("start plate")
+    def register_entity(self, entity: Entity) -> None: ...                              # partner entity store, once per entity
+    def move_entity(self, state: EntityState) -> None: ...                              # partner entity store and graph, ~5 Hz
+    def record_interaction(self, event: InteractionEvent) -> None: ...                  # partner interactions
     def record_verdict(self, verdict: Verdict) -> None: ...                             # verdict
-    def put_mistake_pattern(self, pattern: MistakePattern) -> None: ...                 # verdict
 
     # reads
-    def get_ticket(self, ticket_id: str, revision: int | None = None) -> Ticket | None: ...  # None = latest
-    def get_entity(self, entity_id: str) -> Entity | None: ...
+    def get_ticket(self, ticket_id: str) -> Ticket | None: ...                          # the latest revision
+    def get_entity(self, entity_id: str) -> Entity | None: ...                          # identity + latest state
     def list_entities(self, kind: str | None = None) -> list[Entity]: ...
     def list_zones(self) -> list[Zone]: ...
     def get_plate_binding(self, plate_id: str) -> PlateBinding | None: ...
     def list_interactions(self, since_t_ms: int = 0, until_t_ms: int | None = None) -> list[InteractionEvent]: ...
     def list_verdicts(self, ticket_id: str | None = None) -> list[Verdict]: ...
-    def list_open_chef_confirmations(self) -> list[ChefConfirmation]: ...
-    def list_mistake_patterns(self) -> list[MistakePattern]: ...
 
     # change feed
     def subscribe(self, table: str, on_change: Callable[[ChangeEvent], None]) -> Callable[[], None]: ...
 ```
 
-- `Zone`, `PlateBinding`, `ChefConfirmation` and `ChangeEvent` are small dataclasses in `kitchen/shared/models.py` mirroring [state-tables.md](state-tables.md).
-- **Triggers are table changes.** "A plate reaches the pass" means an `entity` row with `kind: plate` whose `zone` is a zone of kind `pass`; the verdict service watches `subscribe("entity", ...)` for that transition. "A ticket was amended" means a new `ticket` revision (`subscribe("ticket", ...)`). The gate service watches `subscribe("verdict", ...)`.
-- Every method raises `StateUnavailable` when the database can't be reached. On the verdict path that becomes HOLD (invariant 1).
+- `Zone`, `PlateBinding`, `EntityState` and `ChangeEvent` are small dataclasses in `kitchen/shared/models.py` mirroring [state-tables.md](state-tables.md).
+- **Triggers are table changes.** "A plate reaches the pass" means a new `entity_state` row for a plate whose `zone` is a zone of kind `pass`; the verdict service watches `subscribe("entity_state", ...)` for that transition. "A ticket was amended" means a new `ticket` revision (`subscribe("ticket", ...)`). The gate service watches `subscribe("verdict", ...)`.
+- Every method raises `StateUnavailable` when the database can't be reached. On the verdict path that becomes HOLD (safety rule: fail closed).
 - Writes are idempotent by primary key.
-- **Fake:** dict-backed, same semantics including `subscribe`, and can load a `scenario` file.
-- **Open (OQ-1, partner decides):** how Python reaches SpacetimeDB.
+- **Fake:** dict-backed, same semantics including `subscribe` and append-only entity history, and can load a `scenario` file.
+- How Python reaches SpacetimeDB is the partner's call (default: HTTP reducer calls plus polling).
 
 ## EntityStore
 
@@ -78,8 +71,8 @@ class EntityStore(Protocol):
     def last_sync_t_ms(self) -> int | None: ...                # for health checks; None before the first successful sync
 ```
 
-- Never deletes an entity and never changes `first_seen_t_ms` or `origin` (invariant 8).
-- **Fake:** applies frames to a dict; `start_sync` writes snapshots to whatever `StateClient` it gets.
+- Never deletes an entity and never changes `first_seen_t_ms` or `origin` (safety rule: known-clean source).
+- **Fake:** applies frames to a dict; `start_sync` writes `register_entity` and `move_entity` calls to whatever `StateClient` it gets.
 
 ## ProvenanceGraph
 
@@ -90,17 +83,17 @@ class ProvenanceGraph(Protocol):
     def reach(self, plate_id: str, as_of_t_ms: int) -> list[AllergenReach]: ...
         # exact reachability: every allergen unit with nonzero probability at the plate, each with its chain
     def unknown_ancestors(self, plate_id: str, as_of_t_ms: int) -> list[str]: ...
-        # entity IDs in the plate's ancestry with origin "unknown" and no wash since (invariant 8)
+        # entity IDs in the plate's ancestry with origin "unknown" and no wash since
     def version(self) -> str: ...
 ```
 
-- Raises `GraphUnavailable` on any failure. The verdict policy turns that into HOLD (invariant 1).
-- Must satisfy invariants 5 (time-forward) and 8 (unknown history), and pass every golden scenario in [`scenarios/`](scenarios/).
+- Raises `GraphUnavailable` on any failure. The verdict policy turns that into HOLD (safety rule: fail closed).
+- Must follow the time-runs-forward and known-clean-source safety rules, and pass every golden scenario in [`scenarios/`](scenarios/).
 - **Fake:** answers from a scenario file's ground truth (`expected[].allergens_reached`, `chain_event_ids`). It does no graph math, so it never duplicates the partner's work.
 
 ## InteractionClassifier
 
-Real: **partner**: zone rules (always available) in `kitchen/interactions/`, and a ConvLSTM or ConvGRU in `kitchen/lstm/`, adopted only if it beats zone rules on held-out clips (invariant 7). Fake: `ScriptedClassifier` (platform): returns scripted labels, or errors or hangs on cue.
+Real: **partner**: zone rules (always available) in `kitchen/interactions/`, and a ConvLSTM in `kitchen/lstm/`, adopted only if it beats zone rules on held-out clips (safety rule: rules stay as the fallback). Fake: `FakeClassifier` (platform): returns scripted labels, or errors or hangs on cue.
 
 ```python
 @dataclass(frozen=True)
@@ -117,8 +110,8 @@ class InteractionClassifier(Protocol):
     def classify(self, window: PairWindow) -> list[tuple[Action, float]]: ...
 ```
 
-- Both inputs are allergen-blind by construction. The clip is also **object-blind**: box masks and motion only, no object pixels, classes or kinds (invariant 6).
-- The ConvLSTM's two judgments map onto actions until OQ-19 is settled: P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`. A contact with no visible movement is still a possible trace transfer; the graph and verdict decide how much it counts (OQ-8).
+- Both inputs are allergen-blind by construction. The clip is also **object-blind**: box masks and motion only, no object pixels, classes or kinds (safety rule: blind classifier).
+- The ConvLSTM's two judgments map onto actions: P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`. A contact with no visible movement is still a possible trace transfer; the graph and verdict decide how much it counts.
 - `kitchen/interactions/classifier.py` wraps both: it uses the LSTM only if adopted and healthy, and falls back to zone rules otherwise.
 
 ## Change mask and clips
@@ -156,17 +149,15 @@ def build_clip(a_id: str, b_id: str, steps: Sequence[ClipStep], *, H: int = 128,
 
 ## LayaParser
 
-Owner: **orders**. Backed by our fine-tuned Laya model: the adapter asks it typed questions (does the note forbid each allergen, how severe, do traces matter) and turns the answers into these results.
+Owner: **orders**. Backed by our fine-tuned Laya model, which answers typed questions with calibrated probabilities. The adapter asks it whether a note forbids each allergen, how severe, and whether traces matter, or whether a bin label contains each allergen, and turns the answers into these results.
 
 ```python
 class LayaParser(Protocol):
     def parse_note(self, note: str, *, source: Literal["typed", "voice"]) -> ParseResult: ...
-    def profile_bin(self, *, label_text: str | None = None, image_jpeg: bytes | None = None,
-                    prep_sheet_text: str | None = None) -> AllergenProfile: ...
+    def read_bin_label(self, label_text: str) -> AllergenProfile: ...
 ```
 
-- Raises `LayaParserUnavailable`. With no cached result, the tablet falls back to manual entry. It never guesses.
-- Laya reads text only. A `profile_bin` call with only an image raises `LayaParserUnavailable`; it never returns an empty profile.
+- Raises `LayaParserUnavailable`. The tablet then falls back to manual entry. It never guesses.
 - **Fake:** `FakeLayaParser`, a deterministic keyword parser covering the notes in the orders eval set.
 
 ## Transcriber and Speaker
@@ -181,7 +172,7 @@ class Speaker(Protocol):
     def say(self, text: str) -> None: ...   # non-blocking; drops stale lines rather than queueing them
 ```
 
-- **Fakes:** `TextFileTranscriber` returns canned transcripts; `ConsoleSpeaker` prints the line.
+- **Fakes:** `FakeTranscriber` returns canned transcripts; `FakeSpeaker` prints the line.
 
 ## GateDriver
 
@@ -192,8 +183,8 @@ class GateDriver(Protocol):
     def show(self, state: Literal["idle", "pass", "hold", "fault"], ticket_number: int | None = None) -> None: ...
 ```
 
-- `fault`: arm closed, red light, buzzer pulsing. Used when the gate loses its verdict feed (invariant 1).
-- **Fakes:** `ConsoleGate`, and `MockGPIOGate`, which records calls for tests.
+- `fault`: arm closed, red light, buzzer pulsing. Used when the gate loses its verdict feed (safety rule: fail closed).
+- **Fake:** `FakeGate` prints each state and records every call for tests.
 
 ## Clock
 
@@ -204,7 +195,7 @@ class Clock(Protocol):
     def now_ms(self) -> int: ...     # t_ms since shift start
 ```
 
-- **Fake:** `FixedClock`, advanced by hand in tests.
+- **Fake:** `FakeClock`, advanced by hand in tests. The live clock is `SystemClock`.
 
 ## HTTP conventions
 
@@ -212,31 +203,30 @@ Applies to the orders and vision HTTP APIs.
 
 - JSON bodies. Errors are `{"error": {"code": str, "message": str}}`.
 - Browser screens from `outputs` call these APIs directly, so each service sends CORS headers for the origins in its `<PREFIX>_CORS_ORIGINS` setting (default: the web dev server origin). There are no wildcard origins.
-- Every service exposes `GET /v1/health`.
+- Every service exposes `GET /health`.
 
 ## Orders HTTP API
 
-Owner: **orders** (`kitchen/orders/api.py`). Consumer: **outputs** (tablet and chef screens).
+Owner: **orders** (`kitchen/orders/api.py`). Consumer: **outputs** (tablet screen).
 
 | Method and path | Body | Returns | Notes |
 |---|---|---|---|
-| `POST /v1/transcribe` | audio (`audio/wav`) | `{"text": str}` | Cartesia Ink |
-| `POST /v1/parse` | `{"note": str, "source": "typed"\|"voice"}` | `ParseResult` | Cached by normalized note |
-| `POST /v1/drafts/{draft_id}/answers` | `{"question_id": str, "value": any}` | `ParseResult` | `sendable` flips once all questions are answered |
-| `POST /v1/drafts/{draft_id}/send` | `{"number": int}` | `Ticket` | `409 unanswered_questions` if not sendable (invariant 3) |
-| `POST /v1/tickets/{ticket_id}/amend` | `{"note": str}` | `ParseResult` | New draft at revision + 1; same question flow; send triggers a recheck (invariant 9) |
-| `POST /v1/profiles/bins` | `{"entity_id": str, "label_text"?: str, "image_jpeg_b64"?: str, "prep_sheet_text"?: str}` | `AllergenProfile` | Shift start |
-| `POST /v1/profiles/bins/{entity_id}/confirm` | `{"ingredient": str, "allergen_unit_ids": [str]}` | `AllergenProfile` | Chef confirms an unclear ingredient |
-| `POST /v1/menu/import` | `{"url": str}` | `{"items": int}` | Optional, via an Apify Actor |
+| `POST /transcribe` | audio (`audio/wav`) | `{"text": str}` | Cartesia Ink |
+| `POST /parse` | `{"note": str, "source": "typed"\|"voice"}` | `ParseResult` | |
+| `POST /drafts/{draft_id}/answers` | `{"question_id": str, "value": any}` | `ParseResult` | `sendable` flips once all questions are answered |
+| `POST /drafts/{draft_id}/send` | `{"number": int}` | `Ticket` | `409 unanswered_questions` if not sendable (safety rule: no unanswered questions) |
+| `POST /tickets/{ticket_id}/amend` | `{"note": str}` | `ParseResult` | New draft at revision + 1; same question flow; send triggers a recheck (safety rule: late changes recheck everything) |
+| `POST /bins/read` | `{"label_text": str}` | `AllergenProfile` | Laya reads a bin label at shift start. Nothing is saved |
+| `PUT /bins/{entity_id}` | `AllergenProfile` | `AllergenProfile` | Saves the profile, as read or as adjusted by the person |
 
 ## Vision HTTP API (on the Pi)
 
-Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start ticket" button, camera overlays).
+Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start plate" button, camera overlays, gate health watch).
 
 | Method and path | Body | Returns | Notes |
 |---|---|---|---|
-| `POST /v1/plates/start` | `{"ticket_id": str}` | `{"plate_id": str}` | Binds the plate at the plating spot. Otherwise `409 no_plate_at_spot`, `409 multiple_plates_at_spot` or `409 plate_already_bound`; never guesses |
+| `POST /plates/start` | `{"ticket_id": str}` | `{"plate_id": str}` | Binds the plate at the plating spot. Otherwise `409 no_plate_at_spot`, `409 multiple_plates_at_spot` or `409 plate_already_bound`; never guesses |
 | `GET /stream.mjpg` | — | MJPEG | Raw camera stream |
-| `GET /v1/health` | — | `{"fps": float, "detector": "onnx"\|"hailo", "last_frame_t_ms": int}` | `detector` is `onnx` until the Hailo is connected. The gate goes to `fault` if this goes stale |
+| `GET /health` | — | `{"fps": float, "detector": "onnx"\|"hailo", "last_frame_t_ms": int}` | `detector` is `onnx` until the Hailo is connected. The gate goes to `fault` if this goes stale |
 
-Overlays are drawn client-side from `entity.box` plus `entity_risk` (OQ-6).
+Overlays are drawn client-side from each entity's latest `entity_state` (box and allergens).

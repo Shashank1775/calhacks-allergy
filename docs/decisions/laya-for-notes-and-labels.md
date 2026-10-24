@@ -1,8 +1,8 @@
-# 0012: Laya parses ticket notes and bin labels
+# Laya parses ticket notes and bin labels
 
 - **Status:** accepted
 - **Date:** 2026-10-24
-- **Deciders:** owner, director
+- **Decided by:** owner, director
 
 ## Context
 

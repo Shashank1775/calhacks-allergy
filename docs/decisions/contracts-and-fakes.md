@@ -1,17 +1,17 @@
-# 0003: Contracts first, and every boundary has a fake
+# Contracts first, and every boundary has a fake
 
 - **Status:** accepted
 - **Date:** 2026-10-23
-- **Deciders:** director, owner
+- **Decided by:** owner, director
 
 ## Context
 
-The real pipeline needs hardware (Pi, Hailo, camera, servo), paid APIs (Cartesia), a fine-tuned model (Laya) and a running database. Agents can't touch hardware, and waiting on other teams serializes the whole org.
+The real pipeline needs hardware (Pi, Hailo, camera, servo), a paid API (Cartesia), a fine-tuned model (Laya) and a running database. Agents can't touch hardware, and waiting on other teams would serialize the whole build.
 
 ## Decision
 
 - Every cross-team message has a JSON Schema in `contracts/schemas/`, with valid and invalid fixtures. Every cross-team call has an interface in `contracts/apis.md`.
-- The producing team ships a fake for each contract it produces. For the partner's components, the platform team writes the fake, and the partner's real code must pass the same contract tests. Every component's tests pass with all other components replaced by fakes.
+- Every interface has a fake named `Fake<Thing>`. The producing team ships it; for the partner's components, the platform team writes it, and the partner's real code must pass the same contract tests. Every component's tests pass with all other components replaced by fakes.
 - Contracts change in their own PR, which the Director reviews.
 
 ## Consequences

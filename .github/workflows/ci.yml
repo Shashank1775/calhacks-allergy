@@ -19,7 +19,7 @@ jobs:
       # --locked fails if someone changed pyproject.toml without re-running `uv lock`.
       - name: Install
         run: uv sync --locked --all-extras
-      # Agents never edit the partner's folders (AGENTS.md §4); only partner/* branches may.
+      # Agents never edit the partner's folders (AGENTS.md, Partner-owned areas); only partner/* branches may.
       - name: Partner folders untouched
         if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'partner/')
         run: |

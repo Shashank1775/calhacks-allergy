@@ -2,7 +2,7 @@
   "scenario_id": "time-order-blocks-path",
   "description": "Knife touches the plate first and only later scoops satay. No time-forward path exists, so peanut cannot have reached the plate.",
   "tags": [
-    "invariant-5"
+    "time-runs-forward"
   ],
   "bins": [
     {
@@ -13,8 +13,7 @@
           "peanut": 0.98
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     },
     {
@@ -23,8 +22,7 @@
       "allergen_profile": {
         "probabilities": {},
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     }
   ],
@@ -33,20 +31,13 @@
       "ticket_id": "t3",
       "number": 3,
       "revision": 1,
-      "status": "sent",
       "created_t_ms": 0,
       "source": "typed",
       "note": "no peanut",
       "pass_threshold": 0.95,
-      "constraints": [
-        {
-          "allergen_unit_id": "peanut",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "peanut"
+      ]
     }
   ],
   "plate_bindings": [

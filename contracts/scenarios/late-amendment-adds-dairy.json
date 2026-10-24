@@ -2,7 +2,7 @@
   "scenario_id": "late-amendment-adds-dairy",
   "description": "A hand touches butter, then the plate. Revision 1 forbids only peanut and passes. Revision 2 adds milk and must hold on recheck of the full history.",
   "tags": [
-    "invariant-9"
+    "late-changes-recheck"
   ],
   "bins": [
     {
@@ -13,8 +13,7 @@
           "peanut": 0.98
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     },
     {
@@ -25,8 +24,7 @@
           "milk": 0.99
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     }
   ],
@@ -35,20 +33,13 @@
       "ticket_id": "t5",
       "number": 5,
       "revision": 1,
-      "status": "sent",
       "created_t_ms": 0,
       "source": "typed",
       "note": "no peanut",
       "pass_threshold": 0.95,
-      "constraints": [
-        {
-          "allergen_unit_id": "peanut",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "peanut"
+      ]
     }
   ],
   "plate_bindings": [
@@ -100,26 +91,14 @@
       "ticket_id": "t5",
       "number": 5,
       "revision": 2,
-      "status": "amended",
       "created_t_ms": 4000,
       "source": "typed",
       "note": "no peanut, also no dairy",
       "pass_threshold": 0.95,
-      "constraints": [
-        {
-          "allergen_unit_id": "peanut",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        },
-        {
-          "allergen_unit_id": "milk",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "milk",
+        "peanut"
+      ]
     }
   ],
   "expected": [
@@ -139,7 +118,7 @@
         "milk"
       ],
       "reason_codes": [
-        "exact_flag"
+        "forbidden_allergen"
       ],
       "chain_event_ids": [
         "e1",

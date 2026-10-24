@@ -1,11 +1,11 @@
-"""Final analysis: decide PASS or HOLD for each plate at the pass, and explain the chain.
+"""Verdict: decide PASS or HOLD for each plate at the pass, in plain code, and explain the chain.
 
 Owner: verdict (agents)
-Step:  final analysis (verdict)
+Step:  verdict
 Reads: ticket, entity, plate_binding (StateClient); allergen_reach and unknown ancestors (ProvenanceGraph)
-Emits: verdict, chain_step, mistake_pattern (StateClient)
-Rules: 1 any doubt or error holds; 2 the verdict is plain code; 4 allergens, never contacts; 8 unknown ancestor holds; 9 amendments recheck everything
-Tasks: verdict-01 to verdict-10
+Emits: verdict, chain included (StateClient.record_verdict)
+Rules: fail closed; plain-code verdict; allergens, not contacts; known-clean source (an unknown ancestor holds);
+       late changes recheck everything
 
 Not built yet.
 """

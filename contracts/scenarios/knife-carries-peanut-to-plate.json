@@ -2,7 +2,7 @@
   "scenario_id": "knife-carries-peanut-to-plate",
   "description": "Knife scoops satay (peanut), then touches the plate of a peanut-allergic ticket. Must hold, with the two-step chain.",
   "tags": [
-    "invariant-2",
+    "plain-code-verdict",
     "basic-transfer"
   ],
   "bins": [
@@ -14,8 +14,7 @@
           "peanut": 0.98
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     },
     {
@@ -24,8 +23,7 @@
       "allergen_profile": {
         "probabilities": {},
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     }
   ],
@@ -34,20 +32,13 @@
       "ticket_id": "t1",
       "number": 1,
       "revision": 1,
-      "status": "sent",
       "created_t_ms": 0,
       "source": "typed",
       "note": "peanut allergy",
       "pass_threshold": 0.99,
-      "constraints": [
-        {
-          "allergen_unit_id": "peanut",
-          "severity": "anaphylactic",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "peanut"
+      ]
     }
   ],
   "plate_bindings": [
@@ -103,7 +94,7 @@
         "peanut"
       ],
       "reason_codes": [
-        "exact_flag"
+        "forbidden_allergen"
       ],
       "chain_event_ids": [
         "e1",

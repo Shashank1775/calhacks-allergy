@@ -1,15 +1,14 @@
 {
-  "$comment": "Seed data for the SpacetimeDB allergen_unit table: the nine major US allergens. default_severity values are placeholders pending OQ-3 (AGENTS.md section 11).",
-  "version": "0.1.0",
+  "$comment": "The nine major US allergens. Everyone reads this file; nothing hardcodes the list.",
   "units": [
-    { "id": "milk",      "name": "Milk",                "default_severity": "allergy", "parent_id": null },
-    { "id": "egg",       "name": "Egg",                 "default_severity": "allergy", "parent_id": null },
-    { "id": "fish",      "name": "Fish",                "default_severity": "allergy", "parent_id": null },
-    { "id": "shellfish", "name": "Crustacean shellfish", "default_severity": "allergy", "parent_id": null },
-    { "id": "tree_nut",  "name": "Tree nuts",           "default_severity": "allergy", "parent_id": null },
-    { "id": "peanut",    "name": "Peanuts",             "default_severity": "allergy", "parent_id": null },
-    { "id": "wheat",     "name": "Wheat",               "default_severity": "allergy", "parent_id": null },
-    { "id": "soy",       "name": "Soybeans",            "default_severity": "allergy", "parent_id": null },
-    { "id": "sesame",    "name": "Sesame",              "default_severity": "allergy", "parent_id": null }
+    { "id": "milk",      "name": "Milk",                 "default_severity": "allergy" },
+    { "id": "egg",       "name": "Egg",                  "default_severity": "allergy" },
+    { "id": "fish",      "name": "Fish",                 "default_severity": "allergy" },
+    { "id": "shellfish", "name": "Crustacean shellfish", "default_severity": "allergy" },
+    { "id": "tree_nut",  "name": "Tree nuts",            "default_severity": "allergy" },
+    { "id": "peanut",    "name": "Peanuts",              "default_severity": "allergy" },
+    { "id": "wheat",     "name": "Wheat",                "default_severity": "allergy" },
+    { "id": "soy",       "name": "Soybeans",             "default_severity": "allergy" },
+    { "id": "sesame",    "name": "Sesame",               "default_severity": "allergy" }
   ]
 }

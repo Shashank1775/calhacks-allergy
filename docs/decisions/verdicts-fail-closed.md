@@ -1,12 +1,12 @@
-# 0002: Verdicts fail closed and are plain code
+# Verdicts fail closed and are plain code
 
 - **Status:** accepted
 - **Date:** 2026-10-23
-- **Deciders:** director, owner
+- **Decided by:** owner, director
 
 ## Context
 
-A wrong PASS can send an allergen to a guest who reacts to it. A wrong HOLD costs a remake. Several parts of the pipeline are learned models (Laya, the LSTM) that can be wrong, slow or unavailable.
+A wrong PASS can send an allergen to a guest who reacts to it. A wrong HOLD costs a remake. Several parts of the pipeline are learned models (Laya, the ConvLSTM) that can be wrong, slow or unavailable.
 
 ## Decision
 

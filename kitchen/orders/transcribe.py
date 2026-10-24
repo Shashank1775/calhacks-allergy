@@ -1,11 +1,10 @@
-"""Transcriber adapters: TextFileTranscriber (fake) now, Cartesia Ink after the spike.
+"""Transcriber adapters: FakeTranscriber now, Cartesia Ink batch transcription later.
 
 Owner: orders (agents)
-Step:  order intake (orders)
-Reads: audio/wav from the tablet (Transcriber)
-Emits: transcript text (the server confirms it before parsing)
-Rules: none (a transcript is only ever a note; it still goes through parse and questions)
-Tasks: orders-04 (Cartesia Ink spike), orders-11
+Step:  orders
+Reads: audio/wav from the tablet
+Emits: transcript text (the server confirms it before it is parsed)
+Rules: a transcript is only ever a note: it still goes through parsing and questions; any Ink error means "type it instead"
 
 Not built yet.
 """

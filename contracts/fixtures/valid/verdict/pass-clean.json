@@ -13,6 +13,6 @@
   "chain": [],
   "versions": {
     "policy": "0.1.0",
-    "exact": "0.1.0"
+    "graph": "0.1.0"
   }
 }

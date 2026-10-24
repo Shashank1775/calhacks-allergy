@@ -1,11 +1,10 @@
-"""Frame sources (Pi camera, video file, JSONL replay), each frame stamped with t_ms from the Clock.
+"""Frame sources: video file, laptop webcam, JSONL replay, and later the Pi camera. Each frame is stamped with t_ms.
 
 Owner: vision (agents)
-Step:  Vision (detection + tracking on the Pi)
-Reads: picamera2, video files in data/, frame JSONL, Clock
-Emits: raw frames with t_ms for detect.py and pose.py
-Rules: 5 strictly increasing t_ms, even across source restarts
-Tasks: vision-01 (video file), vision-09 (JSONL replay), picamera2 in M2
+Step:  vision
+Reads: video files in data/, the webcam, frame JSONL, picamera2 (later), Clock
+Emits: raw frames with t_ms for detect.py
+Rules: time runs forward: strictly increasing t_ms, even across source restarts
 
 Not built yet.
 """

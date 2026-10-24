@@ -2,7 +2,7 @@
   "scenario_id": "unknown-tool-mid-shift",
   "description": "A spoon first appears mid-shift, not from the clean stack (unknown history), and touches the plate. Must hold even though no allergen edge is observed.",
   "tags": [
-    "invariant-8",
+    "known-clean-source",
     "fail-closed"
   ],
   "bins": [
@@ -12,8 +12,7 @@
       "allergen_profile": {
         "probabilities": {},
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     }
   ],
@@ -29,20 +28,13 @@
       "ticket_id": "t4",
       "number": 4,
       "revision": 1,
-      "status": "sent",
       "created_t_ms": 0,
       "source": "typed",
       "note": "no sesame",
       "pass_threshold": 0.95,
-      "constraints": [
-        {
-          "allergen_unit_id": "sesame",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "sesame"
+      ]
     }
   ],
   "plate_bindings": [

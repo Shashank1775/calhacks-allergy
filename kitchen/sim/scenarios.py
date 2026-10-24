@@ -1,11 +1,10 @@
-"""Observation model and scenario writer: world runs to scenario files and replay JSONL, plus the generate/export/metrics/load CLI.
+"""Scenario writer: world runs become scenario files and replay JSONL (CLI: generate, export).
 
 Owner: sim (agents)
-Step:  simulation
-Reads: world runs (kitchen.py); verdict JSONL (metrics); StateClient (load replay)
-Emits: scenario, interaction_event JSONL, entity JSONL, metrics and load reports
-Rules: expected answers come from world truth only; 8 track loss becomes a new late entity with origin unknown
-Tasks: sim-01, sim-03, sim-05, sim-07, sim-10, sim-11
+Step:  simulator
+Reads: world runs (world.py)
+Emits: scenario files, interaction_event JSONL, entity JSONL
+Rules: expected answers come from world truth only; known-clean source: track loss becomes a new late entity with origin unknown
 
 Not built yet.
 """

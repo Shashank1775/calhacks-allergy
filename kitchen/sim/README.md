@@ -1,111 +1,72 @@
 # kitchen/sim: Simulated kitchens with known truth
 
-**Owner:** team `sim` (agents)
+**Owner:** team `sim` (agents).
 
-**Pipeline step:** not a live step. Sim makes kitchens whose truth we know. **One simulated world, two outputs:** event-level scenarios (so the graph and the verdict logic can be tested against known answers) and rendered clips (so the partner's ConvLSTM can learn interaction before it sees a real kitchen).
+Not a live step. Sim makes kitchens whose truth we know. **One simulated world, two outputs:** event-level scenarios, so the graph and the verdict logic can be tested against known answers, and rendered clips, so the partner's ConvLSTM can learn interaction before it sees a real kitchen.
 
 ## What happens here
 
-- A seeded simulated world runs prep workflows (stations, bins, cooks, tools, recipes, tickets) and samples whether each allergen **actually** moves or each wash **actually** cleans.
-- An observation model turns true events into emitted `interaction_event`s: noisy probabilities, optional dropped edges, and track loss that re-identifies an entity under a new ID.
-- Error injectors add the mistakes and sensing failures that matter.
-- A 2D renderer draws the same world as abstract frames and turns them into ConvLSTM training clips (see below).
-- Output: scenario corpora, replay JSONL, and labeled clip datasets.
+- A seeded world runs prep (stations, bins, cooks, tools, recipes, tickets) and decides whether each allergen **actually** moves and each wash **actually** cleans.
+- Kitchen mistakes are injected on purpose: skipped wash, shared utensil, bare-hand contact, late entity, track loss, amendment, dropped edge.
+- The scenario writer turns world runs into scenario files and replay JSONL.
+- The clip renderer draws the same world as abstract frames and turns them into labeled ConvLSTM training clips.
 
-## Rendered clips for the ConvLSTM
+The true transfer rates, how observations are derived, what `expected` means and the exact tag strings are in the [sim ground truth decision](../../docs/decisions/sim-ground-truth.md).
 
-The partner's ConvLSTM learns **whether two objects touched and whether material moved**, never what the objects are. So the renderer never draws realistic spoons or forks. The pipeline:
+## Training clips for the ConvLSTM
 
-1. **World run.** Cooks move tools between bins, plates, hands and the wash station, with 2D positions over time. Contents are tracked too: food in a bowl is a blob that shifts, splits or smears when something really touches it.
-2. **Abstract frames.** Each step is drawn as an RGB frame:
-   - a randomized textured background;
-   - plain shapes for tools and hands;
-   - containers with food blobs.
-   
-   Appearance is randomized on purpose: colors, textures, sizes, aspect ratios.
-3. **Shared change mask.** Each pair of consecutive frames goes through `kitchen/shared/change_mask.py`, the same function vision runs on real camera frames. The result is a gradient that's brighter where more moved.
-4. **Shared clip builder.** Each candidate pair's boxes (with tracker-like jitter) and the masks go through `kitchen/shared/clips.py`. That gives a `[T, C, H, W]` tensor (`box_a`, `box_b`, `change`) plus `dt_ms`, the [`interaction_clip`](../../contracts/schemas/interaction_clip.schema.json) format the model reads.
-5. **Labels from world truth.** Each clip records `contact`, `transferred`, `action`, `direction` and `contact_t_ms`, taken from what happened in the world, never from any model.
+The ConvLSTM learns **whether two objects touched and whether material moved**, never what the objects are. So the renderer never draws realistic spoons or forks.
 
-**Hard negatives** are what stop the model from learning that box overlap means transfer:
-- boxes overlapping in 2D while one passes above the other (no contact);
-- hovering;
-- motion with no contact (someone else stirring nearby);
-- contact with no visible movement (labeled contact, not transferred);
-- camera noise;
-- lighting flicker;
-- missed detections;
-- variable frame timing.
+1. **World run.** Cooks move tools between bins, plates, hands and the wash station. Food in a bowl is a blob that shifts, splits or smears when something really touches it.
+2. **Abstract frames.** Each step is an RGB frame with a randomized textured background, plain shapes for tools and hands, and containers with food blobs. Colors, textures and sizes are randomized on purpose.
+3. **Shared change mask.** Consecutive frames go through `kitchen/shared/change_mask.py`, the same function vision runs on real frames.
+4. **Shared clip builder.** Each candidate pair's boxes (with tracker-like jitter) and the masks go through `kitchen/shared/clips.py`, giving the [`interaction_clip`](../../contracts/schemas/interaction_clip.schema.json) format the model reads.
+5. **Labels from world truth:** `contact`, `transferred`, `action`, `direction`, `contact_t_ms`. Never from a model.
 
-The example from the owner: a spoon touches an omelette dish and the omelette shifts five inches. In the clip, two boxes come together, and right after they overlap, the change mask lights up inside the dish's box. Labels: contact = true, transferred = true.
+**Hard negatives** stop the model from learning that box overlap means transfer: boxes overlapping while one passes above the other, hovering, motion with no contact, contact with no visible movement, camera noise, lighting flicker, missed detections, and variable frame timing.
+
+The owner's example: a spoon touches an omelette dish and the omelette shifts. In the clip, two boxes come together, and right after they overlap, the change mask lights up inside the dish's box. Labels: contact = true, transferred = true.
 
 ## Ground truth stays independent
 
-This is what makes sim worth having.
-
-- Expected answers come from what happened in the simulated world, **never** from the partner's graph or the verdict policy. Sim never imports `kitchen.graph` or `kitchen.verdict` internals. The only imports allowed are from `kitchen.shared`.
-- For generated scenarios (tag `generated`), `expected` is world truth. An expected HOLD is a hard requirement: nobody may PASS a truly contaminated plate. An expected PASS is a quality target, so a false HOLD is tracked, not failed.
-- Scenarios tagged `observation-complete` hide nothing that made a plate truly contaminated: no dropped edge, no failed wash on a dirty entity, and no scoop back-transfer the emitted direction misses. Only those gate CI.
+- Expected answers come from the simulated world, **never** from the partner's graph or the verdict policy. Sim imports only `kitchen.shared`.
 - Hand-written golden scenarios in `contracts/scenarios/` still require exact matches.
-- The true rates, the observation model and the exact tag strings are in [ADR 0008](../../docs/decisions/0008-sim-ground-truth-and-observation-model.md).
 
 ## Files
 
 | File | What it does |
 |---|---|
-| `kitchen.py` | The simulated world: layout, bins with profiles, cooks, tools, recipes, and the true allergen process (seeded) |
-| `scenarios.py` | Observation model and scenario writer: world runs → scenario files and replay JSONL. Also the CLI (`generate`, `export`, `metrics`, `load`) |
-| `errors.py` | Error injectors: skipped wash, shared utensil, bare-hand contact, late entity, track loss, amendment, dropped edge, probability noise |
-| `render.py` | 2D clip renderer: world runs → abstract RGB frames → shared change mask → shared clip builder → labeled clips, including hard negatives |
-| `clip_data.py` | ConvLSTM clip datasets: balanced, with leak-free splits (by seed and held-out kitchen layouts), manifest and datasheet |
+| `world.py` | The simulated world: layout, bins with profiles, cooks, tools, recipes, the true allergen process, and injected mistakes (seeded) |
+| `scenarios.py` | World runs → scenario files and replay JSONL. CLI: `generate`, `export` |
+| `training_clips.py` | World runs → abstract frames → shared change mask → shared clip builder → labeled clips, with hard negatives and leak-free train/val/test splits |
 
-## Inputs and outputs
+## In and out
 
-| Direction | What | Contract | From / to |
+| Direction | What | Contract | To |
 |---|---|---|---|
-| Out | Generated scenario corpus (full set in `data/`; CI subset ≤ 1 MB in git) | `scenario` | verdict, partner graph, platform e2e |
-| Out | Replay streams (`classifier.name = sim_ground_truth`) | `interaction_event`, `entity` JSONL | partner graph, platform e2e |
+| Out | Generated scenarios (full set in `data/`; a small subset in git for tests) | `scenario` | verdict, partner graph, platform end-to-end harness |
+| Out | Replay streams (`classifier.name = sim_ground_truth`) | `interaction_event`, `entity` JSONL | partner graph, platform end-to-end harness |
 | Out | Labeled training clips (box masks + change mask + `dt_ms`) | [`interaction_clip`](../../contracts/schemas/interaction_clip.schema.json) + npz | partner's ConvLSTM |
-| Out | Load profiles | `StateClient` calls | partner database (throughput) |
-| In | `InMemoryStateClient`, `Clock`, generated models | `StateClient` | platform (fake), partner (real) |
 
-## Safety rules that apply
+## Safety rules
 
-See [AGENTS.md §3](../../AGENTS.md#3-safety-rules).
+See [Safety rules](../../AGENTS.md#3-safety-rules).
 
-| Invariant | Our part | Test |
+| Rule | Our part | Test |
 |---|---|---|
-| 5. Time runs forward | Generated streams are causal: a tool carries an allergen only after its true contact with the source | Generator property test over random seeds (`safety`) |
-| 6. Allergen-blind and object-blind classifier | Clips contain only box masks, the change mask and timing: no allergen fields, no classes, no realistic utensils | Schema validation on every clip; a test that the renderer's shape set has no utensil sprites |
-| 8. Clean only from a known-clean source | Track loss and late entities appear in `late_entities` with `origin: unknown`; fresh plates come from a `clean_stack` zone | Injector unit tests |
-
-## Fakes
-
-- **We use:** `InMemoryStateClient` and `FixedClock` (platform).
-- **We ship:** the corpora and JSONL files themselves. They are the fakes for "a kitchen happened".
+| Time runs forward | A tool carries an allergen only after its true contact with the source | Property test over random seeds (`safety`) |
+| Blind classifier | Clips contain only box masks, the change mask and timing: no allergens, no classes, no realistic utensils | Schema validation on every clip; a test that the renderer's shape set has no utensil sprites |
+| Known-clean source | Track loss and late entities appear in `late_entities` with `origin: unknown`; fresh plates come from a `clean_stack` zone | Mistake-injection unit tests |
 
 ## Tests
 
-- Live in `kitchen/sim/tests/`; run `uv run pytest kitchen/sim`. The small CI scenario subset lives in `kitchen/sim/tests/fixtures/scenarios/`.
+- Tests live in `kitchen/sim/tests/`. Run `uv run pytest kitchen/sim`.
+- They use `FakeStateClient` and `FakeClock` (platform). The corpora and JSONL files we produce are the fakes for "a kitchen happened".
 - Every generated file validates against its schema, and the same (generator version, seed) reproduces it byte for byte.
-- Any change to the true process or the observation model bumps the generator version and regenerates the CI subset in the same PR.
+- No seed or kitchen layout appears in two splits.
 
-## Milestones
+## Watch out for
 
-- **M0:** generator v0 (deterministic per seed); ground-truth ADR; ≥ 20 generated scenarios; JSONL export; 2–3 proposed golden scenarios; clip-renderer ADR, reviewed with the partner (sim-12); renderer v0 with a first labeled clip set (sim-13).
-- **M1:** error injectors; ≥ 500-scenario corpus with a CI subset and a metrics script; long-shift stress scenario; load generator; hard negatives and domain randomization (sim-14); a large clip dataset with leak-free splits for the partner (sim-15).
-- **M2:** calibrate rates and track loss from recorded live sessions; turn labeled recordings into scenarios; compare sim change-mask statistics with real ones and tune the renderer to close the gap.
-- **M3:** refresh clip datasets as the partner's model needs.
-- **M4:** scripted demo-kitchen scenario matching the live demo; failure-drill scenarios.
-
-## Risks and open questions
-
-| Risk | Mitigation |
-|---|---|
-| Circular ground truth | The independence rules above. Reviewers reject any import of graph or verdict internals |
-| Sim-to-real gap | Calibrate from recordings in M2 |
-| Leakage between splits | Split by seed range **and** held-out kitchen/recipe families; a test fails if any seed or scenario appears in two splits |
-| Corpus size | Corpora live in `data/` (gitignored) with a `data-manifest.json`; the committed subset stays ≤ 1 MB |
-| Sim-to-real gap in change masks (real kitchens have steam, shadows, flicker, hands everywhere) | Shared change-mask function; domain randomization and noise; calibrate against real `change.npz` recordings in M2; the ConvLSTM is judged on real held-out clips, never on sim |
-| The model learns "overlap means transfer" | Hard negatives at a fixed share of every dataset; per-hard-negative metrics in the datasheet |
-| Scenario schema expresses hard vs soft expectations only via tags | ADR 0008 pins the tag strings and drafts an optional `generation` field (a contracts PR), needed before anything gates on generated corpora (M1) |
+- Real kitchens have steam, shadows, flicker and hands everywhere. Randomize hard, calibrate against real `change.npz` recordings, and judge the ConvLSTM only on real held-out clips.
+- Every transfer rate is a placeholder until recorded live sessions calibrate it.
+- Corpora and clip sets live in `data/` with a `data-manifest.json`; the committed subset stays under 1 MB.
