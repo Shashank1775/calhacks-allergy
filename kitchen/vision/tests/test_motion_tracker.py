@@ -122,18 +122,59 @@ def test_knives_side_by_side_in_the_rack_keep_their_identities():
 
 
 @pytest.mark.safety
-def test_a_second_chance_is_never_taken_when_two_tracks_could_claim_it():
-    """Two knives side by side both go undetected for a frame; then one knife shows up between their spots, moved too
-    far for IoU. Either track could be it, so neither takes it: it starts as a new unknown entity."""
+def test_a_still_knife_missed_for_a_frame_never_takes_a_new_neighbour():
+    """A knife lies still in the rack. In the frame the detector misses it, another knife is put down beside it. The
+    still knife hasn't gone anywhere, so the newcomer is a new entity, not the still knife (whose clean history it
+    would otherwise take)."""
     tracker = Tracker(MOTION)
-    for frame in range(3):
-        update(tracker, [knife(0.40, 0.5), knife(0.44, 0.5)], AFTER_SHIFT_START + frame * FRAME_MS)
-    update(tracker, [], AFTER_SHIFT_START + 3 * FRAME_MS)
-    between = knife(0.42, 0.56)
-    items = update(tracker, [between], AFTER_SHIFT_START + 4 * FRAME_MS)
+    for frame in range(5):
+        update(tracker, [knife(0.80, 0.5)], frame * FRAME_MS)
+    newcomer = knife(0.83, 0.5)
+    items = update(tracker, [newcomer], 5 * FRAME_MS)
+    back = update(tracker, [knife(0.80, 0.5), knife(0.83, 0.5)], 6 * FRAME_MS)
+
+    assert entity_on(items, newcomer)["entity_id"] == "tool-knife-2"
+    assert [item["entity_id"] for item in back] == ["tool-knife-1", "tool-knife-2"]
+
+
+def carry_pair(tracker, frames, gap=0.04):
+    """Two knives carried side by side to the right (picked up together), for `frames` frames from t = 0."""
+    for frame in range(frames):
+        x = carried_x(0.5, frame * FRAME_MS / 1000)
+        update(tracker, [knife(x, 0.5), knife(x + gap, 0.5)], AFTER_SHIFT_START + frame * FRAME_MS)
+
+
+@pytest.mark.safety
+def test_a_detection_two_moving_tracks_could_take_is_taken_by_neither():
+    """Two knives carried side by side are both missed for a frame; then one knife shows up between where both were
+    heading. Either could be it, so neither track takes it: it starts as a new unknown entity."""
+    tracker = Tracker(MOTION)
+    carry_pair(tracker, 12)
+    update(tracker, [], AFTER_SHIFT_START + 12 * FRAME_MS)
+    between = knife(carried_x(0.5, 13 * FRAME_MS / 1000) + 0.02, 0.5)
+    items = update(tracker, [between], AFTER_SHIFT_START + 13 * FRAME_MS)
 
     assert entity_on(items, between)["entity_id"] == "tool-knife-3"
     assert entity_on(items, between)["origin"] == "unknown"
+
+
+@pytest.mark.safety
+def test_a_moving_track_with_two_detections_in_reach_takes_neither():
+    """A carried knife is missed for a frame; then two knives are in its reach. It could be either, so it takes
+    neither."""
+    tracker = Tracker(MOTION)
+    for frame in range(12):
+        update(tracker, [knife(carried_x(0.5, frame * FRAME_MS / 1000), 0.5)], AFTER_SHIFT_START + frame * FRAME_MS)
+    update(tracker, [], AFTER_SHIFT_START + 12 * FRAME_MS)
+    ahead = carried_x(0.5, 13 * FRAME_MS / 1000)
+    left, right = knife(ahead - 0.02, 0.5), knife(ahead + 0.02, 0.5)
+    items = update(tracker, [left, right], AFTER_SHIFT_START + 13 * FRAME_MS)
+
+    assert {entity_on(items, left)["entity_id"], entity_on(items, right)["entity_id"]} == {
+        "tool-knife-2",
+        "tool-knife-3",
+    }
+    assert {item["origin"] for item in items} == {"unknown"}
 
 
 def two_knives(clean_x, dirty_x, dirty_y=0.5, seconds=4.0):
@@ -263,9 +304,7 @@ SPOTS = [(0.3, 0.3), (0.5, 0.3), (0.3, 0.6)]
 @pytest.mark.safety
 @settings(max_examples=100, deadline=None)
 @given(
-    st.lists(
-        st.tuples(st.sets(st.integers(0, 2)), st.floats(-0.04, 0.04), st.integers(0, 6)), min_size=1, max_size=25
-    )
+    st.lists(st.tuples(st.sets(st.integers(0, 2)), st.floats(-0.04, 0.04), st.integers(0, 6)), min_size=1, max_size=25)
 )
 def test_motion_mode_never_emits_a_predicted_box_and_never_reuses_an_id(steps):
     """Fail closed: every emitted box is one of this frame's detections; known-clean source: one entity ID belongs to

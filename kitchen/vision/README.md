@@ -46,13 +46,33 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 | `parity.py` | Runs the bundle's parity frames through ONNX (laptop) or the HEFs (Pi) and compares the detections |
 | `pi_setup.sh` | Installs HailoRT on the Pi, makes the venv, and runs the device and parity checks |
 | `common.py` | What the vision modules hand each other (`Detection`, `Person`, `SourceFrame`, `FrameOutput`, `BindRefused`) and `VisionSettings`, the one home for vision's thresholds and safety constants |
-| `tracking.py` | ByteTrack-style tracking (two-stage IoU association, a lost buffer, track IDs never reused), the hand boxes, and each frame's observation detections |
+| `tracking.py` | ByteTrack-style tracking (two-stage IoU association, a lost buffer, track IDs never reused), the hand boxes, and each frame's observation detections. `VISION_TRACKER=motion` switches on the experimental motion tracker (below) |
+| `compare_trackers.py` | Runs one video's detections through both trackers and prints IDs, frames tracked and unknown share per class, side by side |
 | `identity.py` | Track → entity ID and `origin`. A track lost and re-acquired always becomes a new entity, except a bin, which is identified by its slot |
 | `zones.py` | Zones file format and validator, the click-to-calibrate tool, zone assignment (smallest zone wins, never a guess), `StateClient.set_zones` |
 | `plates.py` | "Start plate": binds the one plate at the plating spot to a ticket, or refuses with the contract's 409 code |
 | `record.py` | Records `frames.jsonl`, `change.npz` and a manifest; deterministic replay; the record CLI |
 | `server.py` | Vision HTTP API (`/plates/start`, `/stream.mjpg`, `/health`) and `FakeVisionAPI` for outputs |
 | `run.py` | Main loop: source → detect → track → zones → `ObservationFrame` + change mask → consumers and the API's status. Also the run CLI and `build_frame_loop()` for running in-process |
+
+## The experimental motion tracker
+
+The default tracker (`VISION_TRACKER=iou`) matches each detection to a track's last box. A utensil moving more than its own width between frames then gets a new ID, with unknown history, every frame. In a simulation of the repo's tracker, a knife carried at half a frame-width per second used about 57 IDs in 5 s at 15 fps. `VISION_TRACKER=motion` is a candidate fix, **off by default** until real overhead footage shows it helps:
+
+- Each recently seen track is matched at its predicted box: its last box moved by its velocity. The predicted box is only used to match; what's emitted is always the detection's own box.
+- After both IoU passes, a track that is still unmatched and *moving* may take the one detection within one box diagonal of where it should be. It takes it only when no other recent track could claim that detection and no other detection is in its reach. Anything ambiguous starts a new track with unknown history. A still object the detector missed for a frame never reaches for a neighbour, so a knife put down beside it can't take its identity.
+- Two identity guards are stricter. The ID-switch guard and the clean-stack loss count cover all tool classes together, so a knife the detector relabels "spoon" can't start clean. And a pose left/right wrist swap starts both hands over as new unknown hands.
+
+To decide whether to switch it on, record the overhead shot list, then compare the two trackers on it:
+
+```bash
+uv run python -m kitchen.vision.compare_trackers --video data/recordings/overhead.mp4 --zones zones.json
+uv run python -m kitchen.vision.compare_trackers --video data/recordings/overhead.mp4 --fps 15   # a slower camera
+```
+
+Fewer entity IDs per minute for the same objects means fewer identity breaks. Switch it on with `VISION_TRACKER=motion` (it is logged at startup). It can't fix two things:
+- **Identical utensils swapped while hidden.** A knife put down on the spot another knife left less than a second earlier still takes over that knife's track, in both modes.
+- **Missed detections.** Knives the detector doesn't see can't be tracked; that's for fine-tuning.
 
 ## In and out
 
