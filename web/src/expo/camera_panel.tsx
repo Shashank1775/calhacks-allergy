@@ -3,8 +3,10 @@
  * it and colored by its allergen risk.
  *
  * Reads: GET <WEB_VISION_URL>/stream.mjpg; entity_state (latest box, probabilities, unknown).
- * Rules: display only. A missing or broken stream shows "camera offline" and changes no verdict;
- * the gate panel's FAULT comes from vision health, not from this picture.
+ * Rules: display only. Only entities tracked now are listed and drawn; a lost track keeps its row in
+ * the database (and still matters to verdicts) but not its box here. A missing or broken stream
+ * shows "camera offline" and changes no verdict; the gate panel's FAULT comes from vision health,
+ * not from this picture.
  */
 import { useState } from "react";
 import { allergen_name } from "../allergens";
@@ -14,6 +16,20 @@ import { useTableRows } from "../state/hooks";
 import type { EntityState } from "../types/TEMPORARY";
 
 export type Risk = "unknown" | "high" | "some" | "clean";
+
+/** Vision's `track_lost_ms`: an entity unseen for longer than this has lost its track for good. */
+export const TRACK_LOST_MS = 1000;
+
+/**
+ * The entities the camera sees now, each at its latest box. "Now" is the newest t_ms among the
+ * latest states, the newest frame vision synced; a state older than TRACK_LOST_MS before it is a
+ * lost track (a re-acquired object gets a new ID), so its last box would be a ghost.
+ */
+export function tracked_now(states: EntityState[]): EntityState[] {
+  const latest = [...latest_states(states).values()];
+  const now = Math.max(...latest.map((state) => state.t_ms));
+  return latest.filter((state) => state.box !== null && now - state.t_ms <= TRACK_LOST_MS);
+}
 
 /** Unknown history counts as every allergen; otherwise the strongest allergen sets the color. */
 export function risk_of(state: EntityState): Risk {
@@ -28,7 +44,7 @@ export function CameraPanel() {
   const base = vision_url();
   const states = useTableRows("entity_state");
   const [offline, set_offline] = useState(false);
-  const boxes = [...latest_states(states).values()].filter((state) => state.box !== null);
+  const boxes = tracked_now(states);
 
   return (
     <section className="rail_section">

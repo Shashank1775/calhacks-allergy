@@ -8,6 +8,7 @@ describe("screen_for_path", () => {
     ["/tablet", "tablet"],
     ["/tablet/", "tablet"],
     ["/expo", "expo"],
+    ["/summary", "summary"],
     ["/", "home"],
     ["/chef", "home"],
     ["/typo", "home"],
@@ -21,5 +22,17 @@ describe("safety: with no state source every screen shows FEED LOST", () => {
     render_with_source(<App path={path} />, null);
     expect(screen.getByRole("status")).toHaveTextContent("FEED LOST");
     expect(screen.queryByText("PASS")).toBeNull();
+  });
+});
+
+describe("/summary", () => {
+  it("shows the recorded-video banner instead of the live feed's, and never PASS", () => {
+    render_with_source(<App path="/summary" />, null);
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "RECORDED VIDEO · NOT THE LIVE KITCHEN · NOT A PASS/HOLD VERDICT",
+    );
+    expect(screen.queryByText(/FEED LOST/)).toBeNull();
+    expect(screen.queryByText("PASS")).toBeNull();
+    expect(screen.getByRole("link", { name: "SUMMARY" })).toHaveAttribute("aria-current", "page");
   });
 });
