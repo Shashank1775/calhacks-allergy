@@ -38,3 +38,29 @@ jobs:
       # hardware needs a real device; slow is for local runs.
       - name: Tests
         run: uv run pytest -m 'not hardware and not slow'
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      # web/.nvmrc is the one place the Node version lives (web framework decision: Node 24, engines >= 24.15).
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Tests
+        run: npm test
+      # tsc --noEmit, then the Vite build.
+      - name: Type check and build
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Format
+        run: npx prettier --check src
