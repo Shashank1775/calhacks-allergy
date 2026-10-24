@@ -134,17 +134,74 @@ def test_a_wash_never_erases_a_touch_that_came_during_the_soak():
     touches = [event for event in events if (event["a_id"], event["b_id"]) == (HAND, KNIFE)]
     washes = [event for event in events if event["action"] == "clean.wash" and event["a_id"] == KNIFE]
     assert touches
-    assert all(wash["t_start_ms"] > max(touch["t_end_ms"] for touch in touches) for wash in washes)
-    assert peanut_after(events, "plate-t1") >= ALLERGY_FLAG
+    assert washes == []
+    assert peanut_after(events, "plate-t1") >= 0.5  # 0.8 x 0.8 x 0.8; a wash anywhere before the plate leaves 0.03
 
 
 @pytest.mark.safety
-def test_a_held_spoon_carries_a_dirty_hand_onto_the_plate_it_rests_on():
+@pytest.mark.parametrize("fps", [15, 30, 60])
+@pytest.mark.parametrize("soaking", [KNIFE, HAND])
+def test_a_wash_that_comes_due_while_a_touch_is_being_confirmed_never_erases_it(soaking, fps):
+    """Something dirty soaks in the sink; something clean starts touching it 70 ms before its 3 s dwell is up, and is
+    then laid on (or lays it on) a plate. The touch is confirmed only 200 ms into the overlap, after the wash label
+    comes, but it began before. The wash must not be stamped before the touch: the plate keeps the peanut."""
+    end = 9000
+    grab = 933 + 3000 - 70  # the soaker's first frame in the sink is 933 at 15, 30 and 60 FPS
+    if soaking == KNIFE:  # a peanut knife soaks; a clean hand takes it, then rests on the plate
+        knife = Track(KNIFE, "tool", ((0, BIN_AT), (600, BIN_AT), (1000, WASH_AT), (end, WASH_AT)))
+        hand = Track(
+            HAND,
+            "hand",
+            (
+                (0, (0.6, 0.85)),
+                (grab - 200, (0.6, 0.85)),
+                (grab, (0.19, 0.82)),
+                (grab + 200, (0.19, 0.82)),
+                (grab + 500, (0.5, 0.55)),
+                (grab + 750, (0.5, 0.55)),
+                (grab + 1050, (0.5, 0.8)),
+                (end, (0.5, 0.8)),
+            ),
+        )
+    else:  # a hand that touched the peanut bin soaks; it takes a clean knife, which is laid on the plate
+        hand = Track(HAND, "hand", ((0, BIN_AT), (600, BIN_AT), (1000, (0.12, 0.82)), (end, (0.12, 0.82))))
+        knife = Track(
+            KNIFE,
+            "tool",
+            (
+                (0, (0.6, 0.85)),
+                (grab - 200, (0.6, 0.85)),
+                (grab, (0.14, 0.82)),
+                (grab + 200, (0.14, 0.82)),
+                (grab + 500, PLATE_AT),
+                (grab + 750, PLATE_AT),
+                (grab + 1050, (0.8, 0.5)),
+                (end, (0.8, 0.5)),
+            ),
+        )
+    frames = render(
+        [still("bin-1", "bin", BIN_AT, end), still("plate-t1", "plate", PLATE_AT, end), knife, hand], end, fps
+    )
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    grabbed = min(event["t_start_ms"] for event in events if {event["a_id"], event["b_id"]} == {HAND, KNIFE})
+    washes = [event for event in events if event["action"] == "clean.wash" and event["a_id"] == soaking]
+    assert all(wash["t_start_ms"] > grabbed for wash in washes)
+    assert peanut_after(events, "plate-t1") >= 0.5
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [15, 30, 60])
+@pytest.mark.parametrize("hold_ms", [700, 150, 100, 0])
+def test_a_held_spoon_carries_a_dirty_hand_onto_the_plate_it_rests_on(hold_ms, fps):
     """A spoon rests on a clean plate. A hand that just touched the peanut bin grabs only the spoon's handle and lifts
-    it off 700 ms later: hand -> spoon -> plate. The spoon-plate contact that was already open must not be stamped
-    before the hand's touch for all of its length."""
+    it off hold_ms later: hand -> spoon -> plate. The hand's touch is confirmed only 200 ms into the grab, so a spoon
+    lifted sooner has already left the plate by then; the touch began while it was still there, so the plate still
+    gets the peanut."""
+    lift = 1400 + hold_ms
     spoon = Track(
-        "tool-spoon-1", "tool", ((0, (0.58, 0.5)), (2100, (0.58, 0.5)), (2400, (0.8, 0.5)), (3000, (0.8, 0.5)))
+        "tool-spoon-1", "tool", ((0, (0.58, 0.5)), (lift, (0.58, 0.5)), (lift + 300, (0.8, 0.5)), (3000, (0.8, 0.5)))
     )
     hand = Track(
         HAND,
@@ -154,13 +211,13 @@ def test_a_held_spoon_carries_a_dirty_hand_onto_the_plate_it_rests_on():
             (600, BIN_AT),
             (1000, (0.62, 0.2)),
             (1400, (0.62, 0.5)),
-            (2100, (0.62, 0.5)),
-            (2400, (0.84, 0.5)),
+            (lift, (0.62, 0.5)),
+            (lift + 300, (0.84, 0.5)),
             (3000, (0.84, 0.5)),
         ),
     )
     frames = render(
-        [still("bin-1", "bin", BIN_AT, 3000), still("plate-t1", "plate", PLATE_AT, 3000), spoon, hand], 3000
+        [still("bin-1", "bin", BIN_AT, 3000), still("plate-t1", "plate", PLATE_AT, 3000), spoon, hand], 3000, fps
     )
 
     events = replay(frames, ZONES, SETTINGS)
@@ -170,10 +227,13 @@ def test_a_held_spoon_carries_a_dirty_hand_onto_the_plate_it_rests_on():
 
 
 @pytest.mark.safety
-def test_a_hand_on_the_rim_that_slides_onto_the_bin_dirties_the_plate():
+@pytest.mark.parametrize(
+    ("fps", "stay_ms"), [(15, 400), (30, 400), (60, 400), (15, 150), (30, 150), (60, 150), (15, 100), (30, 100)]
+)
+def test_a_hand_on_the_rim_that_slides_onto_the_bin_dirties_the_plate(fps, stay_ms):
     """A hand steadies a plate by its rim, slides onto the edge of the peanut bin beside it while still on the rim,
-    then lifts off, all within a second. The hand-plate contact began first, but the bin's peanut reaches the plate
-    through the hand while both touch."""
+    stays stay_ms, then lifts off. The hand-plate contact began first, but the bin's peanut reaches the plate through
+    the hand while both touch, even when the hand leaves the rim in the frame the hand-bin contact is confirmed."""
     beside = (0.67, 0.5)  # box [0.60, 0.74]; the plate's is [0.42, 0.58]
     hand = Track(
         HAND,
@@ -182,12 +242,12 @@ def test_a_hand_on_the_rim_that_slides_onto_the_bin_dirties_the_plate():
             (0, (0.55, 0.5)),
             (300, (0.55, 0.5)),
             (400, (0.59, 0.5)),
-            (800, (0.59, 0.5)),
-            (950, (0.59, 0.15)),
+            (400 + stay_ms, (0.59, 0.5)),
+            (550 + stay_ms, (0.59, 0.15)),
             (2000, (0.59, 0.15)),
         ),
     )
-    frames = render([still("plate-t1", "plate", PLATE_AT, 2000), still("bin-1", "bin", beside, 2000), hand], 2000)
+    frames = render([still("plate-t1", "plate", PLATE_AT, 2000), still("bin-1", "bin", beside, 2000), hand], 2000, fps)
 
     events = replay(frames, ZONES, SETTINGS)
 
@@ -195,15 +255,68 @@ def test_a_hand_on_the_rim_that_slides_onto_the_bin_dirties_the_plate():
 
 
 @pytest.mark.safety
-def test_a_touch_two_steps_from_the_plate_reaches_it_while_everything_still_touches():
+@pytest.mark.parametrize("lift_ms", [None, 2100, 1800, 1500])
+def test_a_touch_two_steps_from_the_plate_reaches_it_while_everything_still_touches(lift_ms):
     """A clean hand holds a spoon that rests on a plate's rim; at 1.2 s the hand also reaches the peanut bin beside
-    it. bin -> hand -> spoon -> plate: each cut transfer's rest is itself a new touch, so the cut carries on along the
-    chain and the plate gets the peanut while all three still touch."""
+    it, and at lift_ms (or never) lifts the spoon off. bin -> hand -> spoon -> plate: the bin's news crosses the
+    hand's grip, which is news to the spoon, which crosses the spoon on the plate, while all three still touch."""
     plate = still("plate-t1", "plate", (0.45, 0.5), 3000)  # box [0.37, 0.53]
-    spoon = still("tool-spoon-1", "tool", (0.54, 0.5), 3000)  # box [0.525, 0.555], over the plate's rim
-    hand = Track(HAND, "hand", ((0, (0.56, 0.5)), (1000, (0.56, 0.5)), (1200, (0.57, 0.5)), (3000, (0.57, 0.5))))
     beside = still("bin-1", "bin", (0.66, 0.5), 3000)  # box [0.59, 0.73]; the hand's [0.54, 0.60] reaches it at 1.2 s
+    if lift_ms is None:
+        spoon = still("tool-spoon-1", "tool", (0.54, 0.5), 3000)  # box [0.525, 0.555], over the plate's rim
+        hand = Track(HAND, "hand", ((0, (0.56, 0.5)), (1000, (0.56, 0.5)), (1200, (0.57, 0.5)), (3000, (0.57, 0.5))))
+    else:
+        up = lift_ms + 200
+        spoon = Track(
+            "tool-spoon-1", "tool", ((0, (0.54, 0.5)), (lift_ms, (0.54, 0.5)), (up, (0.54, 0.25)), (3000, (0.54, 0.25)))
+        )
+        hand = Track(
+            HAND,
+            "hand",
+            (
+                (0, (0.56, 0.5)),
+                (1000, (0.56, 0.5)),
+                (1200, (0.57, 0.5)),
+                (lift_ms, (0.57, 0.5)),
+                (up, (0.57, 0.25)),
+                (3000, (0.57, 0.25)),
+            ),
+        )
     frames = render([plate, spoon, hand, beside], 3000)
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    assert not any({event["a_id"], event["b_id"]} == {HAND, "plate-t1"} for event in events)  # never touched it
+    assert peanut_after(events, "plate-t1") >= ALLERGY_FLAG
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [15, 30, 60])
+def test_a_hand_that_lets_go_of_the_handle_for_a_moment_still_carries_the_bin_onto_the_plate(fps):
+    """A clean hand takes the handle of a spoon resting on a plate's rim, slides onto the peanut bin's edge and loses
+    the handle for 200 ms, takes it again, and lifts the spoon off at 1.7 s. Its grip is still the same touch when it
+    comes back, so the bin's news that reached the hand meanwhile crosses it, and then the spoon on the plate."""
+    plate = still("plate-t1", "plate", (0.45, 0.5), 2900)
+    spoon = Track(
+        "tool-spoon-1", "tool", ((0, (0.54, 0.5)), (1700, (0.54, 0.5)), (1900, (0.54, 0.25)), (2900, (0.54, 0.25)))
+    )
+    hand = Track(
+        HAND,
+        "hand",
+        (
+            (0, (0.56, 0.3)),
+            (600, (0.56, 0.3)),
+            (1000, (0.56, 0.5)),
+            (1070, (0.56, 0.5)),
+            (1100, (0.585, 0.5)),  # onto the bin's edge, off the spoon's handle
+            (1300, (0.585, 0.5)),
+            (1330, (0.57, 0.5)),  # back on the handle, still on the bin
+            (1700, (0.57, 0.5)),
+            (1900, (0.57, 0.25)),
+            (2900, (0.57, 0.25)),
+        ),
+    )
+    frames = render([plate, spoon, hand, still("bin-1", "bin", (0.66, 0.5), 2900)], 2900, fps)
 
     events = replay(frames, ZONES, SETTINGS)
 

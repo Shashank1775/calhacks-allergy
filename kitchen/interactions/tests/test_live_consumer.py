@@ -32,6 +32,12 @@ def calibrated_state() -> FakeStateClient:
     return state
 
 
+def replayed(outputs: list[FrameOutput]) -> list[dict]:
+    """The edges the recorded replay of the same frames gives, at the same camera size."""
+    observations = [output.observation for output in outputs]
+    return replay(observations, ZONES, InteractionSettings(), manifest={"width": 640, "height": 480})
+
+
 def run(consume, outputs: list[FrameOutput], clock: FakeClock) -> int:
     """Feed every output at its own time. Returns how many calls raised StateUnavailable."""
     raised = 0
@@ -45,15 +51,14 @@ def run(consume, outputs: list[FrameOutput], clock: FakeClock) -> int:
 
 
 def test_live_edges_match_the_recorded_replay():
-    """Every edge the live slot writes is one the recorded replay of the same frames gives, IDs included, and a
-    scoop and a plate contact both land while the scene is still running."""
+    """The live slot writes exactly the edges the recorded replay of the same frames gives, IDs included, while the
+    scene is still running: every transfer edge is written the frame of its hit, and this scene has no wash."""
     state, clock = calibrated_state(), FakeClock()
     outputs = frame_outputs("scoop_then_plate")
     run(live_consumer(state, clock), outputs, clock)
 
     written = state.list_interactions()
-    replayed = replay([output.observation for output in outputs], ZONES, InteractionSettings())
-    assert written and all(event in replayed for event in written)
+    assert written == replayed(outputs)
     assert {"transfer.scoop", "transfer.contact"} <= {event["action"] for event in written}
 
 
@@ -83,9 +88,8 @@ def test_a_database_outage_is_raised_and_no_edge_is_dropped():
     consume(FrameOutput(observation={**after, "detections": []}, change_mask=MASK, width=640, height=480))
 
     assert raised > 0
-    replayed = replay([output.observation for output in outputs], ZONES, InteractionSettings())
     written = state.list_interactions()
-    assert written and all(event in replayed for event in written)
+    assert written == replayed(outputs)
     assert {"transfer.scoop", "transfer.contact"} <= {event["action"] for event in written}
 
 
