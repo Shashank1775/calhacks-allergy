@@ -12,7 +12,7 @@ Turns what people type or say into exact allergen data, and never guesses. Two j
 - The server types the note, or speaks it and Cartesia Ink transcribes it. The server confirms the transcript before it's parsed.
 - Laya reads the note and returns constraints (allergen, severity, trace sensitivity) and exceptions ("coconut is fine"), each with a confidence.
 - Every field below `question_threshold` becomes a one-tap question. The ticket can't be sent until every question is answered.
-- On send, the ticket is written through `StateClient`, with `pass_threshold` set from its strictest severity.
+- On send, the ticket is written through `StateClient` as its forbidden allergens plus a `pass_threshold` set from its strictest severity. Severity, trace sensitivity and exceptions stay in the draft.
 - A late change ("also no dairy") opens a new draft at `revision + 1` that goes through the same question flow.
 - At shift start, a person types or pastes each bin's label. Laya reads it into allergen probabilities, the person checks or adjusts them on the tablet, and the profile is saved. Laya is calibrated, so an unsure answer is a middle probability that the graph carries forward, never a zero.
 
@@ -50,7 +50,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
 | No unanswered questions | `/send` accepts a draft with an open question, or a low-confidence field gets no question | `/send` returns `409 unanswered_questions` while any question is open. A property test checks that for any Laya output, every field below `question_threshold` gets a question |
 | Fail closed | Laya down produces an empty "no constraints" ticket or an empty bin profile | `LayaParserUnavailable` returns `laya_unavailable` and writes nothing; the tablet falls back to manual entry. `StateUnavailable` on send leaves the draft unsent |
 | Allergens, not contacts | Anything but allergen units in constraints or profiles | Every emitted ticket and profile validates against its schema (`additionalProperties: false`) |
-| Late changes recheck everything | Editing a ticket in place, or dropping a constraint on amend | Amend writes `revision + 1` with the full set, and old revisions are untouched |
+| Late changes recheck everything | Dropping an allergen on amend, or keeping the old revision number | Amend re-parses the original note plus the change and writes `revision + 1` with the full forbidden list; an allergen is dropped only by an explicitly answered question |
 
 Team rules on top: **never drop a mention.** An allergen mentioned at any confidence becomes a constraint or a question. **Exceptions narrow only on explicit words**, and an exception below threshold becomes a question.
 

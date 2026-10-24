@@ -2,13 +2,9 @@
   "ticket_id": "t7",
   "number": 7,
   "revision": 1,
-  "status": "sent",
   "created_t_ms": 120000,
   "source": "voice",
   "note": "peanut allergy, anaphylactic, traces matter",
   "pass_threshold": 0.99,
-  "constraints": [
-    { "allergen_unit_id": "peanut", "severity": "anaphylactic", "trace_sensitive": true, "confidence": 0.98 }
-  ],
-  "exceptions": []
+  "forbidden": ["peanut"]
 }

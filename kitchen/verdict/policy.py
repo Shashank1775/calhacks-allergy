@@ -6,7 +6,7 @@ Step:  verdict
 Reads: ticket revision; allergen_reach; unknown ancestors; input health; VerdictSettings
 Emits: verdict (decision, confidence, reasons, flagged, chain, versions)
 Rules: fail closed: any error or doubt holds and sets confidence to 0; plain-code verdict, no model in the decision;
-       allergen units only, exceptions never suppress a flag; an unknown ancestor holds
+       allergen units only (ticket.forbidden); an unknown ancestor holds
 
 Not built yet.
 """

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "entity.schema.json",
   "title": "Entity",
-  "description": "A tracked bin, tool, hand or plate. Producers: partner entity store (position fields, built from vision's frames), orders (bin profiles), partner graph (propagated profiles). Synced to SpacetimeDB at about 5 Hz.",
+  "description": "A tracked bin, tool, hand or plate: the entity row joined with its latest entity_state. Producers: partner entity store (identity, zone and box, built from vision's frames), orders (bin profiles), partner graph (propagated profiles). Synced to SpacetimeDB at about 5 Hz.",
   "type": "object",
   "additionalProperties": false,
   "required": [

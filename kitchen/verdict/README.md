@@ -20,7 +20,7 @@ flag a forbidden allergen when 1 - p[a] <= pass_threshold
 hold = not healthy or any flag or confidence < pass_threshold
 ```
 
-The sum is the safe bound however the allergens depend on each other (one knife can carry peanut and soy together). The pass threshold is the larger of the ticket's `pass_threshold` and the default for its strictest severity, so a ticket can only make it stricter. Same inputs give byte-identical verdict JSON.
+The sum is the safe bound however the allergens depend on each other (one knife can carry peanut and soy together). The pass threshold is the ticket's `pass_threshold`, which orders sets from the strictest severity. Same inputs give byte-identical verdict JSON.
 
 ## Files
 
@@ -33,7 +33,7 @@ The sum is the safe bound however the allergens depend on each other (one knife 
 
 | Direction | What | Contract | From / to |
 |---|---|---|---|
-| In | Ticket revision: forbidden allergens, severity, `pass_threshold`, exceptions | `ticket` | orders, via `StateClient` |
+| In | Ticket: forbidden allergens, `pass_threshold`, revision | `ticket` | orders, via `StateClient` |
 | In | Plate binding and plate zone (`pass` triggers a verdict) | `plate_binding`, `entity` | vision and the partner entity store, via `StateClient` |
 | In | Exact reachability with chains | `allergen_reach` via `ProvenanceGraph.reach` | partner graph |
 | In | Unknown-history ancestors | `ProvenanceGraph.unknown_ancestors` | partner graph |
@@ -47,7 +47,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
 |---|---|---|
 | Fail closed | An exception, timeout, `StateUnavailable`, `GraphUnavailable`, missing ticket or binding, or a stale plate reaches PASS | Fault injection at every `StateClient` and `ProvenanceGraph` call: the result is always HOLD with `error`, `missing_input` or `stale_track`, and confidence 0 |
 | Plain-code verdict | Anything but `decide()` makes the call, or confidence rises with more evidence | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence |
-| Allergens, not contacts | The policy reads contacts, or an exception suppresses a flag | The policy reads only allergen units. `ticket.exceptions` never suppress a flag |
+| Allergens, not contacts | The policy reads anything but the ticket's forbidden allergens | The policy reads only `ticket.forbidden` and the reach probabilities |
 | Known-clean source | An unknown ancestor is ignored | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` and `clean-plate-from-stack` |
 | Late changes recheck everything | An amendment reuses the previous verdict | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy` |
 

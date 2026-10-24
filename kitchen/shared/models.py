@@ -5,7 +5,7 @@ Step:  shared
 Reads: contracts/schemas/*.schema.json
 Emits: Pydantic v2 models (extra="forbid") for every schema: Ticket, ParseResult, AllergenProfile, Entity,
        ObservationFrame, InteractionFeatures, InteractionClip, InteractionEvent, AllergenReach, ChainStep,
-       Verdict, Scenario; plus the table dataclasses Zone, PlateBinding and ChangeEvent (contracts/state-tables.md)
+       Verdict, Scenario; plus the table dataclasses Zone, PlateBinding, EntityState and ChangeEvent (contracts/state-tables.md)
 Rules: every valid fixture parses and every invalid fixture is rejected (blind classifier: no allergen fields in
        InteractionFeatures); CI fails if this file differs from a fresh regeneration
 

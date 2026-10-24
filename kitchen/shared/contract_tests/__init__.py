@@ -9,7 +9,7 @@ Rules: a suite tests behavior promised in contracts/apis.md and nothing else; th
 
 What each suite checks:
   StateClient            every method; idempotent writes by primary key; list_interactions in t_start_ms order;
-                         first_seen_t_ms and origin never change; every ticket revision kept; StateUnavailable on
+                         first_seen_t_ms and origin never change; entity history append-only; latest ticket revision; StateUnavailable on
                          failure; subscribe() delivers inserts and updates
   EntityStore            ingest() then snapshot() reflects every frame; entities never deleted; first_seen_t_ms
                          and origin never change (known-clean source); start_sync() writes to the given StateClient

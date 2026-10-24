@@ -35,7 +35,7 @@ web/
 |---|---|---|---|
 | Out/In | Parse, answers, send, amend, transcribe, bin labels | [Orders HTTP API](../contracts/apis.md#orders-http-api) | orders |
 | Out/In | Start plate, camera stream, health | [Vision HTTP API](../contracts/apis.md#vision-http-api-on-the-pi) | vision |
-| In | `ticket`, `bin_profile`, `entity`, `entity_risk`, `plate_binding`, `verdict` | [state-tables.md](../contracts/state-tables.md) via SpacetimeDB TS bindings | partner's `database/` (bindings), written by orders, vision, verdict and the partner |
+| In | `ticket`, `bin_profile`, `entity`, `entity_state`, `plate_binding`, `verdict` | [state-tables.md](../contracts/state-tables.md) via SpacetimeDB TS bindings | partner's `database/` (bindings), written by orders, vision, verdict and the partner |
 | Uses | Allergen choices | [`allergen_units.json`](../contracts/allergen_units.json) | contracts (never hardcoded) |
 
 **Data source.** Every screen reads through one `StateSource`, picked at build time by `WEB_STATE_SOURCE`, never by the URL. Until the partner's database ships its generated TypeScript bindings, `FakeStateSource` replays any `contracts/scenarios/*.json` in the browser. The SpacetimeDB source plugs in behind the same interface (`needs-partner`).

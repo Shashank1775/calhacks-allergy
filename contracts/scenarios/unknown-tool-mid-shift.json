@@ -28,20 +28,13 @@
       "ticket_id": "t4",
       "number": 4,
       "revision": 1,
-      "status": "sent",
       "created_t_ms": 0,
       "source": "typed",
       "note": "no sesame",
       "pass_threshold": 0.95,
-      "constraints": [
-        {
-          "allergen_unit_id": "sesame",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "sesame"
+      ]
     }
   ],
   "plate_bindings": [

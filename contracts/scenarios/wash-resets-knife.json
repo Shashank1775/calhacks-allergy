@@ -31,20 +31,13 @@
       "ticket_id": "t2",
       "number": 2,
       "revision": 1,
-      "status": "sent",
       "created_t_ms": 0,
       "source": "typed",
       "note": "no peanut",
       "pass_threshold": 0.95,
-      "constraints": [
-        {
-          "allergen_unit_id": "peanut",
-          "severity": "allergy",
-          "trace_sensitive": true,
-          "confidence": 0.99
-        }
-      ],
-      "exceptions": []
+      "forbidden": [
+        "peanut"
+      ]
     }
   ],
   "plate_bindings": [

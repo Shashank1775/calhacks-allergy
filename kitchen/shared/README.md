@@ -8,7 +8,7 @@ Everything the other folders import to talk to each other. Every Python folder i
 
 | File | What it does |
 |---|---|
-| `models.py` | **Generated** Pydantic models for every schema (`extra="forbid"`), plus the table dataclasses `Zone`, `PlateBinding` and `ChangeEvent`. Rebuild with `uv run python tools/gen_models.py` |
+| `models.py` | **Generated** Pydantic models for every schema (`extra="forbid"`), plus the table dataclasses `Zone`, `PlateBinding`, `EntityState` and `ChangeEvent`. Rebuild with `uv run python tools/gen_models.py` |
 | `interfaces.py` | Every Protocol in [`contracts/apis.md`](../../contracts/apis.md) and its `*Unavailable` exception |
 | `clock.py` | `SystemClock` (live) and `FakeClock` (tests and replay) |
 | `config.py` | Settings base class: per-folder env prefix, secrets from env only, safety constants logged at startup |

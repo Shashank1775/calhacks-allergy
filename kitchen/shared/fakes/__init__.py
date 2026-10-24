@@ -10,7 +10,7 @@ Rules: each fake passes the same suite in kitchen/shared/contract_tests as the r
 Fakes that live here (platform):
   FakeStateClient      dict-backed StateClient with subscribe(), failure injection and a scenario loader
                        (load_scenario: bins, late entities, tickets, plate bindings, events, in time order);
-                       never deletes entities, never changes first_seen_t_ms or origin, keeps every ticket revision
+                       never deletes entities, never changes first_seen_t_ms or origin, keeps entity history append-only
   FakeEntityStore      EntityStore that applies ObservationFrames to a dict; start_sync() writes snapshots to
                        whatever StateClient it gets (stands in for the partner's kitchen/entities)
   FakeProvenanceGraph  ProvenanceGraph that answers reach() and unknown_ancestors() from a scenario's

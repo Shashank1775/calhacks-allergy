@@ -10,7 +10,7 @@ Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`
 | [`InteractionClassifier`](#interactionclassifier) | **partner** (zone rules in `kitchen/interactions/`, ConvLSTM in `kitchen/lstm/`) | `FakeClassifier` | platform |
 | [Change mask and clip builder](#change-mask-and-clips) | platform (`kitchen/shared/change_mask.py`, `kitchen/shared/clips.py`) | none needed: pure functions | platform |
 | [`LayaParser`](#layaparser) | orders | `FakeLayaParser` | orders |
-| Verdict feed (`verdict` and `entity_risk` rows) | verdict, partner graph | `FakeVerdictFeed` (replays scenario verdicts into `FakeStateClient`) | verdict |
+| Verdict feed (`verdict` rows) | verdict | `FakeVerdictFeed` (replays scenario verdicts into `FakeStateClient`) | verdict |
 | [`Transcriber`](#transcriber-and-speaker) | orders | `FakeTranscriber` | orders |
 | [`Speaker`](#transcriber-and-speaker) | outputs | `FakeSpeaker` | outputs |
 | [`GateDriver`](#gatedriver) | outputs | `FakeGate` | outputs |
@@ -27,22 +27,19 @@ Real: **partner**. Fake: `FakeStateClient` (platform). Every Python component ta
 
 ```python
 class StateClient(Protocol):
-    # shift (partner's shift CLI, run by a person at shift start)
-    def start_shift(self, shift_id: str, wall_clock_start: datetime) -> None: ...
-
-    # writes: each method has exactly one calling team (state-tables.md#writers)
-    def put_ticket(self, ticket: Ticket) -> None: ...                                   # orders; amendment = same ticket_id, revision + 1
+    # writes: each method has exactly one calling team (state-tables.md#writers); names match the module's reducers
+    def put_ticket(self, ticket: Ticket) -> None: ...                                   # orders; an amendment replaces it with revision + 1
     def put_bin_profile(self, entity_id: str, profile: AllergenProfile) -> None: ...    # orders
     def set_zones(self, zones: list[Zone]) -> None: ...                                 # vision (calibration)
     def bind_plate(self, plate_id: str, ticket_id: str, t_ms: int) -> None: ...         # vision ("start plate")
-    def upsert_entities(self, entities: list[Entity]) -> None: ...                      # partner entity store, ~5 Hz
-    def record_interactions(self, events: list[InteractionEvent]) -> None: ...          # partner interactions
-    def put_entity_risk(self, entity_id: str, profile: AllergenProfile, t_ms: int) -> None: ...  # partner graph
+    def register_entity(self, entity: Entity) -> None: ...                              # partner entity store, once per entity
+    def move_entity(self, state: EntityState) -> None: ...                              # partner entity store and graph, ~5 Hz
+    def record_interaction(self, event: InteractionEvent) -> None: ...                  # partner interactions
     def record_verdict(self, verdict: Verdict) -> None: ...                             # verdict
 
     # reads
-    def get_ticket(self, ticket_id: str, revision: int | None = None) -> Ticket | None: ...  # None = latest
-    def get_entity(self, entity_id: str) -> Entity | None: ...
+    def get_ticket(self, ticket_id: str) -> Ticket | None: ...                          # the latest revision
+    def get_entity(self, entity_id: str) -> Entity | None: ...                          # identity + latest state
     def list_entities(self, kind: str | None = None) -> list[Entity]: ...
     def list_zones(self) -> list[Zone]: ...
     def get_plate_binding(self, plate_id: str) -> PlateBinding | None: ...
@@ -53,11 +50,11 @@ class StateClient(Protocol):
     def subscribe(self, table: str, on_change: Callable[[ChangeEvent], None]) -> Callable[[], None]: ...
 ```
 
-- `Zone`, `PlateBinding` and `ChangeEvent` are small dataclasses in `kitchen/shared/models.py` mirroring [state-tables.md](state-tables.md).
-- **Triggers are table changes.** "A plate reaches the pass" means an `entity` row with `kind: plate` whose `zone` is a zone of kind `pass`; the verdict service watches `subscribe("entity", ...)` for that transition. "A ticket was amended" means a new `ticket` revision (`subscribe("ticket", ...)`). The gate service watches `subscribe("verdict", ...)`.
+- `Zone`, `PlateBinding`, `EntityState` and `ChangeEvent` are small dataclasses in `kitchen/shared/models.py` mirroring [state-tables.md](state-tables.md).
+- **Triggers are table changes.** "A plate reaches the pass" means a new `entity_state` row for a plate whose `zone` is a zone of kind `pass`; the verdict service watches `subscribe("entity_state", ...)` for that transition. "A ticket was amended" means a new `ticket` revision (`subscribe("ticket", ...)`). The gate service watches `subscribe("verdict", ...)`.
 - Every method raises `StateUnavailable` when the database can't be reached. On the verdict path that becomes HOLD (safety rule: fail closed).
 - Writes are idempotent by primary key.
-- **Fake:** dict-backed, same semantics including `subscribe`, and can load a `scenario` file.
+- **Fake:** dict-backed, same semantics including `subscribe` and append-only entity history, and can load a `scenario` file.
 - How Python reaches SpacetimeDB is the partner's call (default: HTTP reducer calls plus polling).
 
 ## EntityStore
@@ -75,7 +72,7 @@ class EntityStore(Protocol):
 ```
 
 - Never deletes an entity and never changes `first_seen_t_ms` or `origin` (safety rule: known-clean source).
-- **Fake:** applies frames to a dict; `start_sync` writes snapshots to whatever `StateClient` it gets.
+- **Fake:** applies frames to a dict; `start_sync` writes `register_entity` and `move_entity` calls to whatever `StateClient` it gets.
 
 ## ProvenanceGraph
 
@@ -232,4 +229,4 @@ Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start pl
 | `GET /stream.mjpg` | — | MJPEG | Raw camera stream |
 | `GET /health` | — | `{"fps": float, "detector": "onnx"\|"hailo", "last_frame_t_ms": int}` | `detector` is `onnx` until the Hailo is connected. The gate goes to `fault` if this goes stale |
 
-Overlays are drawn client-side from `entity.box` plus `entity_risk`.
+Overlays are drawn client-side from each entity's latest `entity_state` (box and allergens).

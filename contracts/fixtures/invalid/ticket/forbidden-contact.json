@@ -1,7 +1,6 @@
 {
   "$comment": "Must fail: tickets store forbidden allergens, not forbidden contacts (safety rule: allergens, not contacts).",
-  "ticket_id": "t10", "number": 10, "revision": 1, "status": "sent", "created_t_ms": 0, "source": "typed",
+  "ticket_id": "t10", "number": 10, "revision": 1, "created_t_ms": 0, "source": "typed",
   "note": "no peanut", "pass_threshold": 0.99,
-  "constraints": [ { "allergen_unit_id": "peanut", "severity": "allergy", "trace_sensitive": true, "confidence": 0.99 } ],
-  "exceptions": [], "forbidden_entities": ["bin-4"]
+  "forbidden": ["peanut"], "forbidden_entities": ["bin-4"]
 }

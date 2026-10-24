@@ -41,7 +41,7 @@ Data flow:
 
 ```
 tablet ─▶ orders ─▶ DB: ticket, bin profiles
-camera ─▶ vision ─▶ ObservationFrame + change mask ─┬─▶ entities (partner) ─▶ DB: entity (≈5 Hz)
+camera ─▶ vision ─▶ ObservationFrame + change mask ─┬─▶ entities (partner) ─▶ DB: entity, entity_state (≈5 Hz)
                                                     └─▶ interactions (partner): pair windows (features + clips) ─▶ zone rules | ConvLSTM ─▶ DB: interaction edges
 DB ─▶ graph (partner) ─▶ reach ─▶ verdict ─▶ DB: verdict + chain ─▶ gate, voice, expo board
 sim world ─▶ scenarios ─▶ graph and verdict tests        sim world ─▶ rendered clips + labels ─▶ ConvLSTM training (partner)
@@ -248,9 +248,9 @@ Each has a default we run with until whoever owns it decides otherwise.
 | Allergens | The nine major US allergens; an allowed ingredient ("coconut is fine") is a free-text exception | settled |
 | Default severity | `allergy` | owner |
 | Pass thresholds | 0.80 / 0.90 / 0.95 / 0.99 for preference / intolerance / allergy / anaphylactic | settled |
-| Trace sensitivity | `trace_sensitive: false` changes nothing yet: every transfer edge counts | verdict, owner approves |
+| Trace sensitivity | Every transfer edge counts; the ticket table doesn't store trace sensitivity yet | verdict, owner approves |
 | What backs Laya | Our fine-tuned copy of `convaiinnovations/laya`, run locally ([decision](docs/decisions/laya-for-notes-and-labels.md)) | settled |
-| Database | SpacetimeDB running locally; Python reaches it with HTTP reducer calls plus polling | partner |
+| Database | SpacetimeDB 2.13 running locally (database `allergen-yhz81`, Rust module); Python reaches it with HTTP reducer calls plus polling | partner |
 | Contact and wipe edges | Allergens can move both ways | partner |
 | Unknown history | An unknown-history entity carries every allergen with probability 1 | partner |
 | Equal timestamps | Edges order by `t_start_ms`, `t_end_ms`, `event_id`; a tied wash goes before the transfer | partner |
