@@ -40,6 +40,9 @@ export function VideoSource() {
         />
         STAPLE VIDEO HERE →
       </label>
+      <p>
+        <a href="/summary">Summarize a recording →</a> what was touched and what could carry which allergen.
+      </p>
 
       {file && (
         <>

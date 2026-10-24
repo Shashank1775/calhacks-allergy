@@ -552,3 +552,48 @@ a {
 .risk_clean {
   --risk: var(--pass);
 }
+
+/* Video summary */
+/* The recorded-video banner stays on screen however far the summary scrolls. */
+.banner_sticky {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.summary_progress {
+  width: 100%;
+  height: 12px;
+  margin-top: 12px;
+  accent-color: var(--ink);
+}
+
+.exposure_list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.exposure_list li {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--ink);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chip {
+  border: 2px solid var(--ink);
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.chip_unknown {
+  border-color: var(--hold);
+  color: var(--hold);
+}

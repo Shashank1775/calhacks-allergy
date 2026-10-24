@@ -11,6 +11,7 @@ Last updated: 2026-10-24.
 | `/` | Home: what this is, the two sources (video file, live camera), links to the stations | Built. Video is picked and previewed locally only |
 | `/tablet` | New ticket (note → Laya parse → one-tap questions → send), and changing a sent ticket | Built; checked against the local runner's orders API |
 | `/expo` | The gate panel, tickets on the rail, plates on the pass, why a plate is held, start plate, the live camera | Built; the gate panel checked against the local runner |
+| `/summary` | Upload a recorded video and read its scene summary: the text, every touch, and what each entity could carry | Built against MSW mocks of the summary service's API (#198); the service itself is #197 |
 
 There's no bin setup screen: the architecture simplification cut chef confirmation, and the orders API change (#149) made the demo's bin profiles hard-coded, so `/bins/read` and `PUT /bins/{id}` are gone.
 
