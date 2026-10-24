@@ -41,8 +41,7 @@ class InteractionNet(nn.Module):
         return torch.cat([x, dt_plane], dim=2)
 
     def forward(self, x, dt_ms):
-        # increment the channel dimension of x based on time passing to include dt_ms
-        # and affect gradients/change for lstm model (GRU actually)
+        # Add elapsed time as one more channel, so the GRU knows how much time passed between steps.
         x = self.add_dt_channel(x, dt_ms)
         b, t, _, h, w = x.shape
         hidden = x.new_zeros(b, self.hidch, h, w)
