@@ -30,7 +30,7 @@ import onnxruntime
 # The Model Zoo release that pairs with HailoRT 4.23 on Raspberry Pi OS Trixie (docs/decisions/hailo-models.md).
 MODEL_ZOO_VERSION = "v2.18.0"
 HAILORT_VERSION = "4.23.0"
-HW_ARCH = "hailo8"
+HW_ARCH = "hailo8l"
 ZOO_URL = "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/{version}/{arch}/{model}.hef"
 
 # Model Zoo names for the two networks. Change both if the partner trains another size (yolov8n, yolov8m).
@@ -41,7 +41,7 @@ COCO_CLASSES = 80
 LETTERBOX_GRAY = 114  # Ultralytics' padding color
 
 COMPILE_SCRIPT = """#!/usr/bin/env bash
-# Compiles this bundle's custom ONNX files into Hailo-8 HEFs. Run it from this folder on an x86-64 Linux machine with
+# Compiles this bundle's custom ONNX files into Hailo-8L HEFs. Run it from this folder on an x86-64 Linux machine with
 # Hailo's Dataflow Compiler and Model Zoo installed (the Hailo AI Software Suite, free from the Hailo Developer Zone).
 # It does not run on the Mac or the Pi. A GPU makes the optimization step much faster.
 # Export the ONNX files with opset 11 (yolo export format=onnx imgsz=640 opset=11) so the Model Zoo recipes match.

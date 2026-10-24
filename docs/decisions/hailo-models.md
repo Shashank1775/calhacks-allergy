@@ -6,7 +6,7 @@
 
 ## Context
 
-The Hailo-8 isn't connected yet. Vision runs locally with ONNX Runtime and must stay ready to upload. We needed to know, without a device, which YOLOv8 variants the Hailo Model Zoo supports, whether precompiled HEF files exist, and which runtime versions the Pi needs. Assumed hardware: Pi 5 with the AI HAT+ (Hailo-8) and Camera Module 3.
+The Hailo-8 isn't connected yet. Vision runs locally with ONNX Runtime and must stay ready to upload. We needed to know, without a device, which YOLOv8 variants the Hailo Model Zoo supports, whether precompiled HEF files exist, and which runtime versions the Pi needs. Assumed hardware: Pi 5 with the AI HAT+ and Camera Module 3. The board is a Hailo-8L, so the bundle fetches the `hailo8l` HEFs.
 
 ## Decision
 
