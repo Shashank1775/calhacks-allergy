@@ -32,14 +32,21 @@ These live in `kitchen/shared/contract_tests/` (written by platform). Your graph
 - `reachability.py`: `reach` (every allergen above 0, with its strongest chain from a bin), `unknown_ancestors`, and `subgraph` (the edges on time-forward paths into the plate, plus a node for each entity they touch).
 - **Chains.** A chain starts at a bin. A wash ends the washed entity's chains, since what's left is residue. Allergens from residue or unknown history get an empty chain; their probability still counts, and `unknown_ancestors` names the unknown-history entities.
 - **Fail closed.** Any error, or a plate the database doesn't hold, raises `GraphUnavailable`. An edge naming an entity the database doesn't hold treats that entity as unknown history.
-- `risk.py`: `LiveRisk(state, clock)`, the live `entity_state` rows for the camera overlays. It is not part of the verdict path.
+- `risk.py`: `LiveRisk(state, clock, write_lock)`, the live `entity_state` rows for the camera overlays. It is not part of the verdict path.
   Whenever an interaction edge lands (a flag set from the change feed, so nothing heavy runs on the camera's frame-loop thread), a
   background thread at about 5 Hz reads the shift with `read_shift`, runs `propagate`, and appends one row for each tool, hand and
   plate whose shown risk changed: probabilities rounded to 3 decimals (never rounded down to 0), `unknown: true` only for an
   unwashed `origin: unknown` entity, and `caused_by` set to the latest edge touching it (without `caused_by` the joins ignore the
   allergens). The row copies `zone`, `box` and `t_ms` from the entity's newest row, so it moves nothing: `last_seen_t_ms` stays
-  put and a plate at the pass isn't judged again. `update_once()` does one update on the caller's thread; `start(hz)` / `stop()`
-  run it in the background. An error writes nothing and is tried again next tick, so a failure never shows a clean entity.
+  put and a plate at the pass isn't judged again. Reading the entity and writing the row happen under `write_lock`, which
+  whoever writes the entity store's rows takes around each row (`tools/run_local.py` does), so a store row never lands between
+  them and the risk row never carries an older position. `update_once()` does one update on the caller's thread; `start(hz)` /
+  `stop()` run it in the background. An error writes nothing and is tried again next tick, so a failure never shows a clean entity.
+  An edge that names an entity the database doesn't hold yet (it lands before the entity store registers the entity) makes
+  `update_once()` return False, and the thread tries again until the entity is registered: a clean-stack plate that a dirty hand
+  touched must not be left showing clean. The thread rests `IDLE_PER_BUSY` (4) times as long as an update took, if that is longer
+  than its period, so a long shift (every update re-reads and propagates all of it) takes a fixed share of the CPU instead of
+  more and more.
   **Bins get no rows:** `start_profile` reads a bin's start from the profile the database joins to it, so a row would become the
   bin's start and the graph would count the same contact twice. (A bin that picked up an allergen from a tool still shows its
   own profile. Showing it needs the graph to read `bin_profile` itself, which the `StateClient` doesn't offer; see the PR.)
