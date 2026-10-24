@@ -4,7 +4,7 @@ How to bring the live demo up on demo day, check it, and rehearse it. The camera
 
 ## Once, before the day
 
-- **The Pi:** set it up with `bash kitchen/vision/pi_setup.sh install`. Copy the model bundle with `rsync -a data/models/stock-yolov8s/ <user>@raspberrypi.local:<repo>/data/models/stock-yolov8s/`, then run the device check.
+- **The Pi:** set it up with `bash kitchen/vision/pi_setup.sh install`. The board is a Hailo-8L, so it needs the `stock-yolov8s-hailo8l` bundle, not `stock-yolov8s` (its Hailo-8 HEFs won't load; the laptop keeps using `stock-yolov8s` for ONNX). Get it from the [`vision-model-v1` release](https://github.com/Shashank1775/calhacks-allergy/releases/tag/vision-model-v1) into `data/models/` on the laptop, copy it with `rsync -a data/models/stock-yolov8s-hailo8l/ <user>@raspberrypi.local:<repo>/data/models/stock-yolov8s-hailo8l/`, then run the device check on the Pi: `bash kitchen/vision/pi_setup.sh check data/models/stock-yolov8s-hailo8l`.
 - **Zones:** calibrate `zones.json` on a still from the mounted camera. It needs the bin slots (`slot-1` to `slot-5`, matching `kitchen/orders/bins.py`), the wash, the plating spot, the pass, and the clean-plate stack and utensil rack (both `clean_stack` zones). Copy it to the Pi.
 
 ## Bring it up, in this order
@@ -12,7 +12,7 @@ How to bring the live demo up on demo day, check it, and rehearse it. The camera
 1. **The runner, on the Pi.** Put every prop in view first: bins in their slots, the knife on the rack, plates on the clean stack. Then run:
 
    ```bash
-   VISION_DETECTOR=hailo VISION_BUNDLE_DIR=data/models/stock-yolov8s \
+   VISION_DETECTOR=hailo VISION_BUNDLE_DIR=data/models/stock-yolov8s-hailo8l \
      ORDERS_CORS_ORIGINS=http://localhost:5173 VISION_CORS_ORIGINS=http://localhost:5173 \
      .venv/bin/python tools/run_local.py --live --picamera --zones zones.json
    ```

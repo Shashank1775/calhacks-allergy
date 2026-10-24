@@ -2,7 +2,7 @@
 
 **Owner:** team `vision` (agents).
 
-Turns camera frames into tracked, stably identified bins, tools, hands and plates (`ObservationFrame`), and hands every frame, with its change mask, to the partner's entity store and interactions step. **The Hailo-8 isn't connected yet**, so everything runs locally on a laptop (video file or webcam, ONNX Runtime) and stays ready to upload.
+Turns camera frames into tracked, stably identified bins, tools, hands and plates (`ObservationFrame`), and hands every frame, with its change mask, to the partner's entity store and interactions step. **The Hailo-8L isn't connected yet**, so everything runs locally on a laptop (video file or webcam, ONNX Runtime) and stays ready to upload.
 
 ## Running it
 
@@ -17,7 +17,7 @@ curl http://localhost:8002/health                     # {"fps": ..., "detector":
 curl --max-time 3 -o stream.bin http://localhost:8002/stream.mjpg                 # a few seconds of MJPEG
 ```
 
-Settings are `VISION_*` environment variables (`kitchen/vision/common.py`, `VisionSettings`), logged at startup. The ones you'll touch: `VISION_BUNDLE_DIR` (the model bundle, default `data/models/stock-yolov8s`), `VISION_DETECTOR` (`onnx` or `hailo`), `VISION_PORT` (8002) and `VISION_CORS_ORIGINS` (the web app's origin, `http://localhost:5173`).
+Settings are `VISION_*` environment variables (`kitchen/vision/common.py`, `VisionSettings`), logged at startup. The ones you'll touch: `VISION_BUNDLE_DIR` (the model bundle: default `data/models/stock-yolov8s` on the laptop, `data/models/stock-yolov8s-hailo8l` on the Pi), `VISION_DETECTOR` (`onnx` or `hailo`), `VISION_PORT` (8002) and `VISION_CORS_ORIGINS` (the web app's origin, `http://localhost:5173`).
 
 Without `--serve`, a video plays as fast as it can with its own timestamps from 0, so two runs give byte-identical output and the first `VISION_SHIFT_START_MS` (3 s) of the video is shift start. With `--serve` (or `--live`) it plays like a live camera: each frame waits for its place in the video, then is stamped with the clock, so "start plate" sees fresh frames. Live, the clock starts once the detector has loaded, so a slow model load can't eat the shift-start window. The JSONL and recording are complete as soon as the source ends; with `--serve` the API stays up (its `/health` going stale) until Ctrl-C or SIGTERM.
 
@@ -28,7 +28,7 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 ## What happens here
 
 - Read frames from a video file, a webcam or the Pi camera (picamera2, since OpenCV can't open it on a Pi 5). Each frame gets `t_ms` from the injected `Clock`.
-- Detect knives, spoons, forks and bowls with YOLOv8s, and wrists with YOLOv8s-pose. Today this runs with ONNX Runtime; later the same model runs on the Hailo-8, sharing the same pre- and post-processing code.
+- Detect knives, spoons, forks and bowls with YOLOv8s, and wrists with YOLOv8s-pose. Today this runs with ONNX Runtime; later the same model runs on the Hailo-8L, sharing the same pre- and post-processing code.
 - Track with ByteTrack, then map each track to a stable entity ID (`bin-<slot>`, `tool-<class>-<n>`, `hand-p<k>-left|right`, `plate-<n>`) with an `origin`: `shift_start`, `clean_stack` or `unknown`.
 - Give every detection a zone from the zones file: bin slots, plating spot, wash, clean stack, pass.
 - When the cook taps "start plate", bind the plate at the plating spot to that ticket.
@@ -150,12 +150,12 @@ uvx --from ultralytics yolo export model=yolov8s.pt format=onnx imgsz=640 opset=
 uvx --from ultralytics yolo export model=yolov8s-pose.pt format=onnx imgsz=640 opset=11
 ```
 
-**2. Build the bundle (laptop).** `--weights stock` downloads Model Zoo v2.18.0's precompiled `yolov8s.hef` and `yolov8s_pose.hef` (it refuses ONNX files that aren't stock-shaped). `--weights custom` writes `compile.sh` instead, which needs Hailo's Dataflow Compiler on an x86-64 Linux machine (not the Mac or the Pi):
+**2. Get the bundle (laptop).** The board is a **Hailo-8L**, and Hailo-8 HEFs won't load on it. The ready-built `stock-yolov8s-hailo8l` bundle is on the [`vision-model-v1` release](https://github.com/Shashank1775/calhacks-allergy/releases/tag/vision-model-v1): `gh release download vision-model-v1 -p stock-yolov8s-hailo8l.zip -D data/models && unzip data/models/stock-yolov8s-hailo8l.zip -d data/models`. Only the HEFs are chip-specific; ONNX is the same for both chips, so the laptop keeps using `data/models/stock-yolov8s`. To build the bundle yourself instead: `--weights stock` downloads Model Zoo v2.18.0's precompiled `yolov8s.hef` and `yolov8s_pose.hef` (it refuses ONNX files that aren't stock-shaped). `--weights custom` writes `compile.sh` instead, which needs Hailo's Dataflow Compiler on an x86-64 Linux machine (not the Mac or the Pi):
 
 ```bash
-uv run python -m kitchen.vision.bundle --name kitchen-v1 --weights stock \
+uv run python -m kitchen.vision.bundle --name stock-yolov8s-hailo8l --weights stock \
     --det-onnx yolov8s.onnx --pose-onnx yolov8s-pose.onnx --video data/recordings/<prep>.mp4
-uv run python -m kitchen.vision.parity run --bundle data/models/kitchen-v1 --backend onnx
+uv run python -m kitchen.vision.parity run --bundle data/models/stock-yolov8s-hailo8l --backend onnx
 ```
 
 **3. Set up the Pi (owner, once).** Raspberry Pi OS 64-bit Trixie. `install` puts on `hailo-all` (HailoRT 4.23.0), holds it, and makes a venv that can see the system's `hailo_platform` and `picamera2`, with the `server` and `ml` extras (the Vision API and the local runner's live mode need them):
@@ -167,10 +167,10 @@ bash kitchen/vision/pi_setup.sh install && sudo reboot
 **4. Upload and check (owner).** Copy the bundle, run the device check (FPS for det, pose and both; we need 30 or more) and the parity run, then compare on the laptop:
 
 ```bash
-rsync -a data/models/kitchen-v1/ <user>@raspberrypi.local:<repo>/data/models/kitchen-v1/
-bash kitchen/vision/pi_setup.sh check data/models/kitchen-v1          # on the Pi
-scp <user>@raspberrypi.local:<repo>/data/models/kitchen-v1/parity/hailo.npz data/models/kitchen-v1/parity/
-uv run python -m kitchen.vision.parity compare data/models/kitchen-v1/parity/onnx.npz data/models/kitchen-v1/parity/hailo.npz
+rsync -a data/models/stock-yolov8s-hailo8l/ <user>@raspberrypi.local:<repo>/data/models/stock-yolov8s-hailo8l/
+bash kitchen/vision/pi_setup.sh check data/models/stock-yolov8s-hailo8l          # on the Pi
+scp <user>@raspberrypi.local:<repo>/data/models/stock-yolov8s-hailo8l/parity/hailo.npz data/models/stock-yolov8s-hailo8l/parity/
+uv run python -m kitchen.vision.parity compare data/models/stock-yolov8s-hailo8l/parity/onnx.npz data/models/stock-yolov8s-hailo8l/parity/hailo.npz
 ```
 
 `compare` exits 1 unless the HEF finds at least 90% of the ONNX boxes (and vice versa) with mean IoU 0.8 or more and mean score difference 0.1 or less. Then set `VISION_DETECTOR=hailo` and check `/health` reports `detector: hailo`.
@@ -181,7 +181,7 @@ uv run python -m kitchen.vision.parity compare data/models/kitchen-v1/parity/onn
 rpicam-still -o still.jpg                                                   # on the Pi: 16:9, the same view as the frames
 scp <user>@raspberrypi.local:<repo>/still.jpg . && uv run python -m kitchen.vision.zones calibrate --image still.jpg --out zones.json
 scp zones.json <user>@raspberrypi.local:<repo>/
-VISION_DETECTOR=hailo VISION_BUNDLE_DIR=data/models/kitchen-v1 \
+VISION_DETECTOR=hailo VISION_BUNDLE_DIR=data/models/stock-yolov8s-hailo8l \
   ORDERS_CORS_ORIGINS=http://localhost:5173 VISION_CORS_ORIGINS=http://localhost:5173 \
   .venv/bin/python tools/run_local.py --live --picamera --zones zones.json      # on the Pi
 ```
