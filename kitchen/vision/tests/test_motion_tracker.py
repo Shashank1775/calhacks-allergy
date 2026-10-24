@@ -269,6 +269,26 @@ def test_a_track_lost_while_moving_never_takes_whatever_is_where_it_was_lost():
     assert entity_on(items, other)["entity_id"] == "tool-knife-2"
 
 
+@pytest.mark.safety
+def test_a_stale_track_never_takes_a_detection_overlapping_a_knife_just_matched():
+    """A clean knife is hidden for a few frames. A dirty knife lies close by, and a detection turns up between the
+    two, overlapping the dirty knife's box and the hidden knife's spot. It could be either knife, so the hidden
+    knife's track doesn't take it: it starts as a new unknown entity."""
+    tracker = Tracker(MOTION)
+    frames_to_shift_start = MOTION.shift_start_ms // FRAME_MS + 1
+    for frame in range(frames_to_shift_start):
+        update(tracker, [knife(0.5, 0.5)], frame * FRAME_MS)  # the clean knife, seen through shift start
+    dirty = knife(0.475, 0.5)
+    for frame in range(frames_to_shift_start, frames_to_shift_start + 3):
+        update(tracker, [dirty], frame * FRAME_MS)  # clean knife hidden (its track goes stale), dirty one beside it
+    between = knife(0.49, 0.5)
+    items = update(tracker, [dirty, between], (frames_to_shift_start + 3) * FRAME_MS)
+
+    assert entity_on(items, dirty)["entity_id"] == "tool-knife-2"
+    assert entity_on(items, between)["entity_id"] == "tool-knife-3"
+    assert entity_on(items, between)["origin"] == "unknown"
+
+
 def test_a_knife_grabbed_at_full_speed_settles_on_one_new_identity():
     """Grabbed and moved at full speed at once, a knife outruns its track on the first frame. The new track takes the
     lost track's motion (not its identity), so it follows the knife from then on instead of breaking every frame."""
@@ -293,7 +313,7 @@ def test_a_still_knife_lying_across_the_frame_keeps_one_identity_through_jitter_
         if frame > 5 and rng.random() < 0.25:
             update(tracker, [], frame * FRAME_MS)
             continue
-        jitter = rng.normal(0, [0.004, 0.0015])
+        jitter = rng.normal(0, [0.008, 0.0015])  # a long box jitters most along its length
         items = update(tracker, [knife(0.5 + jitter[0], 0.5 + jitter[1], size=(0.12, 0.025))], frame * FRAME_MS)
         ids |= {item["entity_id"] for item in items}
 

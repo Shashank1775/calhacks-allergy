@@ -57,11 +57,29 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 
 ## The experimental motion tracker
 
-The default tracker (`VISION_TRACKER=iou`) matches each detection to a track's last box. A utensil moving more than its own width between frames then gets a new ID, with unknown history, every frame. In a simulation of the repo's tracker, a knife carried at half a frame-width per second used about 57 IDs in 5 s at 15 fps. `VISION_TRACKER=motion` is a candidate fix, **off by default** until real overhead footage shows it helps:
+The default tracker (`VISION_TRACKER=iou`) matches each detection to a track's last box. A utensil moving more than its own width between frames then gets a new ID, with unknown history, every frame. `VISION_TRACKER=motion` is a candidate fix, **off by default** until real overhead footage shows it helps. It changes how tracks are matched, never what is emitted (a box is always the detection's own):
 
-- Each recently seen track is matched at its predicted box: its last box moved by its velocity. The predicted box is only used to match; what's emitted is always the detection's own box.
-- After both IoU passes, a track that is still unmatched and *moving* may take the one detection within one box diagonal of where it should be. It takes it only when no other recent track could claim that detection and no other detection is in its reach. Anything ambiguous starts a new track with unknown history. A still object the detector missed for a frame never reaches for a neighbour, so a knife put down beside it can't take its identity.
-- Two identity guards are stricter. The ID-switch guard and the clean-stack loss count cover all tool classes together, so a knife the detector relabels "spoon" can't start clean. And a pose left/right wrist swap starts both hands over as new unknown hands.
+- **Prediction.** A track seen in the last frame or two is matched at its predicted box: its last box moved by its velocity.
+- **Recent first.** Those recent tracks pick first. A track lost for longer only gets the detections left over.
+- **Second chance for movers.** A recent track that is moving out of its own box may take the one detection within one box diagonal of where it should be. It takes it only when no other track could claim that detection and no other detection is in its reach. A still object the detector missed for a frame never reaches for a neighbour, so a knife put down beside it can't take its identity.
+- **Motion hand-off.** A new track started next to a track that just went missing takes over that track's *motion*, never its identity. A utensil grabbed at full speed then breaks its track once, not every frame.
+- **No re-matching a lost mover.** A track lost while moving never matches again: its object isn't where it was lost, so a knife carried onto that spot is a different one. A still object, such as a knife covered by a hand, is still matched where it lay.
+- **No re-matching across a crossing.** A lost track never takes a detection that overlaps a knife matched this frame, or that a moving track could also claim. That covers two knives crossing, or swapping places.
+- **Stricter identity guards.** The ID-switch guard and the clean-stack loss count cover all tool classes together, so a knife the detector relabels "spoon" can't start clean. And a pose left/right wrist swap starts both hands over as new, unknown hands.
+
+Anything ambiguous starts a new track with unknown history: a HOLD, never a guessed identity.
+
+The simulation measured the repo's tracker on synthetic boxes with jitter, misses and score noise, at 10, 15 and 30 fps:
+
+| Simulated case | `iou` | `motion` |
+|---|---|---|
+| IDs per 5 s, moving objects (0.5–1.5 frame-widths/s) | 24.7 | 13.7 |
+| IDs per 5 s, a knife carried at 0.5 frame-widths/s, 15 fps | 58 | 6 |
+| IDs per 5 s, still objects, or three knives side by side in a rack | 1.0 | 1.0 |
+| A clean ID ends up on the other knife: head-on / offset / perpendicular crossing | 6% / 0% / 0% | 0% / 0% / 0% |
+| A clean ID ends up on the other knife: two knives swap places | 75% | 27% |
+
+Motion mode is never worse than `iou` in any crossing or takeover condition. It does use more IDs in some very fast (≥ 1 frame-width/s) back-and-forth motions, which means extra unknowns, in the HOLD direction.
 
 To decide whether to switch it on, record the overhead shot list, then compare the two trackers on it:
 
