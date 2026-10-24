@@ -68,15 +68,15 @@ Tests live in `kitchen/vision/tests/`; run them with `uv run pytest kitchen/visi
 
 The Hailo-8 isn't connected yet, so nothing in vision waits on it. Being ready to upload means:
 
-1. **One model artifact.** Pick YOLOv8 detection and pose variants and an input size that the Hailo Model Zoo supports (vision-02 confirms which). Export them once to fixed-shape ONNX (`export.py`). Run that exact ONNX locally with ONNX Runtime.
-2. **One processing path.** Letterbox, decoding, NMS and keypoints live in `postprocess.py`, used by both backends. The Hailo backend only replaces "run the network".
+1. **One model artifact.** Detection is `yolov8s.pt` and pose is `yolov8s-pose.pt`, both at a fixed 640x640 input. The Hailo Model Zoo publishes precompiled Hailo-8 HEFs for both ([ADR 0011](../../docs/decisions/0011-hailo-readiness-yolov8s-model-zoo-hefs.md)). Export them once to fixed-shape ONNX (`export.py`). Run that exact ONNX locally with ONNX Runtime.
+2. **One processing path.** Letterbox, decoding, NMS and keypoints live in `postprocess.py`, used by both backends. The Hailo backend only replaces "run the network", with one exception: the precompiled detection HEF runs NMS inside HailoRT, using thresholds from the same config (ADR 0011).
 3. **A deploy bundle** in `data/models/<name>/`:
    - `model.onnx`;
    - `calib/`: a few hundred frames from our own kitchen recordings, for quantization;
    - `manifest.json`: classes, input size, normalization, thresholds, weight hashes, tool versions;
    - `model.hef`, once produced.
 4. **Getting a HEF**, either way:
-   - (a) use the precompiled Hailo Model Zoo HEF for the same variant, if one exists and COCO classes are enough;
+   - (a) use the precompiled Hailo Model Zoo HEF for the same variant, if one exists and COCO classes are enough. This is the chosen path: Model Zoo v2.18.0 HEFs, which pair with HailoRT 4.23.0 (ADR 0011);
    - (b) compile our ONNX with the Hailo Dataflow Compiler, which needs an x86-64 Linux machine, not the Mac (OQ-18).
 5. **Parity check.** When the device is connected, the owner runs one recorded clip through ONNX (laptop) and HEF (Pi) and compares detections within a tolerance. Quantization drift shows up here, not in the demo.
 6. **Upload.** Copy the bundle to the Pi, set `VISION_DETECTOR=hailo`, and check `/v1/health` reports `detector: hailo` and ≥ 30 FPS.
@@ -95,14 +95,14 @@ The 30 FPS budget applies on the Hailo. Locally, replay runs at whatever speed t
 
 | Risk | Mitigation |
 |---|---|
-| Hailo not connected yet; unverified whether det+pose run together at 30 FPS, or whether Model Zoo HEFs exist for our variants | Local-first path never waits on it. vision-02 picks Model Zoo–supported variants. Fallbacks once connected: `n` models, lower resolution, pose every Nth frame (flagged) |
+| Hailo not connected yet; unverified whether det+pose run together at 30 FPS on the Pi | Local-first path never waits on it. Model Zoo HEFs exist for both variants (ADR 0011). Fallbacks once connected: pose every Nth frame (flagged), then `yolov8n` for detection. There is no `n` pose HEF, and a lower resolution needs our own compile |
 | Quantization changes detections on the Hailo | Calibration frames from our own footage; owner runs the ONNX-vs-HEF parity check before relying on the device |
 | No x86-64 Linux machine for the Dataflow Compiler (OQ-18) | Prefer precompiled Model Zoo HEFs; compile only if we fine-tune |
 | Hands occlude tools, so ByteTrack switches IDs and causes unknown-history holds | Safe, but it hurts the demo. Overhead mount, tune the track buffer, measure in M3 |
 | A wrist is not the contact point | The hand box extends from the wrist toward the forearm. Calibrate on recordings |
 | COCO `knife`, `spoon` and `fork` are weak from overhead | Camera angle first; fine-tune in M3 with weights outside git |
 | A bin is swapped between slots mid-shift | Bins are identified by slot. Swaps are unsupported, and the README says so |
-| Pi OS, Python and HailoRT compatibility (OQ-11) | vision-02 records the versions to install; the owner confirms when the device is connected |
+| Pi OS, Python and HailoRT compatibility (OQ-11) | ADR 0011 lists what to install: Pi OS Trixie (Python 3.13) and `hailo-all` 5.1.1, which brings HailoRT 4.23.0, held with `apt-mark hold`. The owner confirms when the device is connected |
 | Ultralytics is AGPL-3.0 (OQ-16) | Owner decides before any release |
 | Overlays drawn client-side or burned in (OQ-6) | Client-side by default |
 
