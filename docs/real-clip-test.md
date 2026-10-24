@@ -73,9 +73,13 @@ uv run --all-extras --with torch python tools/real_clip_test.py \
 The video needs at least 16 fps. The tool takes every Nth frame so the gaps stay even (every 2nd frame at 30 fps), and
 it refuses an event whose one-second window runs off the start or end of the video, so leave a second either side.
 
-Defaults: the detector bundle in `data/models/stock-yolov8s`, the LSTM in `data/models/lstm/boxpooled-v1/best.pt`, and
-thresholds 0.17 (contact) and 0.085 (moved), the 99%-recall picks from validation. Change them with `--bundle`,
-`--weights` and `--thresholds`.
+Defaults: the detector bundle in `data/models/stock-yolov8s`, the LSTM in `data/models/lstm/boxpooled-v2_4/best.pt`,
+and thresholds 0.99845 (contact) and 0.16027 (moved), its 99%-recall picks on sim validation. Change them with
+`--bundle`, `--weights` and `--thresholds`.
+
+On sim, v2.4's contact probabilities sit almost at 1, so its 0.998 contact cutoff is fragile: real footage that looks a
+little different from sim can push true contacts just under it. Read the `lstm_at_0.5` numbers next to the
+threshold ones before judging the contact head.
 
 ## 4. Read the results
 
