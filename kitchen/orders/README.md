@@ -7,7 +7,7 @@
 ## What happens here
 
 - The server types the note, or speaks it and Cartesia Ink transcribes it. The server confirms the transcript before it's parsed.
-- Jev reads the note and returns constraints (allergen unit, severity, trace sensitivity) and exceptions ("coconut is fine"), each with a confidence.
+- Laya reads the note and returns constraints (allergen unit, severity, trace sensitivity) and exceptions ("coconut is fine"), each with a confidence.
 - Every field below `question_threshold` becomes a one-tap question. The ticket can't be sent until every question is answered.
 - Results are cached by normalized note, so a repeated note parses instantly and works offline.
 - On send, the ticket is written through `StateClient`, with `pass_threshold` set from its strictest severity (OQ-4).
@@ -17,8 +17,8 @@
 
 | File | What it does |
 |---|---|
-| `jev.py` | `JevClient` adapters: `FakeJev` (keyword parser) now, the real Jev adapter after the spike (OQ-5) |
-| `parse.py` | Normalize the note, check the cache, call Jev, and build the `ParseResult` draft |
+| `laya_parser.py` | `LayaParser` adapters: `FakeLayaParser` (keyword parser, for tests) and the fine-tuned Laya adapter |
+| `parse.py` | Normalize the note, check the cache, call Laya, and build the `ParseResult` draft |
 | `questions.py` | Turn low-confidence fields into questions, fill answers, and decide `sendable` |
 | `cache.py` | Normalized-note cache keyed by parser name and version |
 | `apply.py` | Write a sent draft as a `Ticket` through `StateClient.put_ticket` |
@@ -35,7 +35,7 @@ Planned data (not files yet): `eval/notes.jsonl`, the ticket-note eval set (orde
 | In | Note text or audio, answers, send, amend | [Orders HTTP API](../../contracts/apis.md#orders-http-api) | outputs tablet screen |
 | Out | Draft with questions | [`parse_result`](../../contracts/schemas/parse_result.schema.json) | outputs tablet screen |
 | Out | Sent ticket (tables `ticket`, `ticket_constraint`, `ticket_exception`) | [`ticket`](../../contracts/schemas/ticket.schema.json) via [`StateClient`](../../contracts/apis.md#stateclient) | verdict, partner graph, outputs |
-| Uses | Jev | [`JevClient`](../../contracts/apis.md#jevclient) | external (OQ-5) |
+| Uses | Laya | [`LayaParser`](../../contracts/apis.md#layaparser) | fine-tuned Laya |
 | Uses | Cartesia Ink | [`Transcriber`](../../contracts/apis.md#transcriber-and-speaker) | external |
 | Uses | Allergen units | [`allergen_units.json`](../../contracts/allergen_units.json) | contracts |
 
@@ -47,8 +47,8 @@ See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). Every test below is marked 
 
 | Rule | How we could break it | Test |
 |---|---|---|
-| 3. No unanswered questions | `/send` accepts a draft with an open question, or a low-confidence field gets no question | `/send` returns `409 unanswered_questions` while any question is open. A property test (`hypothesis`) checks that for any Jev output, every field below `question_threshold` gets a question, and the pipeline adds one if Jev didn't |
-| 1. Fail closed | Jev down with no cache hit produces an empty "no constraints" ticket | A `JevUnavailable` cache miss returns `jev_unavailable` and writes nothing. `StateUnavailable` on send leaves the draft unsent |
+| 3. No unanswered questions | `/send` accepts a draft with an open question, or a low-confidence field gets no question | `/send` returns `409 unanswered_questions` while any question is open. A property test (`hypothesis`) checks that for any Laya output, every field below `question_threshold` gets a question, and the pipeline adds one if Laya didn't |
+| 1. Fail closed | Laya down with no cache hit produces an empty "no constraints" ticket | A `LayaParserUnavailable` cache miss returns `laya_unavailable` and writes nothing. `StateUnavailable` on send leaves the draft unsent |
 | 4. Allergens, not contacts | Anything but allergen units in constraints | Every emitted ticket validates against `ticket.schema.json` (`additionalProperties: false`) |
 | 9. Late changes recheck everything | Editing a ticket in place, or dropping a constraint on amend | Amend writes `revision + 1` with the full set, and old rows are untouched. A constraint is removed only by an explicitly answered question |
 
@@ -57,7 +57,7 @@ Team rules on top: **never drop a mention.** An allergen mentioned at any confid
 ## Fakes
 
 - **We use:** `InMemoryStateClient` (platform) for every `StateClient` call. No test reaches a vendor; network calls are blocked in tests.
-- **We ship:** `FakeJev` (covers the eval set), `TextFileTranscriber`, and `fakes/http/` example responses. Every endpoint change updates `fakes/http/` in the same PR.
+- **We ship:** `FakeLayaParser` (covers the eval set), `TextFileTranscriber`, and `fakes/http/` example responses. Every endpoint change updates `fakes/http/` in the same PR.
 
 ## Tests
 
@@ -65,17 +65,17 @@ Tests live in `kitchen/orders/tests/`. Run `uv run pytest kitchen/orders`. The e
 
 ## Milestones
 
-- **M0:** `FakeJev`, parse pipeline and API skeleton (orders-01). Eval set with hard cases. Parse cache. Spikes for Jev, Cartesia Ink and Apify.
+- **M0:** `FakeLayaParser`, parse pipeline and API skeleton (orders-01). Eval set with hard cases. Parse cache. Spikes for Cartesia Ink and Apify.
 - **M1:** question answers and send gate. Apply through `StateClient`. Amendments. `/v1/transcribe` on the fake. Runs in the e2e harness, and against the partner's real database (needs partner).
 - **M2:** runs on the demo LAN against live SpacetimeDB. Latency budgets: parse ≤ 3 s online, ≤ 50 ms cached.
-- **M3:** real Jev scores the eval set with **zero** wrong constraints above threshold. Cartesia Ink live.
-- **M4:** offline mode (warm cache, manual-entry fallback). Failure drill: Jev down means questions or manual entry, never a guess.
+- **M3:** fine-tuned Laya scores the eval set with **zero** wrong constraints above threshold. Cartesia Ink live.
+- **M4:** offline mode (warm cache, manual-entry fallback). Failure drill: Laya down means questions or manual entry, never a guess.
 
 ## Risks and open questions
 
 | Risk | Mitigation |
 |---|---|
-| What backs Jev is unknown (OQ-5) | Everything goes behind `JevClient`; `FakeJev` until the spike lands |
+| Laya is English-only and sometimes wrong | Low-confidence answers become one-tap questions; `FakeLayaParser` keeps tests independent of the model |
 | Ambiguous notes ("no nuts": peanuts too?) | Ask, don't guess. Hard cases are in the eval set; the metric that matters is wrong-without-question = 0 |
 | Exceptions under coarse units ("coconut is fine" under `tree_nut`, OQ-2) | Stored as a free-text ingredient on the parent unit until OQ-2 is answered |
 | Speech-to-text errors ("says me" for sesame) | The server confirms the transcript; voice cases are in the eval set |

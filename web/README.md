@@ -51,7 +51,7 @@ See [AGENTS.md §3](../AGENTS.md#3-safety-rules).
 |---|---|---|
 | 1. Fail closed | Showing PASS on stale data after the feed drops, or falling back to a replay when the source isn't set | Connection loss shows a "feed lost" banner and clears PASS badges. A missing or unknown `WEB_STATE_SOURCE` shows FEED LOST on every screen |
 | 2. Models only tighten | Client-side decision logic | The pass badge renders only from `verdict.decision == "pass"`. Code review checks there is no other logic |
-| 3. No unanswered questions | Tablet sends with an open question | Send is disabled until `sendable`. A `409 unanswered_questions` re-shows the questions. `jev_unavailable` shows manual entry, never a guessed result |
+| 3. No unanswered questions | Tablet sends with an open question | Send is disabled until `sendable`. A `409 unanswered_questions` re-shows the questions. `laya_unavailable` shows manual entry, never a guessed result |
 | 9. Late changes recheck everything | Showing an old revision's PASS | A plate whose latest verdict is for an older revision shows "rechecking" |
 
 ## Fakes

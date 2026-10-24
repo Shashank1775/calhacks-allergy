@@ -1,7 +1,7 @@
 {
   "probabilities": { "peanut": 0.98, "soy": 0.6, "wheat": 0.3 },
   "unknown": false,
-  "source": "jev",
+  "source": "laya",
   "unclear_ingredients": ["house curry paste"],
   "confirmed_by_chef": false
 }

@@ -14,7 +14,7 @@ Fakes that live here (platform):
                        never deletes entities, never changes first_seen_t_ms or origin, keeps every ticket revision
   FakeEntityStore      EntityStore that applies ObservationFrames to a dict; start_sync() writes snapshots to
                        whatever StateClient it gets (stands in for the partner's kitchen/entities)
-  FakeProvenanceGraph  ProvenanceGraph that answers reach(), subgraph() and unknown_ancestors() from a scenario's
+  FakeProvenanceGraph  ProvenanceGraph that answers reach() and unknown_ancestors() from a scenario's
                        ground truth (expected allergens_reached, chain_event_ids, late_entities); no graph math
                        (stands in for the partner's kitchen/graph)
   ScriptedClassifier   InteractionClassifier returning scripted labels, or erroring or hanging on cue
@@ -22,10 +22,8 @@ Fakes that live here (platform):
   FixedClock           re-exported from kitchen.shared.clock
 
 Fakes other teams ship (with the code they stand in for):
-  FakeJev              kitchen/orders (orders)
+  FakeLayaParser       kitchen/orders (orders)
   TextFileTranscriber  kitchen/orders (orders)
-  ExactLaya            kitchen/verdict (verdict): answers with ProvenanceGraph.reach
-  AdversarialLaya      kitchen/verdict (verdict): random, late, empty or malformed answers
   ConsoleGate          kitchen/gate (outputs)
   MockGPIOGate         kitchen/gate (outputs)
   ConsoleSpeaker       kitchen/gate (outputs)

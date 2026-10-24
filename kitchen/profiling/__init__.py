@@ -2,7 +2,7 @@
 
 Owner: orders (agents)
 Step:  entity profiling (orders)
-Reads: bin label text or photo, prep sheets, optional online menu
+Reads: bin label text, prep sheets, optional online menu
 Emits: AllergenProfile via StateClient.put_bin_profile; chef confirmations
 Rules: 1 unclear never means clean; 4 profiles are allergen units
 Tasks: orders-09, orders-04 (Apify spike)

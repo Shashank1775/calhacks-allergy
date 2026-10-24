@@ -2,7 +2,7 @@
   "draft_id": "d-0007",
   "note": "severe nut allergy, coconut is fine",
   "source": "typed",
-  "parser": { "name": "jev", "version": "0.0.0-example" },
+  "parser": { "name": "laya", "version": "0.0.0-example" },
   "cached": false,
   "constraints": [
     {

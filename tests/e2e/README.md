@@ -7,13 +7,13 @@ Proves the pieces fit. It runs a whole kitchen through the system, with every co
 ## What it runs
 
 ```
-typed note ──▶ FakeJev parse ──▶ scripted answers to questions ──▶ ticket (StateClient)
+typed note ──▶ FakeLayaParser parse ──▶ scripted answers to questions ──▶ ticket (StateClient)
 scenario file ──▶ bins, plate bindings, interaction events (StateClient)
-plate reaches the pass ──▶ FakeProvenanceGraph ──▶ verdict policy (kitchen/verdict, rules_only mode)
+plate reaches the pass ──▶ FakeProvenanceGraph ──▶ verdict policy (kitchen/verdict)
 verdict ──▶ ConsoleGate + ConsoleSpeaker
 ```
 
-- **Default:** everything on fakes: `InMemoryStateClient`, `FakeJev`, `FakeProvenanceGraph`, `ConsoleGate`, `ConsoleSpeaker`, under a `FixedClock`.
+- **Default:** everything on fakes: `InMemoryStateClient`, `FakeLayaParser`, `FakeProvenanceGraph`, `ConsoleGate`, `ConsoleSpeaker`, under a `FixedClock`.
 - **With the partner's parts** (`needs-partner`): swap in the partner's real `StateClient` (local SpacetimeDB) and the real `ProvenanceGraph` with flags. The expected results are identical.
 
 ## Commands

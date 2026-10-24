@@ -67,7 +67,7 @@ Three contracts are fixed and this ADR does not change them:
 3. **One page becomes one prep-sheet seed.** The `markdown` of every page that has some becomes one seed text for the M4 profiling flow, and `{"items": n}` reports how many seeds were stored. This is settled: the Director's review of PR #136 confirmed that `items` counts the prep-sheet seeds stored, which matches the `menu_import.py` header ("Emits: prep-sheet text for bin_labels; item count"). The response shape stays the same, and no RFC is needed.
 4. **The token goes in a header.** `APIFY_TOKEN` (already in `.env.example`) is sent as `Authorization: Bearer` [A4], never as a `?token=` query parameter, so it can't leak into request logs.
 5. **Fail clearly and seed nothing.** An HTTP error, a `408` or a run that returns no page text (a PDF or image-only menu, a bot wall) raises `MenuImportFailed`, and `/v1/menu/import` returns an error. There are no partial imports.
-6. **Seeds never confirm anything.** Menu text only enters profiling as `prep_sheet_text` for a bin a person picks, and it still goes through Jev and chef confirmation. Menus leave out ingredients (frying oil, garnish, shared fryers), so a profile built from menu text alone is never written with `confirmed_by_chef: true` (safety rule 1).
+6. **Seeds never confirm anything.** Menu text only enters profiling as `prep_sheet_text` for a bin a person picks, and it still goes through Laya and chef confirmation. Menus leave out ingredients (frying oil, garnish, shared fryers), so a profile built from menu text alone is never written with `confirmed_by_chef: true` (safety rule 1).
 
 ### Adapter sketches
 

@@ -9,7 +9,7 @@
     graph/         6  provenance graph, propagation, exact reachability        (partner)
     verdict/       7  plate at the pass -> PASS or HOLD, with the chain        (team verdict)
     gate/          8  servo, lights, buzzer, voice                             (team outputs)
-    sim/           -  simulated kitchens, scenarios, Laya data and eval        (team sim)
+    sim/           -  simulated kitchens, scenarios, ConvLSTM training clips   (team sim)
     shared/        -  generated models, interfaces, clock, config, fakes       (team platform)
 
 The SpacetimeDB module is in database/ (partner) and the screens are in web/ (team outputs).

@@ -8,7 +8,11 @@
       "type": "integer",
       "minimum": 0
     },
-    "probability": { "type": "number", "minimum": 0, "maximum": 1 },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
     "allergen_unit_id": {
       "description": "ID from contracts/allergen_units.json (or a child unit once OQ-2 is settled).",
       "type": "string",
@@ -16,27 +20,45 @@
     },
     "severity": {
       "description": "Ordered from least to most severe.",
-      "enum": ["preference", "intolerance", "allergy", "anaphylactic"]
+      "enum": [
+        "preference",
+        "intolerance",
+        "allergy",
+        "anaphylactic"
+      ]
     },
     "entity_id": {
       "description": "Stable entity ID, e.g. bin-4, tool-knife-17, hand-p1-left, plate-t7.",
       "type": "string",
       "pattern": "^(bin|tool|hand|plate)-[a-z0-9-]+$"
     },
-    "entity_kind": { "enum": ["bin", "tool", "hand", "plate"] },
+    "entity_kind": {
+      "enum": [
+        "bin",
+        "tool",
+        "hand",
+        "plate"
+      ]
+    },
     "box": {
       "description": "Normalized [x1, y1, x2, y2] in 0-1 frame coordinates.",
       "type": "array",
-      "items": { "type": "number", "minimum": 0, "maximum": 1 },
+      "items": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
       "minItems": 4,
       "maxItems": 4
     },
     "action": {
-      "enum": ["transfer.contact", "transfer.scoop", "transfer.wipe", "clean.wash", "unimportant"]
-    },
-    "verdict_mode": {
-      "description": "full = exact reachability + Laya; rules_only = exact reachability only, switched on explicitly by a person.",
-      "enum": ["full", "rules_only"]
+      "enum": [
+        "transfer.contact",
+        "transfer.scoop",
+        "transfer.wipe",
+        "clean.wash",
+        "unimportant"
+      ]
     }
   }
 }
