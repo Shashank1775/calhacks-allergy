@@ -9,6 +9,8 @@ export const REASON_LABELS: Record<string, string> = {
   stale_track: "Tracking went stale",
   missing_input: "An input was missing",
   error: "Something went wrong while checking",
+  laya_flagged: "Laya's plate check says a forbidden allergen may have reached the plate",
+  laya_unavailable: "Laya's plate check couldn't give an answer",
 };
 
 export function reason_label(code: string): string {
