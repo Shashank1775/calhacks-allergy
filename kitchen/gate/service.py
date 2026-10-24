@@ -5,7 +5,8 @@ Owner: outputs (agents)
 Step:  gate and screens
 Reads: StateClient every tick (zones, the plate at the pass, its ticket and verdicts), vision GET /health
 Emits: GateDriver.show, Speaker.say
-Rules: fail closed: fault on silence, stale health or any exception; only a PASS for the current revision opens
+Rules: fail closed: fault on silence, stale health or any exception; only a PASS for the current revision opens;
+       a plate counts at the pass only while vision still tracks it, and two such plates hold
 
 The loop polls rather than subscribes: each tick reads everything afresh, so a database that stops answering shows up
 at once as fault, and nothing depends on a change event arriving. The StateClient must time out its own calls (raise
@@ -33,6 +34,9 @@ class GateSettings:
     state_limit_ms: int = 2000
     # Vision's /health last_frame_t_ms must have advanced within this long.
     health_limit_ms: int = 1000
+    # A plate counts at the pass only if seen within this long of vision's newest sighting. Vision's track_lost_ms
+    # (kitchen/vision/common.py): a plate unseen this long has no track (see plates_at_pass).
+    plate_lost_ms: int = 1000
 
 
 @dataclass(frozen=True)
@@ -102,14 +106,35 @@ def latest_verdict(verdicts: list[dict], plate_id: str) -> dict | None:
     return latest
 
 
-def read_pass(state) -> dict:
+def plates_at_pass(state, plate_lost_ms: int) -> list[dict]:
+    """The plates whose latest zone is a pass zone and that vision still tracks.
+
+    Vision ends a track once its object goes unseen for track_lost_ms and never revives it. So a plate last seen more
+    than plate_lost_ms before the newest sighting of anything has no track: it was lifted out of view (its last row
+    still says pass, and nothing writes another), or a hand hid it for over a second and it will come back as a new
+    plate with unknown history, which holds. Ages are measured on vision's frame clock (each entity's last_seen_t_ms),
+    not the gate's, so database or sync lag can't age out a plate vision still has. Fail closed stays as it was: a
+    stale camera is still fault (health_limit_ms), and two plates both seen within the limit still hold.
+    """
+    pass_zones = {zone.zone_id for zone in state.list_zones() if zone.kind == "pass"}
+    entities = state.list_entities()
+    newest_t_ms = max((entity["last_seen_t_ms"] for entity in entities), default=0)
+    return [
+        entity
+        for entity in entities
+        if entity["kind"] == "plate"
+        and entity["zone"] in pass_zones
+        and newest_t_ms - entity["last_seen_t_ms"] <= plate_lost_ms
+    ]
+
+
+def read_pass(state, plate_lost_ms: int) -> dict:
     """What's at the pass right now, read from the database: plate, its latest verdict, and its ticket.
 
     Returns the GateInputs fields other than the ages. A plate with no ticket has no verdicts the gate can trust, so
     it reads as no verdict (idle, closed).
     """
-    pass_zones = {zone.zone_id for zone in state.list_zones() if zone.kind == "pass"}
-    plates = [plate for plate in state.list_entities(kind="plate") if plate["zone"] in pass_zones]
+    plates = plates_at_pass(state, plate_lost_ms)
     view = {"plate_id": None, "verdict": None, "current_revision": None, "ticket_number": None, "crowded": False}
     if len(plates) > 1:
         view["crowded"] = True
@@ -142,6 +167,7 @@ class GateService:
         self.clock = clock
         self.read_health = read_health
         self.settings = settings or GateSettings()
+        logger.info("gate settings: %s", self.settings)
         self._state_ok_ms: int | None = None
         self._last_frame_t_ms: int | None = None
         self._frame_changed_ms: int | None = None
@@ -152,7 +178,7 @@ class GateService:
         now = self.clock.now_ms()
         self._check_health(now)
         try:
-            view = read_pass(self.state)
+            view = read_pass(self.state, self.settings.plate_lost_ms)
             self._state_ok_ms = now
             state_age = 0
         except Exception:  # fail closed: StateUnavailable or anything else shows fault this tick

@@ -54,6 +54,15 @@ class World:
         """Put a plate in the pass zone at t_ms."""
         self.state.move_entity(EntityState(plate_id, 1, t_ms, PASS_ZONE.zone_id, None, {}, False))
 
+    def knife_seen(self, t_ms):
+        """Vision sees the knife at t_ms and nothing else, as when a plate has been lifted out of view."""
+        self.state.move_entity(EntityState("tool-knife-1", 1, t_ms, None, None, {}, False))
+
+    def unbound_plate_to_pass(self, plate_id, t_ms):
+        """Register another plate, bound to no ticket, and put it in the pass zone at t_ms."""
+        self.state.register_entity(dict(self.state.get_entity("plate-t2"), entity_id=plate_id, label=plate_id))
+        self.plate_to_pass(plate_id, t_ms)
+
 
 @pytest.mark.safety
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
@@ -126,10 +135,54 @@ def test_two_plates_at_the_pass_hold():
     world.plate_to_pass("plate-t2", 3000)
     assert world.at(3000) == "pass"
 
-    world.state.register_entity(dict(world.state.get_entity("plate-t2"), entity_id="plate-x", label="plate-x"))
-    world.plate_to_pass("plate-x", 3100)
+    world.unbound_plate_to_pass("plate-x", 3100)
 
     assert world.at(3250) == "hold"
+
+
+@pytest.mark.safety
+def test_two_plates_seen_within_the_track_lost_limit_hold():
+    """Fail closed: a plate last seen plate_lost_ms before the other is still tracked by vision, so both hold."""
+    world = World("wash-resets-knife")
+    limit = world.service.settings.plate_lost_ms
+    world.unbound_plate_to_pass("plate-x", 3000 - limit)
+    world.plate_to_pass("plate-t2", 3000)
+
+    assert world.at(3000) == "hold"
+
+
+def test_a_plate_lifted_out_of_view_leaves_the_pass():
+    """A plate's last row says pass forever once it's carried out of view; vision's newer sightings age it out."""
+    world = World("knife-carries-peanut-to-plate")
+    world.plate_to_pass("plate-t1", 3000)
+    assert world.at(3000) == "hold"
+
+    limit = world.service.settings.plate_lost_ms
+    world.knife_seen(3000 + limit)
+    assert world.at(3000 + limit) == "hold"  # unseen for the limit: vision may still have its track
+
+    world.knife_seen(3000 + limit + 1)
+    assert world.at(3000 + limit + 1) == "idle"
+
+
+def test_the_next_plate_passes_once_the_last_one_has_left():
+    """The bug this guards: one plate served by lifting it out of view held every later plate as two at the pass."""
+    world = World("wash-resets-knife")
+    world.unbound_plate_to_pass("plate-x", 1500)
+    assert world.at(1500) == "idle"  # no ticket, no verdict: closed
+
+    world.plate_to_pass("plate-t2", 2400)
+    assert world.at(2400) == "hold"  # plate-x seen 900 ms ago: still two at the pass
+
+    world.plate_to_pass("plate-t2", 3000)
+    assert world.at(3000) == "pass"  # plate-x unseen for 1500 ms: its track has ended
+
+
+def test_gate_settings_are_logged_at_startup(caplog):
+    with caplog.at_level("INFO", logger="kitchen.gate.service"):
+        World("wash-resets-knife")
+
+    assert "plate_lost_ms=1000" in caplog.text
 
 
 def test_gate_service_voice_says_each_hold_once():

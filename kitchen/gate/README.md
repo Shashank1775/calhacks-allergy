@@ -30,6 +30,8 @@ The last step. Makes each verdict physical (servo arm, red or green light, buzze
 | any | HOLD verdict, or a verdict for an older revision | `hold` (closed, red, buzzer) |
 | any | feed silent past the limit, vision health stale, `StateUnavailable`, or any exception | `fault` (closed, red, buzzer pulsing) |
 
+A plate is **at the pass** while its latest zone is a pass zone and vision still tracks it: its `last_seen_t_ms` is within `plate_lost_ms` (1000 ms, vision's `track_lost_ms`) of the newest `last_seen_t_ms` of any entity. A plate lifted out of view keeps a last row that says pass, so without this it would count as at the pass for the rest of the shift and hold every later plate. Vision never revives an ended track, so a plate hidden over a second comes back as a new entity with unknown history, which holds. Ages are on vision's frame clock, so database lag can't drop a plate vision still has.
+
 This table is the spec. Any change to it is `safety-critical` and updates this table in the same PR.
 
 ## In and out
@@ -51,6 +53,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). All gate work is `safety-cri
 | Rule | How we could break it | Test (`safety`) |
 |---|---|---|
 | Fail closed | Opening on stale, missing or malformed data | Default is closed. Silence past the limit, stale health, `StateUnavailable` or any exception gives `fault` |
+| Fail closed | Letting one plate through with another still at the pass | Two plates both seen within `plate_lost_ms` hold |
 | Plain-code verdict | Recomputing or softening a decision | Only `verdict.decision == "pass"` opens. There is no decision logic here |
 | Late changes recheck everything | Keeping an old revision's PASS after an amendment | A verdict for an older ticket revision holds |
 

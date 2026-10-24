@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import hold_peanut from "../../contracts/fixtures/valid/verdict/hold-peanut.json";
 import pass_clean from "../../contracts/fixtures/valid/verdict/pass-clean.json";
-import { gate_view, plates_at_pass } from "./gate";
+import { gate_view, PLATE_LOST_MS, plates_at_pass } from "./gate";
 import type { EntityState, Ticket, Verdict } from "./types/TEMPORARY";
 
 const hold = hold_peanut as Verdict;
@@ -104,5 +104,51 @@ describe("safety: the gate panel only opens on plate_badge's PASS", () => {
     const tables = kitchen(pass, "pass");
     tables.entity_state.push(at(pass.plate_id, "spot", 5));
     expect(plates_at_pass(tables)).toEqual([]);
+  });
+});
+
+describe("a plate counts at the pass only while vision still tracks it", () => {
+  /** The tables after `plate_id` was last seen at the pass at `t_ms` and lifted out of view, with a bin seen since. */
+  function lifted_out(tables: ReturnType<typeof kitchen>, bin_seen_t_ms: number) {
+    tables.entity_state.push(at("bin-1", "slot-1", bin_seen_t_ms));
+    return tables;
+  }
+
+  it("drops a plate unseen for longer than vision's track_lost_ms", () => {
+    const tables = lifted_out(kitchen(hold, "pass"), 2 + PLATE_LOST_MS + 1);
+    expect(plates_at_pass(tables)).toEqual([]);
+    expect(gate_view("live", "ok", tables).state).toBe("idle");
+  });
+
+  it("keeps a plate seen within the limit", () => {
+    const tables = lifted_out(kitchen(hold, "pass"), 2 + PLATE_LOST_MS);
+    expect(plates_at_pass(tables)).toEqual([hold.plate_id]);
+    expect(gate_view("live", "ok", tables).state).toBe("hold");
+  });
+
+  it("passes the next plate once a held plate has been carried out of view", () => {
+    const tables = kitchen(hold, "pass");
+    tables.entity.push({ ...tables.entity[0], entity_id: pass.plate_id });
+    tables.entity_state.push(at(pass.plate_id, "pass", 2 + PLATE_LOST_MS + 1));
+    tables.plate_binding.push({ plate_id: pass.plate_id, ticket_id: pass.ticket_id, t_ms: 1 });
+    tables.ticket.push(ticket_for(pass));
+    tables.verdict.push(pass);
+
+    const view = gate_view("live", "ok", tables);
+    expect(view.state).toBe("pass");
+    expect(view.plate_id).toBe(pass.plate_id);
+  });
+
+  it("safety: holds two plates at the pass both seen within the limit", () => {
+    const tables = kitchen(pass, "pass");
+    tables.entity.push({ ...tables.entity[0], entity_id: "plate-other" });
+    tables.entity_state.push(at("plate-other", "pass", 2 + PLATE_LOST_MS));
+    expect(plates_at_pass(tables)).toHaveLength(2);
+    expect(gate_view("live", "ok", tables).state).toBe("hold");
+  });
+
+  it("safety: still faults on a stale camera after a plate leaves", () => {
+    const tables = lifted_out(kitchen(pass, "pass"), 2 + PLATE_LOST_MS + 1);
+    expect(gate_view("live", "stale", tables).state).toBe("fault");
   });
 });

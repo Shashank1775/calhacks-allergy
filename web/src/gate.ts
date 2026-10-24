@@ -4,8 +4,9 @@
  * Reads: zone, entity, entity_state, plate_binding, ticket, verdict; the feed status; vision health.
  * Rules: fail closed, plain-code verdict. The same order as kitchen/gate/service.py's gate_state:
  * stale inputs give FAULT, two plates at the pass give HOLD, no plate or no verdict yet gives
- * IDLE (closed), and only plate_badge()'s PASS opens it. This decides nothing new: PASS comes
- * only from plate_badge(), which only reads verdict rows.
+ * IDLE (closed), and only plate_badge()'s PASS opens it. A plate counts at the pass only while
+ * vision still tracks it (plates_at_pass). This decides nothing new: PASS comes only from
+ * plate_badge(), which only reads verdict rows.
  */
 import { latest_verdict, plate_badge } from "./badge";
 import type { FeedStatus, Tables } from "./state/state_source";
@@ -62,17 +63,41 @@ export function gate_view(feed: FeedStatus, vision: VisionHealth, tables: GateTa
   return { ...view, state: "hold", note: null };
 }
 
-/** Plates whose latest position is a pass zone. */
+/** Same limit as GateSettings.plate_lost_ms: vision's track_lost_ms. */
+export const PLATE_LOST_MS = 1000;
+
+/**
+ * Plates whose latest position is a pass zone and that vision still tracks, the same rule as
+ * kitchen/gate/service.py's plates_at_pass().
+ *
+ * Vision ends a track once its object goes unseen for track_lost_ms and never revives it, so a
+ * plate whose newest row is more than PLATE_LOST_MS older than the newest row of any entity has
+ * no track: it was lifted out of view, or a hand hid it for over a second and it will come back
+ * as a new plate with unknown history, which holds. Age is measured against that newest row, not
+ * this browser's clock: rows carry vision's frame times, so feed lag can't age out a plate vision
+ * still has. A stale camera is still FAULT, and two plates both seen recently still HOLD.
+ */
 export function plates_at_pass(tables: Pick<GateTables, "zone" | "entity" | "entity_state">): string[] {
   const pass_zones = new Set(tables.zone.filter((zone) => zone.kind === "pass").map((zone) => zone.zone_id));
   const plate_ids = new Set(
     tables.entity.filter((entity) => entity.kind === "plate").map((entity) => entity.entity_id),
   );
+  const latest = latest_states(tables.entity_state);
+  const newest_t_ms = newest_sighting(latest);
   const plates: string[] = [];
-  for (const [entity_id, state] of latest_states(tables.entity_state)) {
-    if (plate_ids.has(entity_id) && state.zone !== null && pass_zones.has(state.zone)) plates.push(entity_id);
+  for (const [entity_id, state] of latest) {
+    const at_pass = state.zone !== null && pass_zones.has(state.zone);
+    const still_tracked = newest_t_ms - state.t_ms <= PLATE_LOST_MS;
+    if (plate_ids.has(entity_id) && at_pass && still_tracked) plates.push(entity_id);
   }
   return plates;
+}
+
+/** The newest t_ms among entities' latest states: when vision last saw anything. */
+function newest_sighting(latest: Map<string, EntityState>): number {
+  let newest = -Infinity;
+  for (const state of latest.values()) newest = Math.max(newest, state.t_ms);
+  return newest;
 }
 
 /** Each entity's most recent state: the highest t_ms, and the row written last on a tie. */
