@@ -9,7 +9,7 @@
     verdict/       plate at the pass -> PASS or HOLD, with the chain                               (team verdict)
     gate/          servo, lights, buzzer, voice                                                    (team outputs)
     sim/           simulated kitchens: test scenarios and ConvLSTM training clips                  (team sim)
-    shared/        generated models, interfaces, clock, config, fakes                              (team platform)
+    shared/        schema validation, interfaces, clock, config, fakes, contract tests             (team platform)
 
 The SpacetimeDB module is in database/ (partner) and the screens are in web/ (team outputs).
 Rules for agents: AGENTS.md. Data shapes between folders: contracts/.

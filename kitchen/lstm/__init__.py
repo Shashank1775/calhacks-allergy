@@ -7,5 +7,6 @@ Emits: list of (action, probability): P(contact), P(material moved)
 Rules: 6 object-blind and allergen-blind input; 7 adopted only after winning the benchmark, rules stay fallback
 Tasks: partner
 
-Not built yet.
+Built so far: model.py (InteractionNet and BoxPooledInteractionNet) and train.py (trains them on sim clips).
+infer.py, the "lstm" InteractionClassifier, is not written yet.
 """
