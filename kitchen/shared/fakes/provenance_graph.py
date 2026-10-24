@@ -3,7 +3,7 @@
 Owner: platform (agents)
 Step:  shared
 Reads: one golden scenario (expected[].allergens_reached and chain_event_ids, events, late_entities)
-Emits: AllergenReach lists, unknown-ancestor IDs and a version string, as ProvenanceGraph promises
+Emits: AllergenReach lists, unknown-ancestor IDs, PlateSubgraphs and a version string, as ProvenanceGraph promises
 Rules: no allergen propagation math (the partner owns the graph); every ground-truth allergen is reported with
        probability 1, the fail-closed value; a plate the scenario doesn't cover raises GraphUnavailable rather than
        look clean (fail closed); chains run forward in time (time runs forward); set_unavailable() makes every
@@ -12,9 +12,10 @@ Rules: no allergen propagation math (the partner owns the graph); every ground-t
 
 from pathlib import Path
 
-from kitchen.shared.fakes.scenarios import read_scenario
+from kitchen.shared.fakes.scenarios import read_scenario, scenario_entities
+from kitchen.shared.fakes.state_client import interaction_order
 from kitchen.shared.interfaces import GraphUnavailable
-from kitchen.shared.models import AllergenReach, ChainStep, Scenario
+from kitchen.shared.models import AllergenReach, ChainStep, PlateSubgraph, Scenario
 
 
 class FakeProvenanceGraph:
@@ -57,6 +58,29 @@ class FakeProvenanceGraph:
             for late in self._scenario.get("late_entities", [])
             if late.get("origin", "unknown") == "unknown" and late["first_seen_t_ms"] <= as_of_t_ms
         ]
+
+    def subgraph(self, plate_id: str, as_of_t_ms: int) -> PlateSubgraph:
+        """Every entity the scenario mentions and every edge that started by `as_of_t_ms`, in time order.
+
+        No ancestry math: off-path edges stay in, which contracts/apis.md allows (the plate check drops them). Each
+        node starts as the scenario says: bins with their profile, late entities with their origin's profile, and
+        everything else clean from shift start.
+        """
+        self._expected_for(plate_id)  # fail closed for a plate the scenario doesn't cover
+        nodes = [
+            {
+                "entity_id": entity["entity_id"],
+                "kind": entity["kind"],
+                "label": entity["label"],
+                "origin": entity["origin"],
+                "start": entity["allergen_profile"],
+            }
+            for entity in scenario_entities(self._scenario)
+        ]
+        edges = sorted(
+            (event for event in self._scenario["events"] if event["t_start_ms"] <= as_of_t_ms), key=interaction_order
+        )
+        return {"plate_id": plate_id, "as_of_t_ms": as_of_t_ms, "nodes": nodes, "edges": edges}
 
     def version(self) -> str:
         """Names the fake and the scenario it answers from, so a verdict's versions show it wasn't the real graph."""

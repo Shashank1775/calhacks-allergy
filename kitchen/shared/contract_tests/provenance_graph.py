@@ -34,6 +34,29 @@ def _ticket(scenario: dict, plate_id: str, revision: int) -> dict:
     return next(t for t in tickets if t["ticket_id"] == ticket_id and t["revision"] == revision)
 
 
+# How far a stored probability may drift from the scenario's: SpacetimeDB keeps them as f32 (about 1e-8 off).
+PROBABILITY_TOLERANCE = 1e-6
+
+
+def same_profile(actual: dict[str, float], expected: dict[str, float]) -> bool:
+    """Two allergen probability maps agree per unit, an unlisted unit counting as 0 (allergen_profile.schema.json)."""
+    units = set(actual) | set(expected)
+    return all(abs(actual.get(unit, 0.0) - expected.get(unit, 0.0)) <= PROBABILITY_TOLERANCE for unit in units)
+
+
+def flows_into(event: dict, entity_id: str) -> bool:
+    """True when the event's direction lets allergens move into entity_id (a wash of it counts too)."""
+    if event["action"] == "unimportant":
+        return False
+    if event["action"] == "clean.wash":
+        return event["a_id"] == entity_id
+    if event["b_id"] == entity_id:
+        return event["direction"] in ("a_to_b", "both")
+    if event["a_id"] == entity_id:
+        return event["direction"] in ("b_to_a", "both")
+    return False
+
+
 def _plates(scenario: dict) -> list[str]:
     """Every plate that reaches the pass in the scenario."""
     return [plate["plate_id"] for plate in scenario["plates_at_pass"]]
@@ -137,6 +160,95 @@ def test_unknown_ancestors_are_the_expected_unknown_history_entities(make_graph,
 
 
 @pytest.mark.contract
+@pytest.mark.safety
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_is_valid_and_never_reaches_past_as_of(make_graph, scenario):
+    """Time runs forward: the subgraph holds no edge that starts after as_of_t_ms, and its edges are in time order.
+
+    Every golden event starts before its plate reaches the pass, so asking only at the pass time could never catch a
+    graph that ignores as_of. Each plate is also asked just before every event, which leaves that event out. Every
+    edge's two entities and the plate itself are nodes, so the plate check can read each edge's start state.
+    """
+    graph = make_graph(scenario)
+    for plate_id in _plates(scenario):
+        moments = {_pass_time(scenario, plate_id)}
+        moments |= {event["t_start_ms"] - 1 for event in scenario["events"] if event["t_start_ms"] > 0}
+        for as_of in sorted(moments):
+            subgraph = validate(graph.subgraph(plate_id, as_of), "plate_subgraph")
+            starts = [edge["t_start_ms"] for edge in subgraph["edges"]]
+            node_ids = {node["entity_id"] for node in subgraph["nodes"]}
+            assert subgraph["plate_id"] == plate_id
+            assert subgraph["as_of_t_ms"] == as_of
+            assert all(start <= as_of for start in starts), (as_of, starts)
+            assert starts == sorted(starts)
+            assert plate_id in node_ids
+            assert {edge["a_id"] for edge in subgraph["edges"]} | {
+                edge["b_id"] for edge in subgraph["edges"]
+            } <= node_ids
+
+
+@pytest.mark.contract
+@pytest.mark.safety
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_nodes_start_as_the_scenario_says(make_graph, scenario):
+    """Known-clean source: each node's origin and start profile are what the shift says, since Laya reads only those.
+
+    A bin starts with its profile; a late entity of unknown origin starts unknown; a clean_stack entity and every
+    other tool, hand or plate start clean. A graph that reported everything clean would blind the plate check.
+    """
+    bins = {entry["entity_id"]: entry["allergen_profile"] for entry in scenario["bins"]}
+    late = {entry["entity_id"]: entry.get("origin", "unknown") for entry in scenario.get("late_entities", [])}
+    graph = make_graph(scenario)
+    for plate_id in _plates(scenario):
+        for node in graph.subgraph(plate_id, _pass_time(scenario, plate_id))["nodes"]:
+            entity_id, start = node["entity_id"], node["start"]
+            if entity_id in bins:
+                assert node["origin"] == "shift_start", entity_id
+                assert start["unknown"] is False, entity_id
+                assert same_profile(start["probabilities"], bins[entity_id]["probabilities"]), entity_id
+            elif late.get(entity_id) == "unknown":
+                assert node["origin"] == "unknown", entity_id
+                assert start["unknown"] is True, entity_id
+            else:
+                assert node["origin"] == late.get(entity_id, "shift_start"), entity_id
+                assert start["unknown"] is False, entity_id
+                assert not any(start["probabilities"].values()), entity_id
+
+
+@pytest.mark.contract
+@pytest.mark.safety
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_holds_every_edge_into_the_plate(make_graph, scenario):
+    """Every edge that moves allergens straight into the plate by as_of is a one-hop time-forward path, so it belongs
+    in the subgraph under any tie or direction rule. A graph that dropped it would leave Laya blind to that contact."""
+    graph = make_graph(scenario)
+    for plate_id in _plates(scenario):
+        as_of = _pass_time(scenario, plate_id)
+        returned = {edge["event_id"] for edge in graph.subgraph(plate_id, as_of)["edges"]}
+        required = {
+            event["event_id"]
+            for event in scenario["events"]
+            if event["t_start_ms"] <= as_of and flows_into(event, plate_id)
+        }
+        assert required <= returned, sorted(required - returned)
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_holds_every_expected_chain_edge(make_graph, scenario):
+    """The edges that carried an allergen to the plate are in its subgraph, so the plate check can see them."""
+    graph = make_graph(scenario)
+    for entry in scenario["expected"]:
+        if entry.get("chain_event_ids"):
+            as_of = max(
+                _pass_time(scenario, entry["plate_id"]),
+                _ticket(scenario, entry["plate_id"], entry["ticket_revision"])["created_t_ms"],
+            )
+            edge_ids = {edge["event_id"] for edge in graph.subgraph(entry["plate_id"], as_of)["edges"]}
+            assert set(entry["chain_event_ids"]) <= edge_ids
+
+
+@pytest.mark.contract
 def test_graph_version_is_a_nonempty_string(make_graph):
     version = make_graph(SCENARIOS[0]).version()
     assert isinstance(version, str) and version
@@ -144,7 +256,7 @@ def test_graph_version_is_a_nonempty_string(make_graph):
 
 @pytest.mark.contract
 @pytest.mark.safety
-@pytest.mark.parametrize("query", ["reach", "unknown_ancestors"])
+@pytest.mark.parametrize("query", ["reach", "unknown_ancestors", "subgraph"])
 def test_a_failing_graph_raises_graph_unavailable(make_unavailable_graph, query):
     """Fail closed: the verdict policy can only turn a broken graph into HOLD if it raises GraphUnavailable."""
     scenario = SCENARIOS[0]

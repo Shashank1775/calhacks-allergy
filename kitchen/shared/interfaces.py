@@ -3,8 +3,9 @@
 Owner: platform (agents)
 Step:  shared
 Reads: contracts/apis.md, kitchen.shared.models
-Emits: StateClient, EntityStore, ProvenanceGraph, PairWindow, InteractionClassifier, LayaParser, Transcriber,
-       Speaker, GateDriver, Clock; StateUnavailable, GraphUnavailable, LayaParserUnavailable
+Emits: StateClient, EntityStore, ProvenanceGraph, PairWindow, InteractionClassifier, LayaParser, LayaPlateCheck,
+       Transcriber, Speaker, GateDriver, Clock; StateUnavailable, GraphUnavailable, LayaParserUnavailable,
+       LayaCheckUnavailable
 Rules: signatures match contracts/apis.md exactly (a test checks method and parameter names); no implementations here;
        a missing method is a contracts PR, not a local addition
 """
@@ -28,6 +29,7 @@ from kitchen.shared.models import (
     ObservationFrame,
     ParseResult,
     PlateBinding,
+    PlateSubgraph,
     Ticket,
     Verdict,
     Zone,
@@ -51,6 +53,10 @@ class GraphUnavailable(Exception):  # noqa: N818
 
 class LayaParserUnavailable(Exception):  # noqa: N818
     """Laya couldn't parse a note (an empty note too). The Orders API answers 503 laya_unavailable; nothing guesses."""
+
+
+class LayaCheckUnavailable(Exception):  # noqa: N818
+    """Laya's final plate check couldn't answer. The verdict holds the plate (safety rule: fail closed)."""
 
 
 class StateClient(Protocol):
@@ -121,6 +127,8 @@ class ProvenanceGraph(Protocol):
 
     def unknown_ancestors(self, plate_id: str, as_of_t_ms: int) -> list[str]: ...
 
+    def subgraph(self, plate_id: str, as_of_t_ms: int) -> PlateSubgraph: ...
+
     def version(self) -> str: ...
 
 
@@ -152,6 +160,18 @@ class LayaParser(Protocol):
     """Turns a ticket note into a ParseResult. Raises LayaParserUnavailable rather than guess."""
 
     def parse_note(self, note: str, *, source: Literal["typed", "voice"]) -> ParseResult: ...
+
+
+class LayaPlateCheck(Protocol):
+    """Laya's final plate check: P(reached the plate) per forbidden allergen, read from the plate's subgraph.
+
+    Stricter only: the verdict turns its answers into extra hold reasons and never lets them remove one. Raises
+    LayaCheckUnavailable on any failure, and the verdict holds (safety rule: fail closed).
+    """
+
+    version: str  # the checkpoint's name, recorded as verdict.versions.laya
+
+    def check(self, subgraph: PlateSubgraph, forbidden: list[str]) -> dict[str, float]: ...
 
 
 class Transcriber(Protocol):

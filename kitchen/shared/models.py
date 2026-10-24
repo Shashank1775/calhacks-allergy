@@ -5,7 +5,7 @@ Step:  shared
 Reads: contracts/schemas/*.schema.json
 Emits: validate(record, schema); readable aliases for schema records (Ticket, ParseResult, AllergenProfile, Entity,
        ObservationFrame, InteractionFeatures, InteractionClip, InteractionEvent, AllergenReach, ChainStep, Verdict,
-       Scenario) and Action; the table dataclasses Zone, PlateBinding, EntityState and ChangeEvent
+       Scenario, PlateSubgraph) and Action; the table dataclasses Zone, PlateBinding, EntityState and ChangeEvent
 Rules: the owner chose plain dicts over generated models (2026-10-23), so the JSON schemas are the only definition of
        a record's shape; every valid fixture passes validate() and every invalid one fails it (blind classifier: no
        allergen fields in InteractionFeatures, no object classes in InteractionClip)
@@ -37,6 +37,7 @@ AllergenReach: TypeAlias = dict[str, Any]
 ChainStep: TypeAlias = dict[str, Any]
 Verdict: TypeAlias = dict[str, Any]
 Scenario: TypeAlias = dict[str, Any]
+PlateSubgraph: TypeAlias = dict[str, Any]
 
 # The action enum in common.schema.json (a test keeps the two in step).
 Action: TypeAlias = Literal["transfer.contact", "transfer.scoop", "transfer.wipe", "clean.wash", "unimportant"]
