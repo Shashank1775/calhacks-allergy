@@ -17,11 +17,13 @@ from kitchen.verdict.laya_check import (
     FakeLayaCheck,
     LayaCheckUnavailable,
     LocalLayaCheck,
+    carry,
     exact_reach,
     laya_hold_reasons,
     on_path,
     plate_state,
     reached_question,
+    readable_history,
 )
 from kitchen.verdict.training.plate_data import golden_rows, subgraph_from_scenario
 
@@ -62,14 +64,25 @@ def edge(event_id, t, a, b, action="transfer.contact", direction="both", p=0.9):
 class ScriptedAgent:
     """Stands in for the loaded plate model: answers every question with the given P, or misbehaves on cue."""
 
-    def __init__(self, p=0.02, fail=False, broken=None):
+    def __init__(self, p=0.02, fail=False, broken=None, usage=None):
         self.p, self.fail, self.broken = p, fail, broken
+        self.usage = usage if usage is not None else dict(FULL_INPUT)
 
     def predict(self, state, questions):
         if self.fail:
             raise RuntimeError("model crashed")
         answer = self.broken if self.broken is not None else {"noul": self.p}
-        return {"answers": {key: answer for key in questions}}
+        return {"answers": {key: answer for key in questions}, "usage": self.usage}
+
+
+# laya's usage block when the whole input fit
+FULL_INPUT = {
+    "input_tokens": 480,
+    "state_tokens": 420,
+    "state_tokens_dropped": 0,
+    "truncated": False,
+    "truncated_questions": [],
+}
 
 
 def local_check(agent):
@@ -172,14 +185,118 @@ def test_a_missing_forbidden_list_holds():
 
 
 @pytest.mark.safety
-def test_a_history_too_long_to_read_holds():
-    chain = [edge(f"e{i}", 1000 * i, "hand-p1-left", "plate-t1") for i in range(1, MAX_EDGES + 2)]
-    hand = dict(KNIFE["nodes"][1], entity_id="hand-p1-left", kind="hand", label="left hand")
-    long = dict(KNIFE, edges=chain, nodes=KNIFE["nodes"] + [hand])
+@pytest.mark.parametrize(
+    "usage",
+    [
+        dict(FULL_INPUT, truncated=True),
+        dict(FULL_INPUT, state_tokens_dropped=12),
+        dict(FULL_INPUT, truncated_questions=["reached_peanut"]),
+        {"input_tokens": 480, "output_tokens": 0},
+        {},
+    ],
+    ids=["truncated", "tokens-dropped", "question-cut", "no-truncation-keys", "empty"],
+)
+def test_an_input_the_model_had_to_cut_holds(usage):
     with pytest.raises(LayaCheckUnavailable):
-        FakeLayaCheck().check(long, ["peanut"])
-    with pytest.raises(LayaCheckUnavailable):
-        local_check(ScriptedAgent()).check(long, ["peanut"])
+        local_check(ScriptedAgent(usage=usage)).check(KNIFE, ["peanut"])
+
+
+# ---------- long histories ----------
+
+
+def kitchen_node(entity_id, probabilities=None, unknown=False):
+    """A subgraph node: a bin with `probabilities`, or a clean (or unknown-history) tool, hand or plate."""
+    kind = entity_id.split("-")[0]
+    if unknown:
+        start = {"probabilities": {}, "unknown": True, "source": "unknown_history"}
+    elif probabilities is not None:
+        start = {"probabilities": probabilities, "unknown": False, "source": "manual"}
+    else:
+        start = {"probabilities": {}, "unknown": False, "source": "shift_start_clean"}
+    origin = "unknown" if unknown else "shift_start"
+    return {"entity_id": entity_id, "kind": kind, "label": kind, "origin": origin, "start": start}
+
+
+SATAY = kitchen_node("bin-1", {"peanut": 0.98, "soy": 0.9})
+CLEAN = [kitchen_node(e) for e in ("tool-knife-1", "hand-p1-left", "hand-p1-right", "plate-t1")]
+
+
+def full_reach(subgraph):
+    """Noisy-OR over every on-path edge, however many: what shortening must never go below."""
+    nodes = {n["entity_id"]: n for n in subgraph["nodes"]}
+    return carry(on_path(subgraph), nodes)[subgraph["plate_id"]]
+
+
+@pytest.mark.safety
+def test_a_long_history_drops_touches_that_move_nothing_first():
+    clean_touches = [edge(f"e{i}", 100 * i, "hand-p1-left", "plate-t1") for i in range(1, MAX_EDGES + 1)]
+    story = [
+        edge("s1", 5000, "tool-knife-1", "bin-1", action="transfer.scoop", direction="b_to_a"),
+        edge("s2", 6000, "tool-knife-1", "plate-t1"),
+    ]
+    long = {"plate_id": "plate-t1", "as_of_t_ms": 9000, "nodes": [SATAY] + CLEAN, "edges": clean_touches + story}
+    assert len(on_path(long)) == MAX_EDGES + 2
+    assert readable_history(long)[0] == story  # the clean hand moved nothing; the starts are read as they are
+    assert exact_reach(long) == full_reach(long)
+
+
+@pytest.mark.safety
+def test_a_history_still_too_long_folds_its_oldest_events_into_rounded_up_starts():
+    scoop = edge("e0", 0, "tool-knife-1", "bin-1", action="transfer.scoop", direction="b_to_a")
+    touches = [edge(f"e{i}", 1000 * i, "tool-knife-1", "plate-t1", p=0.5) for i in range(1, MAX_EDGES + 2)]
+    long = {"plate_id": "plate-t1", "as_of_t_ms": 99000, "nodes": [SATAY] + CLEAN, "edges": [scoop] + touches}
+    edges, nodes = readable_history(long)
+    assert edges == touches[-MAX_EDGES:]
+    # After the scoop and the first touch: knife peanut 0.98 * 0.9 = 0.882, plate 0.441, shown rounded up.
+    assert nodes["tool-knife-1"]["start"]["probabilities"] == {"peanut": 0.89, "soy": 0.81}
+    assert nodes["plate-t1"]["start"]["probabilities"] == {"peanut": 0.45, "soy": 0.41}
+    assert (
+        plate_state(long)["start"]
+        == "tool-knife-1 (tool): peanuts 0.89, soy 0.81 | plate-t1 (plate): peanuts 0.45, soy 0.41"
+    )
+    assert all(exact_reach(long)[u] >= full_reach(long)[u] for u in UNITS)
+
+
+ENTITIES = ["bin-1", "bin-2", "tool-knife-1", "tool-spoon-2", "hand-p1-left", "hand-p1-right", "plate-t1"]
+HUNDREDTHS = st.integers(1, 100).map(lambda k: k / 100)
+
+
+@st.composite
+def kitchens(draw):
+    """A random plate subgraph: two bins, tools and hands (some of unknown history), and up to 40 time-ordered edges
+    of every action and direction, ties included. Half the edges repeat the pair before them, as a touch seen across
+    several windows and the news it carries do in a real kitchen."""
+    nodes = []
+    for entity_id in ENTITIES:
+        if entity_id.startswith("bin"):
+            profile = draw(st.dictionaries(st.sampled_from(UNITS), HUNDREDTHS, max_size=3))
+            nodes.append(kitchen_node(entity_id, profile))
+        else:
+            nodes.append(kitchen_node(entity_id, unknown=entity_id != "plate-t1" and draw(st.booleans())))
+    edges, t = [], 0
+    for i in range(draw(st.integers(0, 40))):
+        t += draw(st.sampled_from([0, 100, 1000]))
+        if edges and draw(st.booleans()):
+            a, b = edges[-1]["a_id"], edges[-1]["b_id"]
+        else:
+            a, b = draw(st.sampled_from(ENTITIES)), draw(st.sampled_from(ENTITIES))
+        if a == b:
+            edges.append(edge(f"e{i}", t, a, a, action="clean.wash", direction="a_to_b", p=draw(HUNDREDTHS)))
+            continue
+        action = draw(st.sampled_from(["transfer.contact", "transfer.scoop", "transfer.wipe"]))
+        direction = draw(st.sampled_from(["a_to_b", "b_to_a", "both"]))
+        edges.append(edge(f"e{i}", t, a, b, action=action, direction=direction, p=draw(HUNDREDTHS)))
+    return {"plate_id": "plate-t1", "as_of_t_ms": t + 1000, "nodes": nodes, "edges": edges}
+
+
+@pytest.mark.safety
+@given(kitchen=kitchens())
+def test_shortening_never_lowers_any_allergens_reach(kitchen):
+    """Stricter only: the history the model reads fits, and carries at least as much of every allergen onto the plate
+    as the whole history does, by the same noisy-OR."""
+    assert len(readable_history(kitchen)[0]) <= MAX_EDGES
+    full, read = full_reach(kitchen), exact_reach(kitchen)
+    assert all(read[u] >= full[u] for u in UNITS), {u: (read[u], full[u]) for u in UNITS if read[u] < full[u]}
 
 
 @pytest.mark.safety
