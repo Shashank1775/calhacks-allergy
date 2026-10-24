@@ -337,6 +337,26 @@ class InteractionsSlot:
         return None
 
 
+class SerializedMoves:
+    """A StateClient whose move_entity holds `lock`, and passes every other call straight through.
+
+    The entity store syncs through this and LiveRisk holds the same lock while it reads an entity and writes its row,
+    so a store row never lands in between and a risk row never carries an older zone or t_ms than the store just wrote
+    (which would take a plate off the pass for the verdict service and the gate).
+    """
+
+    def __init__(self, state, lock) -> None:
+        self._state = state
+        self._lock = lock
+
+    def move_entity(self, row) -> None:
+        with self._lock:
+            self._state.move_entity(row)
+
+    def __getattr__(self, name: str):
+        return getattr(self._state, name)
+
+
 class GuardedGraph:
     """The partner's ProvenanceGraph, refusing to answer while the interactions step isn't healthy.
 
@@ -420,7 +440,10 @@ class LiveRunner:
         self.verdict_service.start()
 
         self.store = EntityStore(clock)
-        self.risk = LiveRisk(self.state, clock)  # the overlays' allergens; the verdict doesn't read what it writes
+        write_lock = threading.Lock()  # the store's rows and live risk's rows, one at a time (SerializedMoves)
+        self.store_state = SerializedMoves(self.state, write_lock)
+        # The overlays' allergens; the verdict doesn't read what it writes.
+        self.risk = LiveRisk(self.state, clock, write_lock=write_lock)
         self.status = None
         self.loop = build_frame_loop(
             self.settings, zones, [entity_store_consumer(self.store), self.interactions], detector=detector
@@ -458,7 +481,7 @@ class LiveRunner:
     def start(self) -> None:
         """Sync the entity store to the database at 5 Hz, and keep the entities' live allergens current, in the
         background."""
-        self.store.start_sync(self.state, hz=5.0)
+        self.store.start_sync(self.store_state, hz=5.0)
         self.risk.start(hz=5.0)
 
     def step_frame(self, frame):
@@ -471,7 +494,7 @@ class LiveRunner:
 
     def sync(self) -> None:
         """Write the entity store to the database once (what start() does at 5 Hz)."""
-        self.store.sync_once(self.state)
+        self.store.sync_once(self.store_state)
 
     def update_risk(self) -> None:
         """Write the entities' live allergens to the database once (what start() does in the background)."""

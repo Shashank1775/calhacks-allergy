@@ -8,6 +8,9 @@ Rules: fail closed (StateUnavailable on cue); late changes recheck everything (n
        source (store updates never overwrite the graph's allergens)
 """
 
+import copy
+import threading
+
 import jsonschema
 import pytest
 
@@ -120,3 +123,29 @@ def test_an_entity_with_no_graph_state_keeps_the_profile_it_registered_with():
     client.move_entity(store_move(2000, "plating-spot"))
 
     assert client.get_entity("tool-knife-17")["allergen_profile"] == knife()["allergen_profile"]
+
+
+def test_reading_the_interactions_does_not_block_a_writer(monkeypatch):
+    """A shift's thousands of edges take tens of milliseconds to copy, and the camera's frame loop writes edges through
+    this client: the copy happens outside the lock, so a writer is never held up by a reader."""
+    client = FakeStateClient()
+    edge = contract_fixture("interaction_event", "scoop")
+    client.record_interaction(edge)
+    other = {**edge, "event_id": "e-other", "t_start_ms": edge["t_start_ms"] + 1}
+    writers = []
+    real_deepcopy = copy.deepcopy
+
+    def deepcopy_while_a_writer_tries(value, *args):
+        if not writers:  # the writer's own copies come through here too
+            writer = threading.Thread(target=client.record_interaction, args=(other,))
+            writers.append(writer)
+            writer.start()
+            writer.join(timeout=0.5)
+        return real_deepcopy(value, *args)
+
+    monkeypatch.setattr(copy, "deepcopy", deepcopy_while_a_writer_tries)
+    events = client.list_interactions()
+    monkeypatch.undo()
+
+    assert [writer.is_alive() for writer in writers] == [False]  # the write finished while the read was copying
+    assert [event["event_id"] for event in events] == [edge["event_id"]]

@@ -231,15 +231,20 @@ class FakeStateClient:
             return self._plate_bindings.get(plate_id)
 
     def list_interactions(self, since_t_ms: int = 0, until_t_ms: int | None = None) -> list[InteractionEvent]:
-        """Return interactions with since_t_ms <= t_start_ms <= until_t_ms, ordered by t_start_ms, t_end_ms, event_id."""
+        """Return interactions with since_t_ms <= t_start_ms <= until_t_ms, ordered by t_start_ms, t_end_ms, event_id.
+
+        Copying a shift's thousands of edges holds the lock for tens of milliseconds, and the camera's frame loop writes
+        edges through this client, so only picking them happens under the lock. Stored edges are never edited, so the
+        copy is safe outside it.
+        """
         with self._lock:
             self._check_reachable()
             events = [
-                copy.deepcopy(event)
+                event
                 for event in self._interactions.values()
                 if event["t_start_ms"] >= since_t_ms and (until_t_ms is None or event["t_start_ms"] <= until_t_ms)
             ]
-            return sorted(events, key=interaction_order)
+        return sorted(copy.deepcopy(events), key=interaction_order)
 
     def list_verdicts(self, ticket_id: str | None = None) -> list[Verdict]:
         """Return every verdict in the order recorded, optionally only one ticket's."""

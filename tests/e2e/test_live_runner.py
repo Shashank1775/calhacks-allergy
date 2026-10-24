@@ -12,6 +12,7 @@ Rules: fail closed: with the interactions step missing, broken or behind, every 
 
 import importlib.util
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -80,6 +81,36 @@ def broken_step(state, clock):
     return consume
 
 
+def peanut_scoop(t_ms: int) -> dict:
+    """The knife scooping satay out of bin-1."""
+    return {
+        "event_id": "e-scoop",
+        "t_start_ms": t_ms,
+        "t_end_ms": t_ms + 50,
+        "a_id": "tool-knife-1",
+        "b_id": "bin-1",
+        "action": "transfer.scoop",
+        "probability": 0.95,
+        "direction": "b_to_a",
+        "classifier": {"name": "zone_rules", "version": "test"},
+    }
+
+
+def knife_touches_plate(t_ms: int, plate_id: str = "plate-1") -> dict:
+    """The knife touching the plate."""
+    return {
+        "event_id": "e-touch",
+        "t_start_ms": t_ms,
+        "t_end_ms": t_ms + 50,
+        "a_id": "tool-knife-1",
+        "b_id": plate_id,
+        "action": "transfer.contact",
+        "probability": 0.9,
+        "direction": "both",
+        "classifier": {"name": "zone_rules", "version": "test"},
+    }
+
+
 def peanut_knife_step(state, clock):
     """Reports the knife scooping satay from bin-1, then touching the plate, once both have happened (t >= 1300)."""
     written = []
@@ -87,33 +118,8 @@ def peanut_knife_step(state, clock):
     def consume(output):
         if written or output.observation["t_ms"] < 1300:
             return
-        classifier = {"name": "zone_rules", "version": "test"}
-        state.record_interaction(
-            {
-                "event_id": "e-scoop",
-                "t_start_ms": 1100,
-                "t_end_ms": 1150,
-                "a_id": "tool-knife-1",
-                "b_id": "bin-1",
-                "action": "transfer.scoop",
-                "probability": 0.95,
-                "direction": "b_to_a",
-                "classifier": classifier,
-            }
-        )
-        state.record_interaction(
-            {
-                "event_id": "e-touch",
-                "t_start_ms": 1200,
-                "t_end_ms": 1250,
-                "a_id": "tool-knife-1",
-                "b_id": "plate-1",
-                "action": "transfer.contact",
-                "probability": 0.9,
-                "direction": "both",
-                "classifier": classifier,
-            }
-        )
+        state.record_interaction(peanut_scoop(1100))
+        state.record_interaction(knife_touches_plate(1200))
         written.append(True)
 
     return consume
@@ -134,15 +140,20 @@ class Shift:
         self.orders = TestClient(self.runner.app)
         self._frame_id = 0
 
+    def step(self, objects: list) -> None:
+        """One frame of `objects`, FRAME_MS after the last, through vision and its consumers. Nothing is written to the
+        database yet: the entity store's rows and the live risk wait for sync() and update_risk()."""
+        self.detector.objects = objects
+        self.clock.advance(FRAME_MS)
+        rgb = np.full((96, 128, 3), self._frame_id % 256, dtype=np.uint8)
+        self.runner.step_frame(SourceFrame(self._frame_id, self.clock.now_ms(), rgb))
+        self._frame_id += 1
+
     def frames(self, count: int, objects: list) -> None:
         """`count` frames of `objects`, FRAME_MS apart, each synced to the database (entity rows, then live risk) and
         followed by a gate tick."""
-        self.detector.objects = objects
         for _ in range(count):
-            self.clock.advance(FRAME_MS)
-            rgb = np.full((96, 128, 3), self._frame_id % 256, dtype=np.uint8)
-            self.runner.step_frame(SourceFrame(self._frame_id, self.clock.now_ms(), rgb))
-            self._frame_id += 1
+            self.step(objects)
             self.runner.sync()
             self.runner.update_risk()
             self.runner.tick()
@@ -275,6 +286,48 @@ def test_risk_rows_change_neither_the_gate_nor_the_verdicts():
     plate_id = shift.plate_to_pass()
 
     assert [row["caused_by"] for row in shift.rows_of(plate_id) if row["caused_by"]] == ["e-touch"]  # a risk row landed
+    assert shift.runner.state.get_entity(plate_id)["zone"] == "pass"
+    assert [v["trigger"] for v in shift.runner.state.list_verdicts() if v["plate_id"] == plate_id] == ["plate_at_pass"]
+    assert shift.runner.tick() == "hold"
+
+
+@pytest.mark.safety
+def test_a_risk_row_written_as_the_plate_reaches_the_pass_does_not_judge_it_twice():
+    """A hand's touch lands as the plate slides onto the pass. The entity store writes the plate's move between live
+    risk's read of the plate and its write: a risk row copying the older position would take the plate back off the
+    pass (a second plate_at_pass judgment, a gate that sees no plate there). The two take one lock, so the store's
+    row waits for the risk row."""
+    shift = Shift(interactions=quiet_step)
+    shift.frames(12, [BIN, KNIFE, plate_at(0.5)])
+    ticket = shift.send_ticket("peanut allergy", 1)
+    plate_id = shift.runner.bind(ticket["ticket_id"])
+    for step in range(1, 13):  # to just short of the pass zone (x from 0.75)
+        shift.frames(1, [BIN, KNIFE, plate_at(0.5 + 0.02 * step)])
+    shift.runner.state.record_interaction(peanut_scoop(shift.clock.now_ms() - 400))
+    shift.runner.update_risk()  # the knife shows peanut
+
+    shift.step([BIN, KNIFE, plate_at(0.77)])  # the store hasn't written the plate's arrival at the pass yet
+    shift.runner.state.record_interaction(knife_touches_plate(shift.clock.now_ms() - 100, plate_id))
+    stores = []
+    get_entity = shift.runner.state.get_entity
+
+    def get_entity_while_the_store_syncs(entity_id):
+        entity = get_entity(entity_id)
+        if entity_id == plate_id and not stores:
+            stores.append(threading.Thread(target=shift.runner.sync))
+            stores[0].start()
+            stores[0].join(timeout=0.5)  # a store that isn't held up writes its row inside the gap
+        return entity
+
+    shift.runner.state.get_entity = get_entity_while_the_store_syncs
+    shift.runner.update_risk()
+    stores[0].join()
+    shift.runner.state.get_entity = get_entity
+    shift.frames(2, [BIN, KNIFE, plate_at(0.77)])
+
+    assert [row["caused_by"] for row in shift.rows_of(plate_id) if row["caused_by"]] == [
+        "e-touch"
+    ]  # the risk row landed
     assert shift.runner.state.get_entity(plate_id)["zone"] == "pass"
     assert [v["trigger"] for v in shift.runner.state.list_verdicts() if v["plate_id"] == plate_id] == ["plate_at_pass"]
     assert shift.runner.tick() == "hold"
