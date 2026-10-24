@@ -40,8 +40,10 @@
     "trigger": {
       "enum": [
         "plate_at_pass",
-        "ticket_amended"
-      ]
+        "ticket_amended",
+        "late_edge"
+      ],
+      "description": "What made the verdict service judge the plate: it reached the pass, its ticket was amended, or an interaction edge was recorded that starts at or before the plate's latest verdict (late_edge), so that verdict may have missed it. Every judgment reads the plate's full history again."
     },
     "decision": {
       "enum": [
