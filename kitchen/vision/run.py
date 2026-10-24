@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import logging
+import signal
 import sys
 import threading
 import time
@@ -32,8 +33,8 @@ from pathlib import Path
 import numpy as np
 
 from kitchen.shared.change_mask import change_mask
-from kitchen.shared.clips import letterbox_frame
-from kitchen.shared.clock import SystemClock
+from kitchen.shared.clips import LETTERBOX_PAD, letterbox_layout
+from kitchen.shared.clock import FakeClock, SystemClock
 from kitchen.shared.config import load_settings, log_settings
 from kitchen.vision.common import FrameOutput, SourceFrame, VisionSettings, ZoneLookup
 
@@ -116,7 +117,7 @@ class FrameLoop:
 
         The first frame has nothing to compare with, so its mask is all zeros (no movement seen yet).
         """
-        letterboxed = letterbox_frame(rgb, self.settings.clip_size)
+        letterboxed = letterbox_for_change_mask(rgb, self.settings.clip_size)
         if self._previous_letterboxed is None:
             mask = np.zeros(letterboxed.shape[:2], dtype=np.float32)
         else:
@@ -138,6 +139,24 @@ class FrameLoop:
             self._fps = instant if self._fps is None else 0.9 * self._fps + 0.1 * instant
         self._previous_t_ms = t_ms
         return self._fps
+
+
+def letterbox_for_change_mask(rgb: np.ndarray, size: int) -> np.ndarray:
+    """The frame shrunk into a size x size square by area averaging, with the short side padded, in exactly the layout
+    of clips.py's letterbox_frame (letterbox_layout, LETTERBOX_PAD), so the mask lines up with letterboxed clip boxes.
+
+    OpenCV's area filter gives the same pixels as letterbox_frame when the frame shrinks by a whole factor (1280 x 720
+    or 1920 x 1080 to 128) at about a tenth of the time, which the 30 FPS frame loop needs.
+    """
+    import cv2
+
+    height, width = rgb.shape[:2]
+    content_width, content_height, left, top = letterbox_layout(width, height, size)
+    square = np.full((size, size, 3), LETTERBOX_PAD, dtype=np.uint8)
+    square[top : top + content_height, left : left + content_width] = cv2.resize(
+        rgb, (content_width, content_height), interpolation=cv2.INTER_AREA
+    )
+    return square
 
 
 def build_frame_loop(
@@ -202,6 +221,17 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def close_all(closers: list[Callable[[], None]]) -> None:
+    """Run each closer once, emptying the list, so a later call (from `finally`) closes nothing twice."""
+    while closers:
+        closers.pop(0)()
+
+
+def wait_until_stopped() -> None:
+    """Block until Ctrl-C or SIGTERM, which main() turns into KeyboardInterrupt."""
+    threading.Event().wait()
+
+
 def serve_in_background(app, port: int):
     """Serve a FastAPI app with uvicorn on a daemon thread. Returns the uvicorn Server, so the caller can stop it."""
     import uvicorn
@@ -236,7 +266,6 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = load_settings(VisionSettings, "VISION_")
     log_settings(settings)
-    clock = SystemClock()
     zones = load_zones(args.zones) if args.zones else []
     if not zones:
         logger.warning(
@@ -248,7 +277,12 @@ def main(argv: list[str] | None = None) -> int:
     push_zones(state, zones)
 
     loop = build_frame_loop(settings, zones, consumers=[])
-    status = VisionStatus(loop.detector.backend) if args.serve else None
+    # The clock starts once the detector has loaded, which can take seconds: load time must not decide which objects
+    # are seen by shift_start_ms. An offline video keeps its own time from 0 instead, so one file always gives the same
+    # output. Live (a webcam, --serve or --live), frames are stamped as they are processed.
+    live = args.webcam is not None or args.serve or args.live
+    clock = SystemClock() if live else FakeClock(0)
+    status = VisionStatus(loop.detector.backend, settings.track_lost_ms) if args.serve else None
     loop.status = status
     closers = []
     if args.out:
@@ -273,7 +307,13 @@ def main(argv: list[str] | None = None) -> int:
 
         def bind(ticket_id: str) -> str:
             return start_plate(
-                state, status.latest_observation(), zones, ticket_id, clock.now_ms(), settings.plate_bind_max_age_ms
+                state,
+                status.recent_observations(),
+                zones,
+                ticket_id,
+                clock.now_ms(),
+                settings.plate_bind_max_age_ms,
+                settings.track_lost_ms,
             )
 
         app = create_app(status, bind, parse_cors_origins(settings.cors_origins))
@@ -290,20 +330,24 @@ def main(argv: list[str] | None = None) -> int:
         source = (frame for _, frame in zip(range(args.max_frames), source, strict=False))
 
     exit_code = 0
+    # SIGTERM (a service manager stopping the process) stops it like Ctrl-C, so `finally` still closes the files.
+    previous_sigterm = signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         count = loop.run(source)
         logger.info("source ended after %d frames", count)
+        # The JSONL and the recording are complete as soon as the source ends, even if the API keeps serving.
+        close_all(closers)
         if server is not None:
             logger.info("frames stopped; /health is now stale (the gate shows fault). Ctrl-C to quit")
-            threading.Event().wait()
+            wait_until_stopped()
     except KeyboardInterrupt:
         pass
     except Exception:
         logger.exception("the frame loop stopped on an error")
         exit_code = 1
     finally:
-        for close in closers:
-            close()
+        close_all(closers)
+        signal.signal(signal.SIGTERM, previous_sigterm)
         if server is not None:
             server.should_exit = True
     return exit_code

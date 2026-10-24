@@ -11,6 +11,7 @@ Rules: fail closed: every /plates/start refusal is a 409 with the contract's cod
 import threading
 import time
 
+import anyio
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -241,6 +242,45 @@ def test_each_frame_is_encoded_at_most_once(monkeypatch):
     assert len(encoded) == 1
     assert first[0] == first[1] == first[2]
     assert status.next_jpeg(first[0][0], 0.05) is None  # nothing newer yet
+
+
+@pytest.mark.safety
+def test_many_open_streams_never_stall_health_or_start_plate():
+    """Fail closed needs /health answered on time: more open streams than the default thread pool has threads must
+    not hold up the gate's health check or the tablet's "start plate"."""
+    status = VisionStatus("onnx")
+    app = create_app(status, lambda ticket_id: "plate-1", [ORIGIN], stream_idle_s=1.0)
+
+    async def shrink_default_pool():
+        # The default pool has 40 threads; 4 keeps the test small. The streams have their own STREAM_THREADS.
+        anyio.to_thread.current_default_thread_limiter().total_tokens = 4
+
+    with TestClient(app) as client:  # one event loop and one default thread pool for every request
+        client.portal.call(shrink_default_pool)
+        streams = [threading.Thread(target=client.get, args=("/stream.mjpg",)) for _ in range(6)]
+        for stream in streams:
+            stream.start()
+        time.sleep(0.2)  # every stream is now waiting for a frame that never comes
+
+        started = time.monotonic()
+        health = client.get("/health")
+        bound = client.post("/plates/start", json={"ticket_id": "t7"})
+        elapsed = time.monotonic() - started
+        for stream in streams:
+            stream.join()
+
+    assert health.status_code == 200
+    assert bound.json() == {"plate_id": "plate-1"}
+    assert elapsed < 0.5
+
+
+def test_recent_observations_keep_only_the_history_window():
+    status = VisionStatus("onnx", history_ms=100)
+    assert status.recent_observations() == []
+    for frame_id, t_ms in enumerate([0, 50, 100, 150, 201]):
+        status.update(frame_output(frame_id, t_ms), rgb_frame())
+
+    assert [observation["t_ms"] for observation in status.recent_observations()] == [150, 201]
 
 
 # ---------- CORS ----------

@@ -8,10 +8,25 @@ Rules: 6 no object pixels, classes or allergen data in the input
 Tasks: partner
 
 Built. Remember to train with BCEwithlogitsloss
+Both networks compile with torch.jit.script (so no nested functions here): export_onnx.py keeps the loop over steps as
+an ONNX Loop, so the exported model takes any number of steps, as these do.
 """
 
 import torch
 from torch import nn
+
+
+def add_dt_channel(x: torch.Tensor, dt_ms: torch.Tensor) -> torch.Tensor:
+    """Append elapsed time as one more channel, so the GRU knows how much time passed between steps."""
+    b, t, _, h, w = x.shape
+    dt = dt_ms.float() / 100.0  # ~0.6 per step at 16 steps/s, a nice small number
+    dt_plane = dt.view(b, t, 1, 1, 1).expand(b, t, 1, h, w)
+    return torch.cat([x, dt_plane], dim=2)
+
+
+def mean_inside(hidden: torch.Tensor, region: torch.Tensor) -> torch.Tensor:
+    """The GRU state averaged over a soft region mask at the state's resolution."""
+    return (hidden * region).sum(dim=(2, 3)) / (region.sum(dim=(2, 3)) + 1e-6)
 
 
 class ConvGRUCell(nn.Module):
@@ -34,15 +49,8 @@ class InteractionNet(nn.Module):
         self.cell = ConvGRUCell(inch, hidch)
         self.head = nn.Sequential(nn.Flatten(), nn.Linear(hidch, 32), nn.ReLU(), nn.Linear(32, 2))
 
-    def add_dt_channel(self, x, dt_ms):
-        b, t, _, h, w = x.shape
-        dt = dt_ms.float() / 100.0  # ~0.6 per step at 16 steps/s, a nice small number
-        dt_plane = dt.view(b, t, 1, 1, 1).expand(b, t, 1, h, w)
-        return torch.cat([x, dt_plane], dim=2)
-
     def forward(self, x, dt_ms):
-        # Add elapsed time as one more channel, so the GRU knows how much time passed between steps.
-        x = self.add_dt_channel(x, dt_ms)
+        x = add_dt_channel(x, dt_ms)
         b, t, _, h, w = x.shape
         hidden = x.new_zeros(b, self.hidch, h, w)
         for step in range(t):
@@ -70,8 +78,7 @@ class BoxPooledInteractionNet(nn.Module):
         self.head = nn.Sequential(nn.Linear(5 * hidch, 64), nn.ReLU(), nn.Linear(64, 2))
 
     def forward(self, x, dt_ms):
-        # The same elapsed-time channel as InteractionNet (the method only reads x and dt_ms).
-        x = InteractionNet.add_dt_channel(self, x, dt_ms)
+        x = add_dt_channel(x, dt_ms)
         b, t, c, h, w = x.shape
         features = self.stem(x.reshape(b * t, c, h, w)).reshape(b, t, self.hidch, h // 2, w // 2)
 
@@ -83,14 +90,11 @@ class BoxPooledInteractionNet(nn.Module):
         where_a = nn.functional.avg_pool2d(x[:, :, 0].amax(dim=1, keepdim=True), 2)
         where_b = nn.functional.avg_pool2d(x[:, :, 1].amax(dim=1, keepdim=True), 2)
 
-        def mean_inside(region):
-            return (hidden * region).sum(dim=(2, 3)) / (region.sum(dim=(2, 3)) + 1e-6)
-
         pooled = [
             hidden.mean(dim=(2, 3)),
             hidden.amax(dim=(2, 3)),
-            mean_inside(where_a),
-            mean_inside(where_b),
-            mean_inside(where_a * where_b),
+            mean_inside(hidden, where_a),
+            mean_inside(hidden, where_b),
+            mean_inside(hidden, where_a * where_b),
         ]
         return self.head(torch.cat(pooled, dim=1))

@@ -17,9 +17,10 @@ from kitchen.vision.common import Detection, Person, VisionSettings
 from kitchen.vision.identity import IdentityBook, origin_for
 from kitchen.vision.tracking import Tracker, TrackSet, greedy_match, hand_box, iou_matrix
 
-SETTINGS = VisionSettings(track_lost_frames=3, shift_start_ms=3000)
 AFTER_SHIFT_START = 10_000
 FRAME_MS = 33
+LOST_FRAMES = 3  # the lost buffer, in test frames: a track missed for this many frames still matches the next one
+SETTINGS = VisionSettings(track_lost_ms=(LOST_FRAMES + 1) * FRAME_MS, shift_start_ms=3000)
 
 ZONES = [
     Zone("slot-4", "bin_slot", [(0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)]),
@@ -82,25 +83,25 @@ def test_a_low_score_detection_keeps_a_track_but_never_starts_one():
     counter = iter(range(1, 100))
     tracks = TrackSet(SETTINGS, lambda: next(counter))
 
-    owners, _ = tracks.update([KNIFE_BOX], [0.3])
+    owners, _, _ = tracks.update([KNIFE_BOX], [0.3], 0)
     assert owners == {}
 
-    owners, _ = tracks.update([KNIFE_BOX], [0.9])
+    owners, _, _ = tracks.update([KNIFE_BOX], [0.9], FRAME_MS)
     assert owners == {0: 1}
 
-    owners, _ = tracks.update([KNIFE_BOX], [0.3])
+    owners, _, _ = tracks.update([KNIFE_BOX], [0.3], 2 * FRAME_MS)
     assert owners == {0: 1}
 
 
 def test_a_detection_below_the_match_iou_starts_a_new_track():
     counter = iter(range(1, 100))
     tracks = TrackSet(SETTINGS, lambda: next(counter))
-    tracks.update([(0.3, 0.3, 0.4, 0.4)], [0.9])
+    tracks.update([(0.3, 0.3, 0.4, 0.4)], [0.9], 0)
 
     # IoU 1/3 with the track's box is above track_match_iou, so it matches; IoU 0.18 is below, so a new track.
-    owners, _ = tracks.update([(0.3, 0.35, 0.4, 0.45)], [0.9])
+    owners, _, _ = tracks.update([(0.3, 0.35, 0.4, 0.45)], [0.9], FRAME_MS)
     assert owners == {0: 1}
-    owners, _ = tracks.update([(0.3, 0.42, 0.4, 0.52)], [0.9])
+    owners, _, _ = tracks.update([(0.3, 0.42, 0.4, 0.52)], [0.9], 2 * FRAME_MS)
     assert owners == {0: 2}
 
 
@@ -121,7 +122,7 @@ def test_a_far_away_knife_does_not_take_a_lost_knifes_entity():
 
 def test_a_track_matched_within_the_lost_buffer_keeps_its_id():
     tracker = Tracker(SETTINGS)
-    outputs = run(tracker, [([knife()], [])] + gone(SETTINGS.track_lost_frames) + [([knife()], [])])
+    outputs = run(tracker, [([knife()], [])] + gone(LOST_FRAMES) + [([knife()], [])])
 
     assert outputs[0][0]["entity_id"] == outputs[-1][0]["entity_id"] == "tool-knife-1"
     assert outputs[0][0]["track_id"] == outputs[-1][0]["track_id"]
@@ -130,7 +131,7 @@ def test_a_track_matched_within_the_lost_buffer_keeps_its_id():
 @pytest.mark.safety
 def test_a_lost_track_emits_nothing():
     tracker = Tracker(SETTINGS)
-    outputs = run(tracker, [([knife()], [])] + gone(SETTINGS.track_lost_frames))
+    outputs = run(tracker, [([knife()], [])] + gone(LOST_FRAMES))
 
     assert len(outputs[0]) == 1
     assert all(items == [] for items in outputs[1:])
@@ -140,7 +141,7 @@ def test_a_lost_track_emits_nothing():
 def test_reacquired_after_the_lost_buffer_is_a_new_entity_with_unknown_origin():
     tracker = Tracker(SETTINGS)
     first = tracker.update([knife()], [], 0, zone_of, 640, 640)
-    for frame in range(1, SETTINGS.track_lost_frames + 2):
+    for frame in range(1, LOST_FRAMES + 2):
         tracker.update([], [], frame * FRAME_MS, zone_of, 640, 640)
     again = tracker.update([knife()], [], AFTER_SHIFT_START, zone_of, 640, 640)
 
@@ -194,7 +195,7 @@ def test_a_bowl_in_a_bin_slot_is_that_bin_and_any_other_bowl_is_a_plate():
 
 def test_a_bowl_reacquired_in_its_slot_is_the_same_bin_with_its_first_origin():
     tracker = Tracker(SETTINGS)
-    outputs = run(tracker, [([bowl()], [])] + gone(SETTINGS.track_lost_frames + 1))
+    outputs = run(tracker, [([bowl()], [])] + gone(LOST_FRAMES + 1))
     again = tracker.update([bowl()], [], AFTER_SHIFT_START, zone_of, 640, 640)
 
     assert outputs[0][0]["entity_id"] == again[0]["entity_id"] == "bin-4"
@@ -242,7 +243,7 @@ def test_a_reacquired_person_gets_new_hand_ids():
     tracker = Tracker(SETTINGS)
     both = person(right_wrist=(0.6, 0.5, 0.9))
     first = tracker.update([], [both], 0, zone_of, 640, 640)
-    for frame in range(1, SETTINGS.track_lost_frames + 2):
+    for frame in range(1, LOST_FRAMES + 2):
         tracker.update([], [], frame * FRAME_MS, zone_of, 640, 640)
     again = tracker.update([], [both], AFTER_SHIFT_START, zone_of, 640, 640)
 
@@ -328,7 +329,7 @@ def test_the_hand_zone_comes_from_the_wrist_point():
 def test_a_reacquired_hand_first_seen_in_the_clean_stack_is_unknown():
     tracker = Tracker(SETTINGS)
     first = tracker.update([], [person()], 0, zone_of, 640, 640)
-    for frame in range(1, SETTINGS.track_lost_frames + 3):
+    for frame in range(1, LOST_FRAMES + 3):
         tracker.update([], [], frame * FRAME_MS, zone_of, 640, 640)
     again = tracker.update([], [person(left_wrist=(0.9, 0.9, 0.9))], AFTER_SHIFT_START, zone_of, 640, 640)
 
@@ -382,16 +383,16 @@ def test_entity_ids_are_never_reused_over_random_track_lifetimes(steps):
 @settings(max_examples=100, deadline=None)
 @given(st.lists(st.sampled_from(["knife", "spoon", "fork", "plate", "bin"]), max_size=40))
 def test_identity_book_never_hands_out_an_id_twice(kinds):
-    book = IdentityBook(SETTINGS.shift_start_ms)
+    book = IdentityBook(SETTINGS.shift_start_ms, SETTINGS.track_lost_ms)
     slot = Zone("slot-4", "bin_slot", [])
     seen = []
     for track_id, kind in enumerate(kinds, start=1):
         if kind == "bin":
-            identity = book.object_identity(track_id, "bowl", AFTER_SHIFT_START, slot)
+            identity = book.object_identity(track_id, "bowl", AFTER_SHIFT_START, slot, maybe_switched=False)
         elif kind == "plate":
-            identity = book.object_identity(track_id, "bowl", AFTER_SHIFT_START, None)
+            identity = book.object_identity(track_id, "bowl", AFTER_SHIFT_START, None, maybe_switched=False)
         else:
-            identity = book.object_identity(track_id, kind, AFTER_SHIFT_START, None)
+            identity = book.object_identity(track_id, kind, AFTER_SHIFT_START, None, maybe_switched=False)
         # Every track ends straight away, so only the bin slot may hand its ID out again.
         book.end_track(track_id)
         if identity.kind != "bin":
@@ -401,7 +402,7 @@ def test_identity_book_never_hands_out_an_id_twice(kinds):
 
 def lose_all(tracker, start_ms):
     """Run enough empty frames from start_ms to end every live track."""
-    for frame in range(SETTINGS.track_lost_frames + 2):
+    for frame in range(LOST_FRAMES + 2):
         tracker.update([], [], start_ms + frame * FRAME_MS, zone_of, 640, 640)
 
 
@@ -457,3 +458,123 @@ def test_a_plate_lost_in_the_clean_stack_taints_the_next_plate_there():
 
     assert again[0]["kind"] == "plate"
     assert again[0]["origin"] == "unknown"
+
+
+SHIFTED_IN_STACK_BOX = (0.80, 0.80, 0.88, 0.88)  # still in the clean stack, but too far from CLEAN_STACK_BOX to match
+
+
+def detection_of(class_name, box):
+    return Detection(class_name, box, 0.9)
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("class_name", ["knife", "bowl"])
+def test_an_object_carried_fast_into_the_clean_stack_is_unknown(class_name):
+    """Known-clean source: a dirty knife (or plate) moved into the rack between two frames has no IoU with its old box,
+    so it comes back as a new track there while its old track is lost. It must not start clean."""
+    tracker = Tracker(SETTINGS)
+    dirty = tracker.update([detection_of(class_name, KNIFE_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    moved = tracker.update(
+        [detection_of(class_name, CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640
+    )
+
+    assert dirty[0]["origin"] == "unknown"
+    assert moved[0]["track_id"] != dirty[0]["track_id"]
+    assert moved[0]["zone"] == "clean-stack"
+    assert moved[0]["origin"] == "unknown"
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("class_name", ["knife", "bowl"])
+def test_an_object_hidden_in_the_clean_stack_and_uncovered_to_one_side_is_unknown(class_name):
+    """A hand covers an object in the rack and lets go a little to one side: a new track, while the old one is still
+    within its lost buffer. The newcomer may be that object (or a dirty one swapped in), so it can't start clean."""
+    tracker = Tracker(SETTINGS)
+    tracker.update([detection_of(class_name, CLEAN_STACK_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    tracker.update([], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)  # covered by a hand
+    uncovered = tracker.update(
+        [detection_of(class_name, SHIFTED_IN_STACK_BOX)], [], AFTER_SHIFT_START + 2 * FRAME_MS, zone_of, 640, 640
+    )
+
+    assert uncovered[0]["zone"] == "clean-stack"
+    assert uncovered[0]["track_id"] == 2
+    assert uncovered[0]["origin"] == "unknown"
+
+
+def test_a_newcomer_to_the_clean_stack_with_no_lost_track_of_its_class_starts_clean():
+    tracker = Tracker(SETTINGS)
+    tracker.update([knife(KNIFE_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    # The knife on the counter is still matched, so the spoon arriving in the rack can't be it.
+    items = tracker.update(
+        [knife(KNIFE_BOX), detection_of("spoon", CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640
+    )
+
+    assert [(item["entity_id"], item["origin"]) for item in items] == [
+        ("tool-knife-1", "unknown"),
+        ("tool-spoon-1", "clean_stack"),
+    ]
+
+
+@pytest.mark.safety
+def test_an_id_switch_before_shift_start_does_not_start_clean():
+    """Before shift start a new track is normally shift_start, but one that starts while a knife's track is lost may
+    be that knife under a new ID, carrying whatever it touched."""
+    tracker = Tracker(SETTINGS)
+    first = tracker.update([knife(KNIFE_BOX)], [], 0, zone_of, 640, 640)
+    jumped = tracker.update([knife((0.1, 0.5, 0.2, 0.6))], [], FRAME_MS, zone_of, 640, 640)
+
+    assert first[0]["origin"] == "shift_start"
+    assert jumped[0]["entity_id"] == "tool-knife-2"
+    assert jumped[0]["origin"] == "unknown"
+
+
+@pytest.mark.safety
+def test_a_person_switch_before_shift_start_gives_hands_unknown_history():
+    tracker = Tracker(SETTINGS)
+    first = tracker.update([], [person()], 0, zone_of, 640, 640)
+    moved = Person((0.0, 0.0, 0.2, 0.2), 0.9, (0.1, 0.1, 0.9), UNSURE, UNSURE, UNSURE)  # no overlap with the old box
+    again = tracker.update([], [moved], FRAME_MS, zone_of, 640, 640)
+
+    assert first[0]["origin"] == "shift_start"
+    assert [(item["entity_id"], item["origin"]) for item in again] == [("hand-p2-left", "unknown")]
+
+
+@pytest.mark.safety
+def test_a_hand_unseen_longer_than_the_lost_buffer_comes_back_as_a_new_unknown_hand():
+    """The body stays tracked, but the wrist is out of sight long enough to touch anything: a new hand, not the clean
+    one it was."""
+    tracker = Tracker(SETTINGS)
+    first = tracker.update([], [person()], 0, zone_of, 640, 640)
+    for frame in range(1, LOST_FRAMES + 2):
+        tracker.update([], [person(left_wrist=UNSURE)], frame * FRAME_MS, zone_of, 640, 640)
+    again = tracker.update([], [person()], (LOST_FRAMES + 2) * FRAME_MS, zone_of, 640, 640)
+    later = tracker.update([], [person()], (LOST_FRAMES + 3) * FRAME_MS, zone_of, 640, 640)
+
+    assert [(item["entity_id"], item["origin"]) for item in first] == [("hand-p1-left", "shift_start")]
+    assert [(item["entity_id"], item["person_id"], item["origin"]) for item in again] == [
+        ("hand-p1-left-2", "p1", "unknown")
+    ]
+    assert later[0]["entity_id"] == "hand-p1-left-2"
+
+
+def test_a_hand_unseen_within_the_lost_buffer_keeps_its_id():
+    tracker = Tracker(SETTINGS)
+    tracker.update([], [person()], 0, zone_of, 640, 640)
+    for frame in range(1, LOST_FRAMES + 1):
+        tracker.update([], [person(left_wrist=UNSURE)], frame * FRAME_MS, zone_of, 640, 640)
+    again = tracker.update([], [person()], (LOST_FRAMES + 1) * FRAME_MS, zone_of, 640, 640)
+
+    assert [(item["entity_id"], item["origin"]) for item in again] == [("hand-p1-left", "shift_start")]
+
+
+@pytest.mark.safety
+def test_a_camera_stall_longer_than_the_lost_buffer_ends_every_track():
+    """The lost buffer is time, not frames: when frames stop for longer than it, the knife seen next is a new entity
+    with unknown history, even though no frame in between missed it."""
+    tracker = Tracker(SETTINGS)
+    first = tracker.update([knife()], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    after_stall = tracker.update([knife()], [], AFTER_SHIFT_START + SETTINGS.track_lost_ms + 1, zone_of, 640, 640)
+
+    assert first[0]["entity_id"] == "tool-knife-1"
+    assert after_stall[0]["entity_id"] == "tool-knife-2"
+    assert after_stall[0]["origin"] == "unknown"

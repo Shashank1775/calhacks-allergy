@@ -16,13 +16,14 @@ from kitchen.shared.fakes import FakeStateClient
 from kitchen.shared.interfaces import StateUnavailable
 from kitchen.shared.models import PlateBinding, validate
 from kitchen.vision.common import BindRefused
-from kitchen.vision.plates import plates_at_spot, start_plate
+from kitchen.vision.plates import plates_at_spot, plates_last_seen_at_spot, start_plate
 from kitchen.vision.zones import load_zones
 
 ZONES = load_zones(Path(__file__).parent / "fixtures" / "zones.sample.json")
 
 # The test frame is stamped 5000 and taps come at 6000, exactly this old: the oldest frame that may still bind.
 MAX_AGE_MS = 1000
+RECENT_MS = 1000  # the tracker's lost buffer: a plate last seen at the spot this recently may still be there
 
 
 def detection(entity_id, kind, zone):
@@ -46,10 +47,17 @@ def frame(*detections, t_ms=5000):
     )
 
 
-def refusal(state, observation, ticket_id="t7", t_ms=6000):
+def bind(state, observations, ticket_id="t7", t_ms=6000, zones=ZONES):
+    """start_plate with the test limits; `observations` is one frame or a list of them, oldest first."""
+    if isinstance(observations, dict):
+        observations = [observations]
+    return start_plate(state, observations, zones, ticket_id, t_ms, MAX_AGE_MS, RECENT_MS)
+
+
+def refusal(state, observations, ticket_id="t7", t_ms=6000):
     """The BindRefused code start_plate raises."""
     with pytest.raises(BindRefused) as refused:
-        start_plate(state, observation, ZONES, ticket_id, t_ms, MAX_AGE_MS)
+        bind(state, observations, ticket_id, t_ms)
     return refused.value.code
 
 
@@ -62,7 +70,7 @@ def test_plates_start_binds_the_one_plate_at_the_spot():
         detection("bin-1", "bin", "slot-1"),
         detection("tool-knife-1", "tool", "plating"),
     )
-    assert start_plate(state, observation, ZONES, "t7", 6000, MAX_AGE_MS) == "plate-1"
+    assert bind(state, observation) == "plate-1"
     assert state.get_plate_binding("plate-1") == PlateBinding("plate-1", "t7", 6000)
     assert state.get_plate_binding("plate-2") is None
 
@@ -70,7 +78,7 @@ def test_plates_start_binds_the_one_plate_at_the_spot():
 @pytest.mark.safety
 def test_plates_start_refuses_before_the_first_frame():
     state = FakeStateClient()
-    assert refusal(state, None) == "no_plate_at_spot"
+    assert refusal(state, []) == "no_plate_at_spot"
 
 
 @pytest.mark.safety
@@ -95,7 +103,7 @@ def test_plates_start_refuses_a_frame_stamped_after_the_tap(tap_t_ms):
 def test_plates_start_binds_from_a_frame_stamped_at_the_tap():
     state = FakeStateClient()
     observation = frame(detection("plate-1", "plate", "plating"))
-    assert start_plate(state, observation, ZONES, "t7", 5000, MAX_AGE_MS) == "plate-1"
+    assert bind(state, observation, t_ms=5000) == "plate-1"
 
 
 @pytest.mark.safety
@@ -134,7 +142,7 @@ def test_plates_start_with_no_plating_spot_zone_refuses():
     observation = frame(detection("plate-1", "plate", "plating"))
     no_spot = [zone for zone in ZONES if zone.kind != "plating_spot"]
     with pytest.raises(BindRefused) as refused:
-        start_plate(state, observation, no_spot, "t7", 6000, MAX_AGE_MS)
+        bind(state, observation, zones=no_spot)
     assert refused.value.code == "no_plate_at_spot"
 
 
@@ -151,8 +159,8 @@ def test_plates_start_again_for_the_same_ticket_returns_the_same_plate():
     state = FakeStateClient()
     observation = frame(detection("plate-1", "plate", "plating"))
     later = frame(detection("plate-1", "plate", "plating"), t_ms=8500)
-    assert start_plate(state, observation, ZONES, "t7", 6000, MAX_AGE_MS) == "plate-1"
-    assert start_plate(state, later, ZONES, "t7", 9000, MAX_AGE_MS) == "plate-1"
+    assert bind(state, observation) == "plate-1"
+    assert bind(state, later, t_ms=9000) == "plate-1"
     assert state.get_plate_binding("plate-1") == PlateBinding("plate-1", "t7", 6000)
 
 
@@ -161,7 +169,7 @@ def test_plates_start_passes_state_unavailable_through():
     state = FakeStateClient()
     state.set_unavailable()
     with pytest.raises(StateUnavailable):
-        start_plate(state, frame(detection("plate-1", "plate", "plating")), ZONES, "t7", 6000, MAX_AGE_MS)
+        bind(state, frame(detection("plate-1", "plate", "plating")))
 
 
 @pytest.mark.safety
@@ -169,10 +177,41 @@ def test_plates_start_does_not_bind_when_the_binding_check_fails():
     state = FakeStateClient()
     state.fail_next(1)
     with pytest.raises(StateUnavailable):
-        start_plate(state, frame(detection("plate-1", "plate", "plating")), ZONES, "t7", 6000, MAX_AGE_MS)
+        bind(state, frame(detection("plate-1", "plate", "plating")))
     assert state.get_plate_binding("plate-1") is None
 
 
 def test_plates_at_spot_lists_only_plates_in_a_plating_spot():
     observation = frame(detection("plate-1", "plate", "plating"), detection("bin-1", "bin", "plating"))
     assert plates_at_spot(observation, ZONES) == ["plate-1"]
+
+
+@pytest.mark.safety
+def test_plates_start_refuses_when_a_second_plate_was_missed_in_the_latest_frame():
+    """Two plates sit on the spot; the detector misses plate-2 for one frame. Binding plate-1 then would be a guess."""
+    state = FakeStateClient()
+    both = frame(detection("plate-1", "plate", "plating"), detection("plate-2", "plate", "plating"), t_ms=4967)
+    one_missed = frame(detection("plate-1", "plate", "plating"))
+    assert refusal(state, [both, one_missed]) == "multiple_plates_at_spot"
+    assert state.get_plate_binding("plate-1") is None
+
+
+def test_plates_start_binds_when_the_other_plate_was_seen_leaving_the_spot():
+    state = FakeStateClient()
+    both = frame(detection("plate-1", "plate", "plating"), detection("plate-2", "plate", "plating"), t_ms=4900)
+    moved_off = frame(detection("plate-1", "plate", "plating"), detection("plate-2", "plate", "pass"), t_ms=4967)
+    only_one = frame(detection("plate-1", "plate", "plating"))
+    assert bind(state, [both, moved_off, only_one]) == "plate-1"
+
+
+def test_plates_start_forgets_a_plate_last_seen_at_the_spot_before_the_recent_window():
+    state = FakeStateClient()
+    long_ago = frame(detection("plate-2", "plate", "plating"), t_ms=5000 - RECENT_MS - 1)
+    now = frame(detection("plate-1", "plate", "plating"))
+    assert bind(state, [long_ago, now]) == "plate-1"
+
+
+def test_plates_last_seen_at_spot_uses_each_plates_latest_sighting():
+    earlier = frame(detection("plate-1", "plate", "plating"), detection("plate-2", "plate", "pass"), t_ms=4000)
+    later = frame(detection("plate-1", "plate", "pass"), detection("plate-3", "plate", "plating"), t_ms=4500)
+    assert plates_last_seen_at_spot([earlier, later], ZONES) == {"plate-3"}

@@ -13,7 +13,7 @@ Rules: fail closed: a missing or broken bundle raises at startup and a wrong-sha
 
 The letterbox geometry is kitchen/shared/clips.py's (letterbox_layout at settings.input_size, gray 114), so the
 detector, the change mask and the clip builder all place a frame inside its square the same way. The detector resizes
-pixels with OpenCV (fast, and what Ultralytics trains with); the change mask keeps clips.py's own letterbox_frame.
+pixels with OpenCV's bilinear filter (what Ultralytics trains with); the change mask uses OpenCV's area filter (run.py).
 """
 
 import json
@@ -54,8 +54,7 @@ def to_input_tensor(rgb: np.ndarray, input_size: int) -> np.ndarray:
     """Letterbox a uint8 RGB frame to the network input: float32 [1, 3, S, S], RGB, 0 to 1.
 
     The geometry is clips.py's letterbox_layout (so boxes map back exactly as the clip builder maps them), and the
-    pixels are resized with OpenCV's bilinear filter, as Ultralytics trains: about ten times faster than clips.py's
-    area averaging, which only the change mask needs (to match sim's renders pixel for pixel). Frames of any size work.
+    pixels are resized with OpenCV's bilinear filter, as Ultralytics trains. Frames of any size work.
     """
     import cv2
 
