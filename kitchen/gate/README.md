@@ -6,7 +6,7 @@ The last step. Makes each verdict physical (servo arm, red or green light, buzze
 
 ## What happens here
 
-- The gate service runs on the Pi and subscribes to verdicts through `StateClient`.
+- The gate service runs on the Pi and polls `StateClient` a few times a second: the zones, the plate at the pass, its ticket and its latest verdict. Polling means a database that stops answering shows up at once as `fault`. The `StateClient` must time out its own calls, because a call that hangs would freeze the gate in its last state.
 - A pure state machine decides `idle`, `pass`, `hold` or `fault`. It is closed by default, and only a PASS for the plate at the pass, for its ticket's **current** revision, opens the arm.
 - If the verdict feed goes silent past a set limit, vision's `/health` goes stale, or anything throws, the gate goes to `fault`: arm closed, red light, buzzer pulsing.
 - Every hold is spoken as a short line ("Hold seven"). Stale lines are dropped, not queued. Voice is never on the critical path to HOLD.
@@ -16,7 +16,7 @@ The last step. Makes each verdict physical (servo arm, red or green light, buzze
 
 | File | What it does |
 |---|---|
-| `service.py` | The gate state machine (pure transitions) and the loop that feeds it verdicts and health |
+| `service.py` | The gate state machine (pure transitions), and `GateService`, the loop that feeds it the pass and vision health each `tick()`. `--fake <scenario>` replays a golden scenario through `FakeGate` and `FakeSpeaker` |
 | `driver.py` | `GateDriver` implementations: `FakeGate` now, the GPIO driver once the hardware is wired |
 | `voice.py` | Verdict → short spoken line, and `Speaker` implementations: `FakeSpeaker` now, Cartesia Sonic later |
 
@@ -25,6 +25,7 @@ The last step. Makes each verdict physical (servo arm, red or green light, buzze
 | From | Event | To |
 |---|---|---|
 | any | start, or no verdict yet for the plate at the pass | `idle` (closed, red) |
+| any | two or more plates at the pass | `hold` (closed, red, buzzer) |
 | any | PASS verdict for the plate at the pass, for the ticket's current revision | `pass` (open, green) |
 | any | HOLD verdict, or a verdict for an older revision | `hold` (closed, red, buzzer) |
 | any | feed silent past the limit, vision health stale, `StateUnavailable`, or any exception | `fault` (closed, red, buzzer pulsing) |
@@ -56,7 +57,8 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). All gate work is `safety-cri
 ## Tests
 
 - Tests live in `kitchen/gate/tests/`. Run `uv run pytest kitchen/gate`.
-- They use `FakeStateClient` (platform) and a mocked vision health endpoint. Every golden scenario run through `FakeStateClient` must drive `FakeGate` to the scenario's expected decision.
+- They use `FakeStateClient` (platform), `FakeVerdictFeed` (verdict) and a fake vision health reader.
+- Demo: `uv run python -m kitchen.gate.service --fake late-amendment-adds-dairy` prints the gate states and spoken lines. Every golden scenario run through `FakeStateClient` must drive `FakeGate` to the scenario's expected decision.
 - We ship `FakeGate` (prints and records every `show()` call) and `FakeSpeaker`. The end-to-end harness uses them.
 
 ## Watch out for
