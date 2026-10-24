@@ -9,7 +9,6 @@ import pytest
 from kitchen.orders.bins import allergen_unit_ids
 from kitchen.orders.eval import run_demo
 from kitchen.orders.laya_parser import (
-    QUESTION_THRESHOLD,
     SEVERITIES,
     UNITS,
     FakeLayaParser,
@@ -55,7 +54,7 @@ class ScriptedAgent:
 def local_parser(agent):
     """A LocalLayaParser wired to a scripted agent instead of a real checkpoint."""
     parser = object.__new__(LocalLayaParser)
-    parser._agent, parser._version, parser._threshold = agent, "test", QUESTION_THRESHOLD
+    parser._agent, parser._version = agent, "test"
     return parser
 
 
@@ -73,6 +72,7 @@ def test_question_wording_matches_training():
     assert digest == TRAINED_WORDING_SHA256
 
 
+@pytest.mark.safety
 @pytest.mark.parametrize("note", ["peanut allergy with an EpiPen", "dairy free", "no nuts", "no allergies"])
 def test_fake_parse_result_matches_the_contract(note, check_schema):
     assert check_schema("parse_result", FakeLayaParser().parse_note(note, source="typed")) == []
@@ -104,15 +104,26 @@ def test_the_same_note_twice_gets_two_drafts():
     )
 
 
-@pytest.mark.safety
-def test_bare_nuts_asks_about_tree_nuts_and_peanuts():
-    result = FakeLayaParser().parse_note("allergic to nuts, carries an epipen", source="typed")
-    asked = {
+def asked_allergens(result):
+    """Allergens the server is asked to confirm with "Keep X off this order?"."""
+    return {
         result["constraints"][q["target"]["index"]]["allergen_unit_id"]
         for q in result["questions"]
         if q["target"]["field"] == "allergen_unit_id"
     }
-    assert asked == {"tree_nut", "peanut"}
+
+
+@pytest.mark.safety
+def test_bare_nuts_asks_about_tree_nuts_and_peanuts():
+    result = FakeLayaParser().parse_note("allergic to nuts, carries an epipen", source="typed")
+    assert asked_allergens(result) == {"tree_nut", "peanut"}
+
+
+@pytest.mark.safety
+def test_nuts_next_to_peanuts_still_asks_about_tree_nuts():
+    result = FakeLayaParser().parse_note("allergic to peanuts and nuts", source="typed")
+    assert "tree_nut" in asked_allergens(result)
+    assert "peanut" in {c["allergen_unit_id"] for c in result["constraints"]}
 
 
 @pytest.mark.safety

@@ -2,12 +2,12 @@
 
 Owner: orders (agents)
 Step:  orders
-Reads: HTTP requests from the outputs tablet screen; LAYA_MODEL_DIR, ORDERS_CORS_ORIGINS, ORDERS_PORT
+Reads: HTTP requests from the outputs tablet screen; LAYA_MODEL_DIR, CARTESIA_API_KEY, ORDERS_CORS_ORIGINS, ORDERS_PORT
 Emits: ParseResult and Ticket as JSON; the standard error body; CORS for ORDERS_CORS_ORIGINS
 Rules: no unanswered questions: /send returns 409 unanswered_questions;
        fail closed: when Laya can't parse, /parse returns 503 laya_unavailable, never an empty result
 
-    uv run python -m kitchen.orders.api     # the fine-tuned Laya if LAYA_MODEL_DIR is set, else the keyword fake
+    uv run --env-file .env python -m kitchen.orders.api     # see "Running it" in kitchen/orders/README.md
 """
 
 import io
@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from kitchen.orders.bins import save_bins
 from kitchen.orders.laya_parser import FakeLayaParser, LocalLayaParser
 from kitchen.orders.tickets import OrdersError, TicketDesk
-from kitchen.orders.transcribe import FakeTranscriber
+from kitchen.orders.transcribe import CartesiaInkTranscriber, FakeTranscriber
 from kitchen.shared.interfaces import LayaParserUnavailable, StateUnavailable
 
 DEFAULT_CORS_ORIGINS = "http://localhost:5173"  # the web dev server (Vite)
@@ -33,20 +33,28 @@ DEFAULT_PORT = 8001
 
 
 class ParseRequest(BaseModel):
+    """Body of POST /parse."""
+
     note: str
     source: Literal["typed", "voice"]
 
 
 class AnswerRequest(BaseModel):
+    """Body of POST /drafts/{draft_id}/answers."""
+
     question_id: str
     value: Any  # required; null is a real answer ("No, don't keep it off")
 
 
 class SendRequest(BaseModel):
+    """Body of POST /drafts/{draft_id}/send."""
+
     number: int | None = None  # needed for a new ticket; an amendment keeps its ticket's number
 
 
 class AmendRequest(BaseModel):
+    """Body of POST /tickets/{ticket_id}/amend: the change, e.g. "also no dairy"."""
+
     note: str
 
 
@@ -134,12 +142,15 @@ class InMemoryState:
         self.bin_profiles = {}
 
     def put_ticket(self, ticket):
-        self.tickets[ticket["ticket_id"]] = ticket  # the table keeps only the latest revision
+        """Insert a ticket, or replace it with its next revision (the table keeps only the latest)."""
+        self.tickets[ticket["ticket_id"]] = ticket
 
     def get_ticket(self, ticket_id):
+        """The latest revision of a ticket, or None."""
         return self.tickets.get(ticket_id)
 
     def put_bin_profile(self, entity_id, profile):
+        """Insert or replace a bin's allergen profile."""
         self.bin_profiles[entity_id] = profile
 
 
@@ -150,22 +161,28 @@ class ShiftClock:
         self._start = time.monotonic()
 
     def now_ms(self):
+        """Milliseconds since the process started."""
         return int((time.monotonic() - self._start) * 1000)
 
 
 def main():
+    """Pick the parser and transcriber from the environment, write the demo bins and serve the API."""
     import uvicorn
 
     model_dir = os.environ.get("LAYA_MODEL_DIR")
     parser = LocalLayaParser(model_dir) if model_dir else FakeLayaParser()
     print(f"orders: parsing notes with {'Laya from ' + model_dir if model_dir else 'the keyword fake'}")
 
+    api_key = os.environ.get("CARTESIA_API_KEY")
+    transcriber = CartesiaInkTranscriber(api_key) if api_key else FakeTranscriber()
+    print(f"orders: /transcribe uses {'Cartesia Ink' if api_key else 'a canned transcript (no CARTESIA_API_KEY)'}")
+
     state = InMemoryState()
     save_bins(state)  # hard-coded demo bins (kitchen/orders/bins.py)
     desk = TicketDesk(parser, state, ShiftClock())
 
     origins = os.environ.get("ORDERS_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
-    app = create_app(desk, FakeTranscriber(), origins)
+    app = create_app(desk, transcriber, origins)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("ORDERS_PORT", DEFAULT_PORT)))
 
 

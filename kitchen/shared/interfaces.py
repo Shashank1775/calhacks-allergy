@@ -24,4 +24,4 @@ class GraphUnavailable(Exception):  # noqa: N818
 
 
 class LayaParserUnavailable(Exception):  # noqa: N818
-    """Laya couldn't parse a note. The tablet falls back to manual entry; nothing guesses (safety rule: fail closed)."""
+    """Laya couldn't parse a note (an empty note too). The Orders API answers 503 laya_unavailable; nothing guesses."""

@@ -26,7 +26,10 @@ DEMO_BINS = {
 
 
 def allergen_unit_ids():
-    """Every allergen unit ID, read from contracts/allergen_units.json (nothing hardcodes the list)."""
+    """Every allergen unit ID from contracts/allergen_units.json, the source of truth.
+
+    (laya_parser.UNITS is fixed by training; a test checks it matches this list.)
+    """
     return [unit["id"] for unit in json.loads(ALLERGEN_UNITS_FILE.read_text())["units"]]
 
 

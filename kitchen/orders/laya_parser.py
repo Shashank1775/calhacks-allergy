@@ -133,12 +133,12 @@ def unmentioned(p_forbid):
     return UnitAnswer(p_forbid, [0.0, 0.0, 1.0, 0.0], 1.0, 0.0)
 
 
-def unit_questions(unit, index, confidence, threshold):
+def unit_questions(unit, index, confidence):
     """One-tap questions for every field of one constraint whose confidence is below the threshold."""
     name = UNIT_NAMES[unit]
     target = {"kind": "constraint", "index": index}
     questions = []
-    if confidence["allergen_unit_id"] < threshold:
+    if confidence["allergen_unit_id"] < QUESTION_THRESHOLD:
         questions.append(
             {
                 "target": {**target, "field": "allergen_unit_id"},
@@ -146,7 +146,7 @@ def unit_questions(unit, index, confidence, threshold):
                 "options": [{"label": "Yes, keep it off", "value": unit}, {"label": "No", "value": None}],
             }
         )
-    if confidence["severity"] < threshold:
+    if confidence["severity"] < QUESTION_THRESHOLD:
         questions.append(
             {
                 "target": {**target, "field": "severity"},
@@ -159,7 +159,7 @@ def unit_questions(unit, index, confidence, threshold):
                 ],
             }
         )
-    if confidence["trace_sensitive"] < threshold:
+    if confidence["trace_sensitive"] < QUESTION_THRESHOLD:
         questions.append(
             {
                 "target": {**target, "field": "trace_sensitive"},
@@ -173,7 +173,7 @@ def unit_questions(unit, index, confidence, threshold):
     return questions
 
 
-def build_parse_result(note, source, answers, parser_version, threshold=QUESTION_THRESHOLD):
+def build_parse_result(note, source, answers, parser_version):
     """Turn per-allergen answers into a ParseResult (contracts/schemas/parse_result.schema.json)."""
     constraints, exceptions, questions = [], [], []
 
@@ -197,7 +197,7 @@ def build_parse_result(note, source, answers, parser_version, threshold=QUESTION
                 "confidence": confidence,
             }
         )
-        questions += unit_questions(unit, index, confidence, threshold)
+        questions += unit_questions(unit, index, confidence)
 
         # Laya can say an allowed ingredient was named, but not which one, so the note is the reference.
         # The ticket still forbids the whole allergen; the exception only lives in the draft.
@@ -206,12 +206,12 @@ def build_parse_result(note, source, answers, parser_version, threshold=QUESTION
             exceptions.append(
                 {"allergen_unit_id": unit, "ingredient": "named in the note", "confidence": exception_confidence}
             )
-            if exception_confidence < threshold:
+            if exception_confidence < QUESTION_THRESHOLD:
                 questions.append(
                     {
                         "target": {"kind": "exception", "index": len(exceptions) - 1, "field": "ingredient"},
                         "prompt": f"The note may allow some {UNIT_NAMES[unit]}. Is any of it OK for this guest?",
-                        # True keeps the exception, False drops it.
+                        # The answer is only recorded: the ticket forbids the whole allergen either way.
                         "options": [
                             {"label": "Yes, what the note says is OK", "value": True},
                             {"label": "No, avoid all of it", "value": False},
@@ -231,7 +231,7 @@ def build_parse_result(note, source, answers, parser_version, threshold=QUESTION
         "constraints": constraints,
         "exceptions": exceptions,
         "questions": questions,
-        "question_threshold": threshold,
+        "question_threshold": QUESTION_THRESHOLD,
         "sendable": not questions,
     }
 
@@ -248,15 +248,14 @@ def require_text(text):
 class LocalLayaParser:
     """LayaParser backed by our fine-tuned Laya checkpoint, loaded from a local folder."""
 
-    def __init__(self, model_dir, device=None, threshold=QUESTION_THRESHOLD):
+    def __init__(self, model_dir):
         try:
             import laya  # heavy (torch); only needed when the real model is used
 
-            self._agent = laya.load(str(model_dir), device=device)
+            self._agent = laya.load(str(model_dir))
         except Exception as error:
             raise LayaParserUnavailable(f"could not load Laya from {model_dir}: {error}") from error
         self._version = Path(model_dir).name
-        self._threshold = threshold
 
     def _ask(self, state, questions):
         """One forward pass for all questions. Returns {key: P(yes) or [P per severity]}.
@@ -295,7 +294,7 @@ class LocalLayaParser:
                 )
             else:
                 answers[unit] = unmentioned(forbid[f"forbid_{unit}"])
-        return build_parse_result(note, source, answers, self._version, self._threshold)
+        return build_parse_result(note, source, answers, self._version)
 
 
 # ---------- the fake, for tests and offline demos without the model ----------
@@ -325,8 +324,13 @@ def mentions(text, unit):
 
 
 def bare_nuts(text):
-    """True for "nuts" with no kind named: it could mean tree nuts or peanuts, so both get asked."""
-    return bool(re.search(r"\bnuts?\b", text)) and not mentions(text, "tree_nut") and not mentions(text, "peanut")
+    """True when "nut" or "nuts" appears on its own: it could mean tree nuts or peanuts, so both get asked.
+
+    "peanuts" never matches the pattern; "tree nut" and "pine nut" are removed first because they name the kind.
+    """
+    for phrase in ("tree nut", "pine nut"):
+        text = text.replace(phrase, "")
+    return bool(re.search(r"\bnuts?\b", text))
 
 
 def fake_unit_answer(text, unit):
@@ -361,16 +365,9 @@ def fake_unit_answer(text, unit):
 class FakeLayaParser:
     """LayaParser that uses keyword rules instead of the model. Same output shapes, no torch."""
 
-    def __init__(self, threshold=QUESTION_THRESHOLD):
-        self._threshold = threshold
-
     def parse_note(self, note, *, source="typed"):
-        """Parse a note with keyword rules. "No allergies" counts only when no allergen is named anywhere."""
+        """Parse a note with keyword rules."""
         require_text(note)
         text = note.lower()
-        named = any(mentions(text, u) for u in UNITS) or bare_nuts(text)
-        if "no allergies" in text and not named:
-            answers = {u: unmentioned(0.02) for u in UNITS}
-        else:
-            answers = {u: fake_unit_answer(text, u) for u in UNITS}
-        return build_parse_result(note, source, answers, "fake", self._threshold)
+        answers = {u: fake_unit_answer(text, u) for u in UNITS}
+        return build_parse_result(note, source, answers, "fake")

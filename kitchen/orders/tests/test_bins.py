@@ -5,6 +5,7 @@ import pytest
 from kitchen.orders.bins import DEMO_BINS, bin_profiles, save_bins
 
 
+@pytest.mark.safety
 def test_every_demo_bin_matches_the_contract(check_schema):
     for profile in bin_profiles().values():
         assert check_schema("allergen_profile", profile) == []

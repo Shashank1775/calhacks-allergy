@@ -21,7 +21,7 @@ Turns what a server types or says into exact allergen data, and never guesses. L
 | `laya_parser.py` | `LayaParser` adapters: `LocalLayaParser` (the fine-tuned Laya, run locally) and `FakeLayaParser` (keyword rules, for tests and offline demos) |
 | `tickets.py` | `TicketDesk`: note → draft with questions; answers; send; amend at `revision + 1` |
 | `bins.py` | `DEMO_BINS`, the hard-coded bin profiles, and `save_bins()` |
-| `transcribe.py` | `Transcriber` adapters: `FakeTranscriber` now, Cartesia Ink batch later ([decision](../../docs/decisions/cartesia-speech.md)) |
+| `transcribe.py` | `Transcriber` adapters: `CartesiaInkTranscriber` (batch, [decision](../../docs/decisions/cartesia-speech.md)) and `FakeTranscriber` (canned text) |
 | `api.py` | The [Orders HTTP API](../../contracts/apis.md#orders-http-api). `uv run python -m kitchen.orders.api` |
 | `eval/` | `demo_notes.json`, the controlled demo notes, and `run_demo.py`, which scores a parser on them |
 | `fakes/http/` | Example request and response for every endpoint, for the tablet's mock server. Regenerate with `uv run python -m kitchen.orders.fakes.make_examples` |
@@ -42,13 +42,15 @@ Bin entity IDs come from vision: `bin-4` is whatever sits in `slot-4`.
 
 ## Running it
 
+Settings come from `.env` (see `.env.example`), which `uv run` reads only with `--env-file .env`. The real model needs the `laya` package (it pulls in torch), so add it for the run with `--with laya==0.4.14`; it isn't a project dependency because CI doesn't need it.
+
 ```bash
-uv run python -m kitchen.orders.api                          # keyword fake, port 8001
-LAYA_MODEL_DIR=data/models/laya-v1 uv run python -m kitchen.orders.api
-uv run python -m kitchen.orders.eval.run_demo --model data/models/laya-v1   # score the model on the demo notes
+uv run --env-file .env python -m kitchen.orders.api                         # keyword fake if LAYA_MODEL_DIR is empty
+uv run --env-file .env --with laya==0.4.14 python -m kitchen.orders.api     # with LAYA_MODEL_DIR=data/models/laya-v1
+uv run --with laya==0.4.14 python -m kitchen.orders.eval.run_demo --model data/models/laya-v1   # score the model
 ```
 
-Until the partner's `StateClient` exists, `api.py` keeps tickets and bin profiles in memory (`InMemoryState`).
+The checkpoint (about 800 MB) lives in `data/models/` (gitignored). Until the partner's `StateClient` exists, `api.py` keeps tickets and bin profiles in memory (`InMemoryState`). Without `CARTESIA_API_KEY`, `/transcribe` returns a canned transcript.
 
 ## Safety rules
 

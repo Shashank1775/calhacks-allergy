@@ -1,13 +1,13 @@
 {
   "method": "POST",
-  "path": "/drafts/d-ce545326b9/answers",
+  "path": "/drafts/d-1ec736dc84/answers",
   "request": {
     "question_id": "q2",
     "value": "peanut"
   },
   "status": 200,
   "response": {
-    "draft_id": "d-ce545326b9",
+    "draft_id": "d-1ec736dc84",
     "note": "allergic to nuts, carries an epipen",
     "source": "typed",
     "parser": {

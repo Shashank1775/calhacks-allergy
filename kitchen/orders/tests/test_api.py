@@ -70,6 +70,7 @@ def test_laya_down_is_an_error_not_an_empty_draft(state, clock):
     response = client_for(state, clock, DownParser()).post("/parse", json={"note": "peanut allergy", "source": "typed"})
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "laya_unavailable"
+    assert state.tickets == {}
 
 
 def test_amend_returns_a_new_draft(state, clock):

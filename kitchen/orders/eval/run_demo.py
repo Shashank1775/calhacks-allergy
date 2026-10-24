@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from kitchen.orders.laya_parser import DROP_THRESHOLD, FakeLayaParser, LocalLayaParser
+from kitchen.orders.laya_parser import FakeLayaParser, LocalLayaParser
 
 DEMO_NOTES = Path(__file__).with_name("demo_notes.json")
 SURE = 0.5  # a listed allergen at or above this counts as the parser saying "yes"
@@ -33,9 +33,7 @@ def check_note(parser, item):
         if q["target"]["kind"] == "constraint" and q["target"]["field"] == "severity"
     }
 
-    missed = [
-        u for u in item["forbidden"] if u not in found or found[u]["confidence"]["allergen_unit_id"] < DROP_THRESHOLD
-    ]
+    missed = [u for u in item["forbidden"] if u not in found]  # the parser drops anything below 0.15
     extra = [u for u, c in found.items() if u not in item["forbidden"] and c["confidence"]["allergen_unit_id"] >= SURE]
     wrong_severity = [
         u

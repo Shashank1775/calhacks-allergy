@@ -269,12 +269,12 @@ source = { editable = "." }
 [package.optional-dependencies]
 server = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "hypothesis" },
     { name = "jsonschema" },
     { name = "pytest" },
@@ -284,13 +284,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'server'", specifier = ">=0.27" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
 ]
 provides-extras = ["pi", "ml", "server"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6.170.9" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "pytest", specifier = ">=9.1.1" },

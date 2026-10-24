@@ -22,7 +22,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step, 
 
 | Step | What happens | Folder | Owner |
 |---|---|---|---|
-| **Orders** | The server types or speaks a ticket (Cartesia Ink). Laya turns the note into forbidden allergens, low-confidence fields become one-tap questions, and the sent ticket is written to the database. At shift start, Laya also reads each bin's label into an allergen profile that a person checks | [`kitchen/orders/`](kitchen/orders/) | team `orders` |
+| **Orders** | The server types or speaks a ticket (Cartesia Ink). Laya turns the note into forbidden allergens, low-confidence fields become one-tap questions, and the sent ticket is written to the database. Demo bin profiles are hard-coded and written at startup | [`kitchen/orders/`](kitchen/orders/) | team `orders` |
 | **Vision** | YOLOv8 detection and pose, run locally with ONNX Runtime now and packaged to upload to the Hailo-8 later; ByteTrack, entity identity and origin, zones, plate binding, a per-frame **change mask**, frame recording | [`kitchen/vision/`](kitchen/vision/) | team `vision` |
 | **Entities** | In-memory entity store on the Pi, synced to SpacetimeDB about 5 times a second | [`kitchen/entities/`](kitchen/entities/) | **partner** |
 | **Interactions** | Candidate pairs; per pair, a window with vector features (for zone rules) and a **clip** of box masks plus change mask (for the ConvLSTM); zone rules; a classifier wrapper with fallback; edges written to the database | [`kitchen/interactions/`](kitchen/interactions/) | **partner** |
@@ -40,7 +40,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step, 
 Data flow:
 
 ```
-tablet ─▶ orders ─▶ DB: ticket, bin profiles
+tablet ─▶ orders ─▶ DB: ticket        orders startup ─▶ DB: bin profiles (hard-coded)
 camera ─▶ vision ─▶ ObservationFrame + change mask ─┬─▶ entities (partner) ─▶ DB: entity, entity_state (≈5 Hz)
                                                     └─▶ interactions (partner): pair windows (features + clips) ─▶ zone rules | ConvLSTM ─▶ DB: interaction edges
 DB ─▶ graph (partner) ─▶ reach ─▶ verdict ─▶ DB: verdict + chain ─▶ gate, voice, expo board
