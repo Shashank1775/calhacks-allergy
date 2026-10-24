@@ -1,6 +1,6 @@
 """Builds a PairWindow per candidate pair: vector features for zone rules, plus a clip (box masks + change mask) for the ConvLSTM.
 
-Owner: interactions (agents)
+Owner: partner (human). Agents never edit this file.
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: candidate pairs, observation_frame stream, change masks from vision, features.py
 Emits: PairWindow (features + interaction_clip + tensor) for classifier.py; labeled real clips for the partner (with labels.py)

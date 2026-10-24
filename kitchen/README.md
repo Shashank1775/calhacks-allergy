@@ -8,7 +8,7 @@ All Python code, one folder per pipeline step. Open a folder's README to see wha
 | 2 | [profiling/](profiling/) | Bin labels and prep sheets become allergen profiles; the chef confirms unclear items | team orders |
 | 3 | [vision/](vision/) | Camera frames become detections, tracks, entity IDs and recorded frames | team vision |
 | 4 | [entities/](entities/) | Keeps every entity in memory on the Pi and syncs to the database at about 5 Hz | **partner** |
-| 5 | [interactions/](interactions/) | Nearby entity pairs become allergen-blind features, which become classified edges | team interactions |
+| 5 | [interactions/](interactions/) | Nearby entity pairs become features and clips, which become classified edges | **partner** |
 | 5b | [lstm/](lstm/) | The learned interaction classifier | **partner** |
 | 6 | [graph/](graph/) | The provenance graph: propagation, wash resets, time-forward paths, exact reachability | **partner** |
 | 7 | [verdict/](verdict/) | A plate at the pass gets PASS or HOLD, with the contamination chain | team verdict |

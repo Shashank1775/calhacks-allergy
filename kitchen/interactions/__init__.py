@@ -1,6 +1,6 @@
 """Who touched what: tracked entity pairs in, classified, time-stamped interaction edges out.
 
-Owner: interactions (agents)
+Owner: partner (human). Agents never edit this file.
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: observation_frame, zone kinds, InteractionClassifier (zone rules; partner LSTM once adopted)
 Emits: interaction_event (StateClient.record_interactions and JSONL), interaction_features windows, benchmark reports

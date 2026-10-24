@@ -1,85 +1,59 @@
-# kitchen/interactions: Who touched what
+# kitchen/interactions: Who touched what (partner)
 
-**Owner:** team `interactions` (agents). The ConvLSTM/ConvGRU model itself lives in [`kitchen/lstm/`](../lstm/README.md) and belongs to the partner. This folder feeds it, falls back from it, and benchmarks it.
+**Owner:** the partner (a human). Agents never edit this folder. This README says what the agent teams expect from it, and what they give it.
 
-## Pipeline step
+## What this step does
 
-Turn tracked entity pairs into time-stamped, classified interactions (the edges of the provenance graph), using only allergen-blind evidence.
-
-## What happens here
-
+It turns tracked entity pairs into time-stamped, classified interactions: the edges of the provenance graph.
 - Pick candidate pairs that are near or overlapping: hand–tool, tool–bin, tool–plate, hand–bin, hand–plate.
-- Compute features per pair per frame: distance, overlap, inside-zone flag, zone kind, speeds, dwell, wrist proximity. No allergen fields, ever (invariant 6).
-- Build a **PairWindow** for each pair: the vector features (for zone rules) plus a **clip**, which is box A, box B and the change mask over time with elapsed time. The clip comes from the shared builder (`kitchen/shared/clips.py`), the same code sim uses to make the partner's training data.
-- Classify each window as `transfer.contact`, `transfer.scoop`, `transfer.wipe`, `clean.wash` or `unimportant`, with a probability. Zone rules always run. The partner's ConvLSTM is used only after it wins the benchmark (invariant 7).
-- Segment per-frame labels into `InteractionEvent`s, and write them through `StateClient.record_interactions` within 500 ms of each event's end.
-- Own the labeled real-clip format, the labeling tool and the frozen benchmark that decides ConvLSTM adoption, and export labeled real clips for the partner's fine-tuning and checks.
+- For each pair, build a `PairWindow`:
+  - vector features (distance, overlap, zone kind, speeds, dwell, wrist proximity) for the zone rules;
+  - a **clip** (box A, box B, change mask, elapsed time) for the ConvLSTM in [`kitchen/lstm/`](../lstm/README.md).
+- Classify with zone rules (always available) or the ConvLSTM (once it wins the benchmark). Write each non-trivial interaction through `StateClient.record_interactions`.
 
-## Files
+## What the agents rely on
 
-| File | What it does |
-|---|---|
-| `candidates.py` | Candidate pairs: the five pair types, within a distance or overlap cutoff |
-| `features.py` | `InteractionFeatures` per pair per frame (zone rules and the rule baseline) |
-| `windows.py` | `PairWindow` per candidate pair: features plus a clip built with the shared builder from boxes and vision's change masks; also cuts labeled real clips from recordings |
-| `zone_rules.py` | Hand-written rule classifier, always available. All constants in one config object |
-| `classifier.py` | Wrapper: gives each `PairWindow` to the adopted ConvLSTM if healthy, to zone rules otherwise; every event names its classifier |
-| `events.py` | Segments labels into events; streaming pipeline; writes via `StateClient` with buffer and retry; JSONL CLI |
-| `labels.py` | Labeled clip dataset format, validator, frozen held-out manifest, labeling tool |
-| `benchmark.py` | Frozen held-out benchmark with a cost-weighted score; compares any `InteractionClassifier` |
+- **Edges:** [`interaction_event`](../../contracts/schemas/interaction_event.schema.json) rows in the `interaction` table, written within about 500 ms of each event's end. The partner's graph and the agents' screens read them.
+- **The classifier interface:** [`InteractionClassifier`](../../contracts/apis.md#interactionclassifier), with `classify(PairWindow)`.
+- **The safety rules** in [AGENTS.md §3](../../AGENTS.md#3-safety-rules):
+  - **Invariant 6.** Features and clips carry no allergen data; clips carry no object pixels, classes or kinds.
+  - **Invariant 7.** Zone rules stay the fallback whenever the ConvLSTM fails, raises or times out.
+  - **Invariant 1.** Never drop events silently.
+  - **Invariant 5.** Events stay in time order, and a re-acquired entity uses its new ID.
+- **A wash is a self-loop:** `clean.wash` edges have `a_id == b_id`.
 
-## Inputs and outputs
+## What the agents give you
 
-| Direction | What | Contract | From / to |
-|---|---|---|---|
-| in | `ObservationFrame`, in-process or JSONL | [`observation_frame`](../../contracts/schemas/observation_frame.schema.json) | vision |
-| in | Zone kinds | zone file, `StateClient.list_zones` | vision |
-| in | Change masks, one per frame, in-process or `change.npz` | [change mask](../../contracts/apis.md#change-mask-and-clips) | vision |
-| in | ConvLSTM classifier | [`InteractionClassifier`](../../contracts/apis.md#interactionclassifier) | partner (`kitchen/lstm/`) |
-| out | Edges | [`interaction_event`](../../contracts/schemas/interaction_event.schema.json) via `StateClient.record_interactions` → `interaction` table | partner graph, outputs |
-| out | Event JSONL fixture pack | `interaction_event` | verdict, partner graph tests, platform e2e |
-| out | Labeled real clips | [`interaction_clip`](../../contracts/schemas/interaction_clip.schema.json) + npz | partner (fine-tuning and checks), benchmark |
-| out | Benchmark report | none | partner, Director (adoption ADR) |
+- **Frames and change masks (vision team).** An `ObservationFrame` for every frame, plus its change mask from the shared function, in-process on the Pi and in recordings (`frames.jsonl` + `change.npz`). Tasks: vision-01, vision-05, vision-13.
+- **The shared builders (platform team).** `kitchen/shared/change_mask.py` and `kitchen/shared/clips.py` (platform-12): use them for live clips, so live input matches the sim-trained model. `ScriptedClassifier` and the classifier contract tests (platform-06).
+- **Training clips (sim team).** Rendered, labeled clips with hard negatives (sim-12 to sim-15), and scenario event streams for testing (sim-05).
 
-Default edge direction until the ADR (OQ-9): contact and wipe go `both` ways; a scoop moves bin → tool; `clean.wash` is a self-loop (`a_id == b_id`).
+## Suggested task list
 
-## Safety rules that apply
+What the agents had planned for this folder is now on GitHub as issues labeled `owner:partner`:
+- zone rules v0;
+- hand-written frame fixtures;
+- candidate pairs and features;
+- the edge-direction ADR (OQ-9);
+- the event fixture pack;
+- the classifier wrapper with fallback;
+- the streaming pipeline;
+- tuning on recorded frames;
+- the labeled-clip format and labeling tool;
+- the benchmark;
+- real-clip export;
+- live pair windows.
 
-See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). Every test below is marked `safety`.
+Use them, change them or close them; they're yours.
 
-- **Invariant 6: allergen-blind, and object-blind for the learned model.** Clips contain only box masks, the change mask and timing (no object pixels, classes or kinds); a test checks every clip against the schema. Feature rows validate against the schema (`additionalProperties: false`). Only `zone_kind` is used, never the zone ID. An import-lint test proves this folder never reads `bin_profile`, `entity_risk` or allergen data. A property test shows output doesn't change when bin profiles change.
-- **Invariant 7: rules stay the fallback.** `classifier.py` falls back to zone rules when the LSTM fails to load, raises or times out (tested with `ScriptedClassifier`). Every event names its classifier. The LSTM is adopted only by an ADR backed by the frozen benchmark and co-signed by the partner.
-- **Invariant 1: fail closed.** Transfers above a low floor are emitted with their honest probability, and the graph decides. `clean.wash` needs the wash zone, a minimum dwell and a high probability, so a brief pass through the wash zone is not a wash. Events are buffered and retried on `StateUnavailable`, never dropped silently.
-- **Invariant 5: time runs forward.** Every event has `t_start_ms ≤ t_end_ms`. Events are emitted in `t_start_ms` order per pair. Events for a re-acquired entity use its new ID, never the old one.
+## Until yours lands
 
-## Fakes
+The agents' end-to-end harness feeds the graph scenario event streams (from `contracts/scenarios/` and sim) instead of live edges, so nothing agent-side waits on you.
 
-- **We use:** our hand-written frame fixtures, then vision's recorded pack; `InMemoryStateClient`, `ScriptedClassifier` (the LSTM stand-in) and `FixedClock` (platform).
-- **We ship:** the event JSONL fixture pack, a tiny labeled sample session, and labeled real clips.
+## How to hand off
 
-## Tests
+- Open PRs from `partner/<slug>` branches. Any internal layout is fine; the skeleton files are only suggestions.
+- The schemas and interfaces in `contracts/` are the deal. Changing them goes through the Director as an RFC.
+- Agents reach you with issues labeled `owner:partner`.
 
-Tests live in `kitchen/interactions/tests/`; run them with `uv run pytest kitchen/interactions`. Feature tests also run at 15, 30 and 60 FPS resamplings of the same scene.
-
-## Milestones
-
-- **M0:** frame fixtures (interactions-02), candidates and features (03), zone rules v0 (01), edge direction ADR (04), event fixture pack (05).
-- **M1:** classifier wrapper with fallback (06), streaming pipeline (07), rules tuned on vision's pack (08), dataset format (09), labeling tool (10), benchmark (11), labeled real-clip export (12), live pair windows with clips (13).
-- **M2:** live on the Pi within the 500 ms budget. Rules tuned on owner recordings. Wash detection checked at the real wash station (`hardware`).
-- **M3:** owner clips labeled, with the session-level held-out split frozen. Benchmark the partner's ConvLSTM, trained on sim clips, against zone rules on real held-out clips. Adoption ADR co-signed by the partner. It becomes primary only if it wins.
-- **M4:** drills: an LSTM crash, slow inference and a DB outage each fall back to rules or the buffer, never to silence. Regression suite frozen for the demo.
-
-## Risks and open questions
-
-| Risk | Mitigation |
-|---|---|
-| Too little labeled real data, so the ConvLSTM never wins | Sim clips carry the training; real clips are for fine-tuning and judging. If it still doesn't win, rules ship and the benchmark makes the call |
-| Live clips differ from training clips | One shared change-mask function and clip builder; a test that sim and live clips from the same scene have matching tensors |
-| 2D overlap is not 3D contact | Overhead camera; bias toward recall for transfers (holds are the safe error) |
-| A false `clean.wash`, the most dangerous error because it erases contamination | Wash zone plus dwell plus a high threshold; heaviest weight in the benchmark |
-| Leakage between train and held-out | Split by recording session, never by clip. Hashed, frozen held-out manifest |
-| FPS jitter distorts speed and dwell | Time-based units; tests at 15, 30 and 60 FPS |
-| Recording and labeling time (OQ-12) | Owner records; we supply the format, tool and recording guide |
-| Edge direction undecided (OQ-9) | Defaults above until the ADR |
-
-Open questions: [AGENTS.md §11](../../AGENTS.md#11-open-questions).
+Open questions that touch you: OQ-9 (edge direction), OQ-12 (real clips), OQ-19 and OQ-20 (ConvLSTM outputs and clip geometry). See [AGENTS.md §11](../../AGENTS.md#11-open-questions).

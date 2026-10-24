@@ -1,6 +1,6 @@
 """InteractionFeatures per candidate pair per frame: what zone rules and the benchmark's rule baseline use.
 
-Owner: interactions (agents)
+Owner: partner (human). Agents never edit this file.
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: candidate pairs, observation_frame, zone kinds
 Emits: interaction_features rows

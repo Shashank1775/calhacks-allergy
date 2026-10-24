@@ -24,7 +24,7 @@ Everything the other folders import to talk to each other. Every Python folder i
 | `fakes/` | `InMemoryStateClient` + scenario loader, `FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier` |
 | `contract_tests/` | Reusable pytest suites, one per interface, parametrized over implementations |
 | `change_mask.py` | The one change-mask function (RGB frame pair → gradient mask), used by vision on real frames and by sim on rendered frames |
-| `clips.py` | The one clip builder (boxes + change masks over time → `interaction_clip` + `[T, C, H, W]` tensor), used by interactions live, by sim and by the partner's training |
+| `clips.py` | The one clip builder (boxes + change masks over time → `interaction_clip` + `[T, C, H, W]` tensor), used by sim and by the partner (live pair windows in `kitchen/interactions/`, and training) |
 
 TypeScript types for `web/` are generated from the same schemas (task platform-07); see `web/README.md` for where they land.
 

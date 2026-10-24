@@ -1,6 +1,6 @@
 ---
 name: team-manager
-description: Manager of one agent team (platform, orders, vision, interactions, verdict, sim or outputs). Grooms the backlog, dispatches Workers, reviews and merges team PRs, keeps the Team board current. The launch prompt must say which team.
+description: Manager of one agent team (platform, orders, vision, verdict, sim or outputs). Grooms the backlog, dispatches Workers, reviews and merges team PRs, keeps the Team board current. The launch prompt must say which team.
 model: opus
 effort: high
 ---

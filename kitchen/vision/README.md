@@ -4,7 +4,7 @@
 
 ## Pipeline step
 
-Turn camera frames into tracked, stably identified bins, tools, hands and plates (`ObservationFrame`), and hand every frame to the partner's entity store and to `kitchen/interactions`.
+Turn camera frames into tracked, stably identified bins, tools, hands and plates (`ObservationFrame`), and hand every frame (with its change mask) to the partner's entity store and interactions step.
 
 ## What happens here
 
@@ -13,7 +13,7 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 - Track with ByteTrack, then map each track to a stable entity ID (`bin-<slot>`, `tool-<class>-<n>`, `hand-p<k>-left|right`, `plate-<n>`) with an `origin`: `shift_start`, `clean_stack` or `unknown`.
 - Give every detection a zone from the calibration file: bin slots, plating spot, wash, clean stack, pass.
 - When the cook taps "start ticket", bind the plate at the plating spot to that ticket. Serve the Pi's HTTP API.
-- Compute a **change mask** for every frame with the shared function (`kitchen/shared/change_mask.py`): a single channel that's brighter where more moved since the last frame. Hand it over in-process with each `ObservationFrame`; interactions uses it to build clips for the partner's ConvLSTM.
+- Compute a **change mask** for every frame with the shared function (`kitchen/shared/change_mask.py`): a single channel that's brighter where more moved since the last frame. Hand it over in-process with each `ObservationFrame`; the partner's interactions step uses it to build clips for the ConvLSTM.
 - Record frames to JSONL and change masks to `change.npz`, and replay both byte for byte.
 
 ## Files
@@ -32,7 +32,7 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 | `plates.py` | "Start ticket" binding: exactly one plate at the plating spot, or refuse |
 | `record.py` | Records frames (`frames.jsonl`), change masks (`change.npz`) and a session manifest; deterministic replay |
 | `server.py` | Vision HTTP API (`/v1/plates/start`, `/stream.mjpg`, `/v1/health`), and the scripted `FakeVisionAPI` for outputs |
-| `run.py` | Main loop: source → detect + pose → track → identity + zones → `ObservationFrame` → entity store, interactions, recorder. Also the replay CLI |
+| `run.py` | Main loop: source → detect + pose → track → identity + zones → `ObservationFrame` → partner's entity store and interactions, recorder. Also the replay CLI |
 
 ## Inputs and outputs
 
@@ -40,9 +40,9 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 |---|---|---|---|
 | in | Camera frames or video files | none | Pi camera, `data/` |
 | in | Shift start, existing plate bindings | [`StateClient`](../../contracts/apis.md#stateclient) | partner database |
-| out | `ObservationFrame`, every frame, in-process | [`observation_frame`](../../contracts/schemas/observation_frame.schema.json) | partner [`EntityStore.ingest`](../../contracts/apis.md#entitystore), `kitchen/interactions` |
-| out | Change mask per frame, in-process | [change mask](../../contracts/apis.md#change-mask-and-clips) | `kitchen/interactions` (clips) |
-| out | Frame JSONL plus `change.npz` recordings and the fixture pack | `observation_frame`, change mask | interactions, sim (calibration), partner tests |
+| out | `ObservationFrame`, every frame, in-process | [`observation_frame`](../../contracts/schemas/observation_frame.schema.json) | partner [`EntityStore.ingest`](../../contracts/apis.md#entitystore), partner `kitchen/interactions` |
+| out | Change mask per frame, in-process | [change mask](../../contracts/apis.md#change-mask-and-clips) | partner `kitchen/interactions` (clips) |
+| out | Frame JSONL plus `change.npz` recordings and the fixture pack | `observation_frame`, change mask | partner (interactions, tests), sim (calibration) |
 | out | Zones | `StateClient.set_zones` → `zone` table | everyone |
 | out | Plate binding | `StateClient.bind_plate` → `plate_binding` table | verdict, partner graph, outputs |
 | out | Vision HTTP API | [apis.md](../../contracts/apis.md#vision-http-api-on-the-pi) | outputs (start-ticket button, overlays, gate health watch) |

@@ -4,7 +4,7 @@
     profiling/     2  bin labels and prep sheets -> allergen profiles          (team orders)
     vision/        3  camera -> detections, tracks, entity IDs, frames         (team vision)
     entities/      4  in-memory entity store + 5 Hz database sync              (partner)
-    interactions/  5  entity pairs -> features -> classified edges             (team interactions)
+    interactions/  5  entity pairs -> features and clips -> classified edges   (partner)
     lstm/          5b learned interaction classifier                           (partner)
     graph/         6  provenance graph, propagation, exact reachability        (partner)
     verdict/       7  plate at the pass -> PASS or HOLD, with the chain        (team verdict)

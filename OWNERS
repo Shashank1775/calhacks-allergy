@@ -29,7 +29,6 @@ uv.lock                        platform
 kitchen/orders/                orders
 kitchen/profiling/             orders
 kitchen/vision/                vision
-kitchen/interactions/          interactions
 kitchen/verdict/               verdict
 kitchen/sim/                   sim
 kitchen/gate/                  outputs
@@ -37,6 +36,7 @@ web/                           outputs
 web/src/generated/             platform      # TS types generated from contracts
 
 kitchen/entities/              partner
+kitchen/interactions/          partner
 kitchen/lstm/                  partner
 kitchen/graph/                 partner
 database/                      partner

@@ -9,7 +9,7 @@ The model learns **interaction**, not objects. It never sees a spoon or a fork. 
 ## Input (contract)
 
 - One clip per candidate pair: a tensor `[T, C, H, W]` with channels `box_a`, `box_b`, `change` (and optionally `others`), plus `dt_ms` per step. Spec: [`interaction_clip`](../../contracts/schemas/interaction_clip.schema.json), and [Change mask and clips](../../contracts/apis.md#change-mask-and-clips).
-- Clips are built by **one shared builder** (`kitchen/shared/clips.py`) from **one shared change-mask function** (`kitchen/shared/change_mask.py`). The same code runs on live camera frames (vision and interactions) and on sim renders, so training input and live input match.
+- Clips are built by **one shared builder** (`kitchen/shared/clips.py`) from **one shared change-mask function** (`kitchen/shared/change_mask.py`). The same code runs on live camera frames (vision, then your interactions step) and on sim renders, so training input and live input match.
 - No object pixels, classes, kinds or allergen data, ever (invariant 6). The schema rejects extra fields.
 - You decide the geometry (H × W, T, stride, full frame or pair crop, mask gain, blur and trail) in an ADR (OQ-20). The defaults are 128 × 128, full frame, T = 16 over about 1 s, gain 4, blur 1.5 px, no trail.
 
@@ -32,9 +32,10 @@ A contact with no visible movement still counts as a possible trace transfer dow
   - box jitter and variable frame timing.
 
   Datasets come with leak-free splits and a datasheet (tasks sim-12 to sim-15).
-- **Real clips (interactions team).** Clips cut from real recordings with the same builder, human-labeled, for fine-tuning and for the frozen held-out benchmark (interactions-09, -10, -12).
-- **The benchmark (interactions team).** A cost-weighted comparison against zone rules on held-out real clips, where missed transfers and false washes cost the most (interactions-11).
-- **Live plumbing.** Live `PairWindow`s, with features for zone rules and a clip for you (interactions-13), and the fallback wrapper (interactions-06).
+- **Change masks (vision team).** Every real frame comes with its change mask, live and in recordings (`change.npz`), from the shared function (vision-13).
+- **The shared builders (platform team).** `kitchen/shared/change_mask.py` and `clips.py` (platform-12), plus `ScriptedClassifier` and the classifier contract tests.
+
+The interactions step itself is yours too (`kitchen/interactions/`): candidate pairs, zone rules, live pair windows, the fallback wrapper, real-clip labeling and the adoption benchmark. Its suggested task list is on GitHub as issues labeled `owner:partner`.
 
 ## Rules you're held to
 
@@ -50,7 +51,7 @@ Agents test the fallback path with `ScriptedClassifier` (platform), which return
 ## How to hand off
 
 - Open PRs from `partner/<slug>` branches. Any internal layout is fine; `model.py`, `train.py` and `infer.py` are only suggestions.
-- Changing the clip spec or the interface is a contract change. Tell the Director, who runs it as an RFC (you ACK; sim and interactions follow).
+- Changing the clip spec or the interface is a contract change. Tell the Director, who runs it as an RFC (you ACK; sim and vision follow).
 - Agents reach you with issues labeled `owner:partner`.
 
 Open questions that touch you: OQ-19 (outputs), OQ-20 (clip geometry), OQ-12 (real clip recording), OQ-9 (edge direction). See [AGENTS.md §11](../../AGENTS.md#11-open-questions).

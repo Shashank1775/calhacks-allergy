@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKLOG = ROOT / "tools" / "backlog"
-TEAMS = ["platform", "orders", "vision", "interactions", "verdict", "sim", "outputs"]
+TEAMS = ["platform", "orders", "vision", "verdict", "sim", "outputs"]
 MILESTONES = {
     "M0": "M0 Foundations",
     "M1": "M1 Vertical Slice",

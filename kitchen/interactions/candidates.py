@@ -1,6 +1,6 @@
 """Candidate pairs per frame: hand-tool, tool-bin, tool-plate, hand-bin, hand-plate, within a distance or overlap cutoff.
 
-Owner: interactions (agents)
+Owner: partner (human). Agents never edit this file.
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: observation_frame detections
 Emits: candidate (a_id, b_id) pairs for features.py

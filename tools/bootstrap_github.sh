@@ -7,10 +7,10 @@ echo "bootstrapping $REPO"
 
 label() { gh label create "$1" --repo "$REPO" --color "$2" --description "$3" --force >/dev/null && echo "  label $1"; }
 
-for t in platform orders vision interactions verdict sim outputs; do
+for t in platform orders vision verdict sim outputs; do
   label "team:$t" 1d76db "Owned by team $t"
 done
-label owner:partner  0052cc "For the human partner (entities, lstm, graph, database)"
+label owner:partner  0052cc "For the human partner (entities, interactions, lstm, graph, database)"
 label needs-partner  0052cc "Last step needs the partner's real component; build against the fake first"
 label type:task     0e8a16 "A unit of work for one Worker"
 label type:epic     5319e7 "Milestone-sized goal; checklist links tasks"

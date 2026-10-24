@@ -1,6 +1,6 @@
 """Labeled clip dataset: session layout, validator, frozen held-out manifest, and the keypress labeling tool.
 
-Owner: interactions (agents)
+Owner: partner (human). Agents never edit this file.
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: vision recordings (frames.jsonl + manifest), candidate segments
 Emits: labels.jsonl per session; held-out manifest with content hash

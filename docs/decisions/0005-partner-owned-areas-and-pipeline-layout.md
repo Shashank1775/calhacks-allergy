@@ -1,6 +1,6 @@
 # 0005: The partner owns the entity graph and data system and the LSTM; code is laid out by pipeline step
 
-- **Status:** accepted
+- **Status:** accepted (amended by 0006: interactions also moved to the partner)
 - **Date:** 2026-10-23
 - **Deciders:** owner, director
 

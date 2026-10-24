@@ -18,7 +18,7 @@ Every table has exactly **one** writer team. The module enforces this by checkin
 | `chef_confirmation` | orders | outputs | — |
 | `entity` | partner entity store | all | `entity` minus `allergen_profile` |
 | `plate_binding` | vision | verdict, partner graph, outputs | `scenario.plate_bindings[]` |
-| `interaction` | interactions | partner graph, outputs | `interaction_event` |
+| `interaction` | partner interactions | partner graph, outputs | `interaction_event` |
 | `entity_risk` | partner graph | outputs | `allergen_profile` (live, propagated) |
 | `verdict` | verdict | outputs | `verdict` minus `chain` |
 | `verdict_step` | verdict | outputs | `verdict.chain[]` |
@@ -60,7 +60,7 @@ Every ticket revision is kept, in all three ticket tables, so any verdict can be
 | `open_chef_confirmation(entity_id, ingredient)` / `answer_chef_confirmation(id, allergen_unit_ids)` | orders | |
 | `upsert_entities(entities)` | partner entity store | Batched at ~5 Hz. Never deletes; stale entities keep `last_seen_t_ms` |
 | `bind_plate(plate_id, ticket_id, t_ms)` | vision | |
-| `record_interactions(events)` | interactions | Insert; duplicate `event_id` is a no-op |
+| `record_interactions(events)` | partner interactions | Insert; duplicate `event_id` is a no-op |
 | `put_entity_risk(entity_id, profile, t_ms)` | partner graph | Upsert |
 | `record_verdict(verdict, steps)` | verdict | Insert verdict and its chain atomically |
 | `put_mistake_pattern(pattern)` | verdict | Upsert |

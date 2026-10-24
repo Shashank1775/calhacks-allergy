@@ -1,6 +1,6 @@
 """Hand-written zone-rule classifier: the always-available InteractionClassifier named zone_rules.
 
-Owner: interactions (agents)
+Owner: partner (human). Agents never edit this file.
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: windows of interaction_features
 Emits: list of (action, probability); constants in one config object, encoded in version

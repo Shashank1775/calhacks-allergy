@@ -15,8 +15,8 @@ People can get hurt if this system is wrong in the PASS direction. Wrong in the 
 **The Hailo-8 isn't connected yet.** Everything runs locally: vision uses ONNX Runtime on a laptop, with video files or a webcam. It stays ready to upload to the Hailo later (same model file, same processing code, a deploy bundle; see `kitchen/vision/README.md`). Nothing waits on the device.
 
 **Two kinds of builders work in this repo:**
-- **Agents** (you): a Director, a Manager for each of seven teams, Workers, and Reviewers.
-- **The partner**, a human who builds the LSTM and the entity graph/data system. Their folders are off limits to agents (§4).
+- **Agents** (you): a Director, a Manager for each of six teams, Workers, and Reviewers.
+- **The partner**, a human who builds the interactions step with its ConvLSTM, and the entity graph/data system. Their folders are off limits to agents (§4).
 
 ## 2. Pipeline and code map
 
@@ -28,7 +28,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step. 
 | 2 | **Profiling** | At shift start, Jev reads bin labels and prep sheets and assigns allergen probabilities; unclear ingredients go to the chef; an Apify menu import is optional | [`kitchen/profiling/`](kitchen/profiling/) | team `orders` |
 | 3 | **Vision** | YOLOv8 detection and pose, run locally with ONNX Runtime now and packaged to upload to the Hailo-8 later; ByteTrack, entity identity and origin, zones, plate binding, a per-frame **change mask**, frame recording | [`kitchen/vision/`](kitchen/vision/) | team `vision` |
 | 4 | **Entities** | In-memory entity store on the Pi, synced to SpacetimeDB about 5 times a second | [`kitchen/entities/`](kitchen/entities/) | **partner** |
-| 5 | **Interactions** | Candidate pairs; per pair, a window with vector features (for zone rules) and a **clip** of box masks plus change mask (for the ConvLSTM); zone rules; a classifier wrapper with fallback; edges written to the database | [`kitchen/interactions/`](kitchen/interactions/) | team `interactions` |
+| 5 | **Interactions** | Candidate pairs; per pair, a window with vector features (for zone rules) and a **clip** of box masks plus change mask (for the ConvLSTM); zone rules; a classifier wrapper with fallback; edges written to the database | [`kitchen/interactions/`](kitchen/interactions/) | **partner** |
 | 5b | **LSTM** | ConvLSTM or ConvGRU over clips of two boxes plus a change mask: learns whether objects touched and material moved, not what they are. Adopted only if it beats zone rules | [`kitchen/lstm/`](kitchen/lstm/) | **partner** |
 | 6 | **Graph** | Provenance graph: noisy-OR propagation, wash resets, time-forward paths, exact reachability, live entity risk | [`kitchen/graph/`](kitchen/graph/) | **partner** |
 | 6b | **Database** | SpacetimeDB module (tables, reducers) and the real `StateClient` | [`database/`](database/) | **partner** |
@@ -45,7 +45,7 @@ Data flow:
 ```
 tablet ─▶ orders ─▶ DB: ticket          shift start ─▶ profiling ─▶ DB: bin profiles
 camera ─▶ vision ─▶ ObservationFrame + change mask ─┬─▶ entities (partner) ─▶ DB: entity (≈5 Hz)
-                                                    └─▶ interactions: pair windows (features + clips) ─▶ zone rules | ConvLSTM (partner) ─▶ DB: interaction edges
+                                                    └─▶ interactions (partner): pair windows (features + clips) ─▶ zone rules | ConvLSTM ─▶ DB: interaction edges
 sim world ─▶ rendered clips + labels ─▶ ConvLSTM training (partner)        sim world ─▶ scenarios ─▶ graph, verdict, Laya tests and training
 DB ─▶ graph (partner) ─▶ reach / subgraph ─▶ verdict (+ Laya) ─▶ DB: verdict + chain ─▶ gate, voice, web screens
 ```
@@ -70,7 +70,7 @@ Graph math, for reference: noisy-OR, `P_dst(a) ← 1 − (1 − P_dst(a))·(1 �
 
 ## 4. Partner-owned areas
 
-The partner is a human teammate who owns **`kitchen/entities/`, `kitchen/lstm/`, `kitchen/graph/` and `database/`**.
+The partner is a human teammate who owns **`kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/` and `database/`**.
 
 - **Agents never edit these folders**, not even a typo. CI rejects agent PRs that touch them.
 - **Agents never wait on the partner.** Build against the fakes in `kitchen/shared/fakes/` (`InMemoryStateClient`, `FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier`). The interfaces in [`contracts/apis.md`](contracts/apis.md) are the deal between agents and the partner.
@@ -88,7 +88,7 @@ All agents share one GitHub account, so **sign everything** (issue comments, PR 
 | Role | Signature | Job |
 |---|---|---|
 | **Owner** (human) | — | Approves phase gates and milestone exits. Answers `status:needs-human`. Runs hardware tests. Holds keys and money |
-| **Director** (one) | `— [director]` | Keeps seven teams pointed at one working system. Owns this file, contracts approval, the roadmap, ADRs, the Program board, and the relationship with the partner. Writes no product code |
+| **Director** (one) | `— [director]` | Keeps six teams pointed at one working system. Owns this file, contracts approval, the roadmap, ADRs, the Program board, and the relationship with the partner. Writes no product code |
 | **Manager** (one per team) | `— [manager/<team>]` | Owns the team's backlog and Team board. Writes ready issues, dispatches Workers, reviews and merges team PRs, and represents the team in RFCs |
 | **Worker** | `— [worker/<team>/w<N>]` | One issue at a time, in its own worktree, proven with commands and output. Never merges |
 | **Safety reviewer** | `— [reviewer/safety]` | Required on every `safety-critical` PR. Not on the team being reviewed. Read-only |
@@ -166,7 +166,7 @@ Post one comment with numbered findings, each with a severity (`blocker`, `major
 
 | Group | Labels |
 |---|---|
-| Team | `team:platform` `team:orders` `team:vision` `team:interactions` `team:verdict` `team:sim` `team:outputs`, plus `owner:partner` (for the human partner) |
+| Team | `team:platform` `team:orders` `team:vision` `team:verdict` `team:sim` `team:outputs`, plus `owner:partner` (for the human partner) |
 | Type | `type:task` (one Worker) · `type:epic` (milestone goal) · `type:bug` · `type:spike` (time-boxed research; output is a written answer) · `type:request` (one team asks another) · `type:rfc` (contract change) · `type:question` (needs the Director or owner) · `type:board` (pinned status) |
 | Status | `status:backlog` → `status:ready` → `status:in-progress` → `status:review` → closed, plus `status:blocked` and `status:needs-human` |
 | Priority | `prio:p0` (blocks this milestone's demo) · `prio:p1` (needed this milestone) · `prio:p2` (nice to have) |
@@ -247,11 +247,10 @@ Merge with squash only. GitHub won't let one account approve its own PR, so appr
 | `platform` | `kitchen/shared/`, `tests/e2e/`, `tools/`, `.github/`, `.claude/`, `pyproject.toml`, `contracts/` upkeep | The `kitchen` Python project, CI, models generated from contracts, interfaces, clock, the end-to-end harness, TS types for `web/` | `InMemoryStateClient`, and fakes for partner parts (`FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier`), plus contract tests the partner's code must pass | Fakes must be faithful, especially fail-closed behavior |
 | `orders` | `kitchen/orders/`, `kitchen/profiling/` | Note parsing via Jev, one-tap questions, cache, apply, amendments, Cartesia Ink, bin profiling, chef confirmation, menu import, the Orders HTTP API, a ticket-note eval set | `FakeJev`, `TextFileTranscriber` | 3 (never send with an open question), 4 |
 | `vision` | `kitchen/vision/` | Video and webcam input, YOLOv8 detection and pose run locally with ONNX Runtime, a Hailo deploy bundle and backend ready for upload, the per-frame change mask (shared function), ByteTrack, identity and origin, zone calibration, plate binding, frame recording and replay, the Pi HTTP server | Recorded frame JSONL packs, `FakeVisionAPI` | 8 (new ID on re-acquire, origin set correctly) |
-| `interactions` | `kitchen/interactions/` | Candidate pairs, allergen-blind features, live pair windows (features + clips via the shared builder), zone rules, the fallback classifier wrapper, event segmentation, real-clip labeling, the benchmark that decides whether the partner's ConvLSTM is adopted | Recorded event JSONL packs, labeled real clips for the partner's fine-tuning and evaluation | 6, 7 (false washes are the costliest error) |
 | `verdict` | `kitchen/verdict/` | Verdict policy, the clean-confidence ADR, the Laya adapter, the verdict service (plate at pass, amendment), Repeated Mistakes analysis | `ExactLaya`, `AdversarialLaya`, `ScriptedVerdictSource` | 1, 2, 9. **The safety-critical team** |
 | `sim` | `kitchen/sim/` | Kitchen simulator, scenario generation at scale, error injection, Laya datasets and evaluation, and the **2D clip renderer**: abstract kitchens rendered as boxes plus change masks with labels from world truth, including hard negatives (overlap without contact, motion without contact, contact without movement, camera noise) | Scenario corpora, ConvLSTM training clip datasets | Ground truth independent of the graph; clips object-blind |
 | `outputs` | `kitchen/gate/`, `web/` | Gate driver and service (`fault` on a stale feed), Cartesia Sonic voice, the tablet, chef and expo screens, overlays, the Repeated Mistakes view | `ConsoleGate`, `MockGPIOGate`, `ConsoleSpeaker` | 1 (gate fails closed), 3 (tablet can't send with open questions) |
-| **partner** (human) | `kitchen/entities/`, `kitchen/lstm/`, `kitchen/graph/`, `database/` | Entity store and sync, the ConvLSTM/ConvGRU interaction model (trained on sim clips), the provenance graph and exact reachability, the SpacetimeDB module and real `StateClient` | — (platform builds the fakes) | 5, 8 in the graph; writer enforcement in the database |
+| **partner** (human) | `kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/`, `database/` | Entity store and sync; the interactions step (candidate pairs, features, zone rules, pair windows, fallback, edges, real-clip labels, the adoption benchmark) and its ConvLSTM/ConvGRU (trained on sim clips); the provenance graph and exact reachability, the SpacetimeDB module and real `StateClient` | — (platform builds the fakes) | 6, 7 in interactions; 5, 8 in the graph; writer enforcement in the database |
 
 Ownership is authoritative in [`OWNERS`](OWNERS). Each folder's README lists its milestones, risks and first tasks.
 
@@ -323,9 +322,9 @@ There's always a working demo on `main` after M1. Each later milestone swaps a f
 |---|---|---|
 | **Gate** ✅ | Owner approves the plan | Approved 2026-10-23 with defaults for the blocking questions. GitHub bootstrapped and backlog seeded |
 | **M0 Foundations** | Everyone builds against fakes | `kitchen` project and CI; generated models; interfaces; all fakes, including the partner-part fakes and their contract tests; each step has a skeleton with a passing test; vision replays a video locally (ONNX Runtime, no Hailo) into frame JSONL plus change masks; Hailo readiness ADR; the shared change-mask function and clip builder; sim renders a first labeled clip set for the partner; sim generates ≥ 20 valid scenarios |
-| **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End-to-end on fakes: typed note → `FakeJev` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `ConsoleGate`, `ConsoleSpeaker`. All golden scenarios pass in `rules_only`. Property tests for invariants 1, 2 and 9 approved by the safety reviewer. Tablet can't send with open questions. Zone rules turn recorded frames into valid edges. Hailo deploy bundle and parity script ready (no device needed). A large sim clip dataset with hard negatives and leak-free splits for ConvLSTM training; live pair windows built with the same clip builder. **Integration with the partner's graph and database as they land** (`needs-partner`) |
+| **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End-to-end on fakes: typed note → `FakeJev` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `ConsoleGate`, `ConsoleSpeaker`. All golden scenarios pass in `rules_only`. Property tests for invariants 1, 2 and 9 approved by the safety reviewer. Tablet can't send with open questions. Hailo deploy bundle and parity script ready (no device needed). A large sim clip dataset with hard negatives and leak-free splits for the partner's ConvLSTM training. **Integration with the partner's interactions, graph and database as they land** (`needs-partner`) |
 | **M2 Live on Pi** | The camera drives it | Connect the Hailo and upload the bundle; the owner runs the parity check; det+pose plus ByteTrack ≥ 30 FPS (`hardware`). Calibration and plate binding. Live zone-rule edges. Gate hardware with `fault` on a stale feed (`hardware`). Overlays. Deterministic replay of a recorded live session |
-| **M3 Models** | Learned parts, gated by evaluation | Real Jev parse on the eval set, with misses becoming questions. Bin profiling from photos. Laya fine-tuned on sim; on held-out sim it never misses an allergen exact reachability finds. ConvLSTM (trained on sim clips, checked on labeled real clips) vs zone-rule benchmark, with an ADR co-signed by the partner. Sim clip realism calibrated against real change masks. Cartesia Ink and Sonic live |
+| **M3 Models** | Learned parts, gated by evaluation | Real Jev parse on the eval set, with misses becoming questions. Bin profiling from photos. Laya fine-tuned on sim; on held-out sim it never misses an allergen exact reachability finds. The partner's ConvLSTM (trained on sim clips, checked on labeled real clips) vs zone rules, decided by the partner's benchmark and an ADR. Sim clip realism calibrated against real change masks. Cartesia Ink and Sonic live |
 | **M4 Demo Hardening** | It survives a live demo | Repeated Mistakes view. Live late-change recheck. Offline mode. Failure drills (kill any component → HOLD or `fault`, never PASS). Optional Apify import. Demo script rehearsed three times |
 
 ## 11. Open questions
@@ -342,18 +341,18 @@ The gate is open. The blocking questions were settled with their defaults on 202
 | OQ-6 | Camera overlays drawn client-side or burned into the Pi stream? | vision + outputs | no | Client-side |
 | OQ-7 | SpacetimeDB local on the laptop or Maincloud? | owner + partner | no | Local standalone |
 | OQ-8 | What does `trace_sensitive: false` change? | verdict (ADR), owner approves | no | Every transfer edge counts (strict) |
-| OQ-9 | Contact and wipe edges: both directions, or inferred? | interactions + partner | no | Both |
+| OQ-9 | Contact and wipe edges: both directions, or inferred? | partner | no | Both |
 | OQ-10 | Deadline, and agent hours per day? | owner | resolved | **Default accepted (2026-10-23):** no dates; milestones in order |
 | OQ-11 | Hardware inventory (Pi, Hailo form factor, camera, servo, lights, buzzer, speaker) | owner | by M2 | **Hailo not connected yet (owner, 2026-10-23): build locally, stay upload-ready.** Assumed: Pi 5 + Hailo-8 AI HAT+ + Camera Module 3 |
-| OQ-12 | Who records and labels real clips, with what tool? | owner + interactions | by M3 | Owner records; interactions supplies a labeling tool |
+| OQ-12 | Who records and labels real clips, with what tool? | owner + partner | by M3 | Owner records; the partner's interactions step supplies a labeling tool |
 | OQ-13 | How the unknown-history profile enters noisy-OR | partner (ADR) | no | Probability 1 for every unit |
 | OQ-14 | One camera or several? | owner | no | One |
 | OQ-15 | Budget for agent tokens and paid APIs | owner | at launch | Owner sets the Worker concurrency cap when the Director starts |
 | OQ-16 | Ultralytics YOLOv8 is AGPL-3.0: acceptable? | owner | by M2 | Fine for a non-distributed demo |
 | OQ-17 | Ordering of edges with equal timestamps | partner (ADR) | no | By `t_start_ms`, `t_end_ms`, `event_id`; a tied wash goes before the transfer (strict) |
 | OQ-18 | Where do Hailo HEFs come from: precompiled Hailo Model Zoo files, or our own compile with the Dataflow Compiler (needs an x86-64 Linux machine, not the Mac)? | vision (ADR, vision-02), owner provides a machine if needed | by M2 | Precompiled Model Zoo HEFs for COCO YOLOv8 det + pose; compile only if we fine-tune |
-| OQ-19 | What does the ConvLSTM output, and how does it map to actions? | partner + interactions (ADR) | by M1 | Two heads: P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`; a contact without visible movement still counts as a possible trace transfer (OQ-8) |
-| OQ-20 | Clip geometry: H × W, steps T and stride, full frame or pair crop, change-mask gain/blur/decay | partner (ADR); sim and interactions follow | by M0 end | 128 × 128, full frame, T = 16 steps covering about 1 s, gain 4, blur 1.5 px, no trail |
+| OQ-19 | What does the ConvLSTM output, and how does it map to actions? | partner (ADR) | by M1 | Two heads: P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`; a contact without visible movement still counts as a possible trace transfer (OQ-8) |
+| OQ-20 | Clip geometry: H × W, steps T and stride, full frame or pair crop, change-mask gain/blur/decay | partner (ADR); sim and vision follow | by M0 end | 128 × 128, full frame, T = 16 steps covering about 1 s, gain 4, blur 1.5 px, no trail |
 
 The Director moves answered questions to the bottom of this table with the answer and a link.
 

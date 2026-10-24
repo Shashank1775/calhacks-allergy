@@ -42,4 +42,4 @@ Agents build against `FakeProvenanceGraph` (platform, `kitchen/shared/fakes/`), 
 - **outputs:** overlays colored from `entity_risk`.
 - **platform:** the fake, the contract tests, and the end-to-end harness.
 
-Open questions that touch you: OQ-9 (edge direction, with interactions), OQ-13, OQ-17. See [AGENTS.md §11](../../AGENTS.md#11-open-questions).
+Open questions that touch you: OQ-9 (edge direction; interactions is yours too), OQ-13, OQ-17. See [AGENTS.md §11](../../AGENTS.md#11-open-questions).

@@ -7,7 +7,7 @@ Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`
 | [`StateClient`](#stateclient) | **partner** (`database/` + client) | `InMemoryStateClient` | platform |
 | [`EntityStore`](#entitystore) | **partner** (`kitchen/entities/`) | `FakeEntityStore` | platform |
 | [`ProvenanceGraph`](#provenancegraph) | **partner** (`kitchen/graph/`) | `FakeProvenanceGraph` | platform |
-| [`InteractionClassifier`](#interactionclassifier) | interactions (zone rules), **partner** (ConvLSTM / ConvGRU in `kitchen/lstm/`) | `ScriptedClassifier` | platform |
+| [`InteractionClassifier`](#interactionclassifier) | **partner** (zone rules in `kitchen/interactions/`, ConvLSTM / ConvGRU in `kitchen/lstm/`) | `ScriptedClassifier` | platform |
 | [Change mask and clip builder](#change-mask-and-clips) | platform (`kitchen/shared/change_mask.py`, `kitchen/shared/clips.py`) | none needed: pure functions | platform |
 | [`JevClient`](#jevclient) | orders | `FakeJev` | orders |
 | [`LayaClient`](#layaclient) | verdict (adapter), sim (the model) | `ExactLaya`, `AdversarialLaya` | verdict |
@@ -38,7 +38,7 @@ class StateClient(Protocol):
     def set_zones(self, zones: list[Zone]) -> None: ...                                 # vision (calibration)
     def bind_plate(self, plate_id: str, ticket_id: str, t_ms: int) -> None: ...         # vision ("start ticket")
     def upsert_entities(self, entities: list[Entity]) -> None: ...                      # partner entity store, ~5 Hz
-    def record_interactions(self, events: list[InteractionEvent]) -> None: ...          # interactions
+    def record_interactions(self, events: list[InteractionEvent]) -> None: ...          # partner interactions
     def put_entity_risk(self, entity_id: str, profile: AllergenProfile, t_ms: int) -> None: ...  # partner graph
     def record_verdict(self, verdict: Verdict) -> None: ...                             # verdict
     def put_mistake_pattern(self, pattern: MistakePattern) -> None: ...                 # verdict
@@ -103,7 +103,7 @@ class ProvenanceGraph(Protocol):
 
 ## InteractionClassifier
 
-Real: **interactions** (zone rules, always available) and **partner** (a ConvLSTM or ConvGRU, adopted only if it beats zone rules on held-out clips, invariant 7). Fake: `ScriptedClassifier` (platform): returns scripted labels, or errors or hangs on cue.
+Real: **partner**: zone rules (always available) in `kitchen/interactions/`, and a ConvLSTM or ConvGRU in `kitchen/lstm/`, adopted only if it beats zone rules on held-out clips (invariant 7). Fake: `ScriptedClassifier` (platform): returns scripted labels, or errors or hangs on cue.
 
 ```python
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ class InteractionClassifier(Protocol):
 
 ## Change mask and clips
 
-Owner: **platform** (`kitchen/shared/`). Used by **vision** (real frames, live), **sim** (rendered frames), **interactions** (live pair windows) and the **partner** (training). One implementation, so the model sees the same thing in training and live.
+Owner: **platform** (`kitchen/shared/`). Used by **vision** (real frames, live), **sim** (rendered frames) and the **partner** (live pair windows in `kitchen/interactions/`, and training). One implementation, so the model sees the same thing in training and live.
 
 ### Change mask
 

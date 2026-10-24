@@ -1,6 +1,6 @@
 """Frozen held-out benchmark that compares any InteractionClassifier against zone rules with a cost-weighted score.
 
-Owner: interactions (agents)
+Owner: partner (human). Agents never edit this file.
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: held-out manifest, labeled sessions, InteractionClassifier implementations
 Emits: report.json + report.md (per-action precision/recall, cost-weighted score)
