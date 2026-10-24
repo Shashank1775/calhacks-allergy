@@ -10,24 +10,50 @@ What people see. Servers enter tickets and set up bins on the tablet; expo sees 
 - **Expo board (`/expo`):** tickets, plates and verdicts. For each held plate it shows reasons, flagged allergens and the chain step by step with per-step confidence. A "start plate" button per ticket calls vision's `POST /plates/start`. Camera overlays color entities by allergen risk.
 - We never decide anything and write no database tables. We change state only through the orders and vision HTTP APIs.
 
-## Planned layout
+## Layout
 
-Nothing is here yet. Per the [web framework decision](../docs/decisions/web-framework.md): one React + TypeScript app on Vite, Node 24 LTS, with the paths `/tablet`, `/expo` and `/`, and no router library.
+Per the [web framework decision](../docs/decisions/web-framework.md): one React + TypeScript app on Vite, Node 24 LTS, with the paths `/tablet`, `/expo` and `/`, and no router library. The look is the "ticket rail": order chits on a steel rail, rubber stamps for verdicts. What's built and what's left is tracked in [SCOPE.md](SCOPE.md).
 
 ```
 web/
   package.json, vite.config.ts   app, build and test (vitest)
+  SCOPE.md     what's built, what's drawn but not wired up, what's not started
   src/
     main.tsx   creates the state source from WEB_STATE_SOURCE (scenario | spacetime;
                missing or unknown: no source, every screen shows FEED LOST) and mounts the app
-    app.tsx    screen_for_path(): /tablet, /expo, any other path the / links page
+    app.tsx    screen_for_path(): /tablet, /expo, any other path the / home page
+    badge.ts   plate_badge(): the only way a plate shows PASS
     styles.css shared rules, including 44 px touch targets
-    state/     StateSource interface; FakeStateSource (replays a scenario); SpacetimeSource (partner's TS bindings)
-    api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from kitchen/orders/fakes/http/
-    generated/ TS types generated from contracts/schemas by platform (never hand-edit)
+    state/     StateSource interface; FakeStateSource (replays a scenario); SpacetimeSource later (partner's TS bindings)
+    api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from contracts/fixtures/
+    types/     TEMPORARY.ts: hand-written contract types until platform generates src/generated/
+    components/ chit, rail, stamp, banner, "to be implemented" marker
+    home/      the / page: video source, live camera source (to be implemented)
     tablet/    ticket entry, one-tap questions, send gate, bin setup
-    expo/      held plates, chains, start-plate button, overlays
+    expo/      tickets, plates, hold reasons and chains, start-plate button, camera panel
 ```
+
+## Run it
+
+Use Node 24.15 or newer (`web/.nvmrc`).
+
+```bash
+npm --prefix web install
+```
+
+Put the settings in `web/.env.local` (git ignores it). To click through every screen with no services running:
+
+```
+WEB_STATE_SOURCE=scenario
+WEB_SCENARIO=knife-carries-peanut-to-plate
+WEB_MOCK_API=1
+```
+
+```bash
+npm --prefix web run dev
+```
+
+With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION_URL`. Each service must list the web origin in its CORS setting (`ORDERS_CORS_ORIGINS`, `VISION_CORS_ORIGINS`), for example `http://localhost:5173`, or `http://<laptop-ip>:5173` for the iPad.
 
 ## In and out
 
