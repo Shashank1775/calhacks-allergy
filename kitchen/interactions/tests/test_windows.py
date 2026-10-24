@@ -14,7 +14,7 @@ import pytest
 from kitchen.interactions.candidates import candidate_pairs, zone_kinds
 from kitchen.interactions.features import FeatureTracker
 from kitchen.interactions.settings import InteractionSettings
-from kitchen.interactions.tests.scenes import KNIFE, SCENES, ZONES
+from kitchen.interactions.tests.scenes import KNIFE, PLATE_AT, SCENES, ZONES, Track, render, still
 from kitchen.interactions.windows import WindowBuilder
 from kitchen.shared.models import schema_validator, validate
 
@@ -55,6 +55,44 @@ def test_windows_from_fixture_scene_hold_the_last_window_of_one_pair(scoop_windo
         assert {(row["a_id"], row["b_id"]) for row in window.features} == {(window.a_id, window.b_id)}
         assert times == sorted(times)
         assert times[-1] - times[0] <= SETTINGS.window_ms
+
+
+def knife_on_the_plate(away_until: int | None, unseen: tuple = ()) -> Track:
+    """A knife lying on the plate until 1200 ms, but well away from it from 301 ms until away_until."""
+    if away_until is None:
+        return Track(KNIFE, "tool", ((0, PLATE_AT), (1200, PLATE_AT)), unseen=unseen)
+    away = (0.8, 0.5)
+    keys = (
+        (0, PLATE_AT),
+        (300, PLATE_AT),
+        (301, away),
+        (away_until - 1, away),
+        (away_until, PLATE_AT),
+        (1200, PLATE_AT),
+    )
+    return Track(KNIFE, "tool", keys, unseen=unseen)
+
+
+@pytest.mark.parametrize(
+    ("away_until", "unseen", "fps", "kept"),
+    [
+        (None, ((301, 801),), 30, True),  # lost for 500 ms
+        (801, (), 30, False),  # seen apart for 500 ms
+        (561, (), 15, False),  # seen apart, and back in the first frame past pair_gap_ms (333 ms after it left)
+        (801, ((700, 801),), 30, False),  # seen apart for 400 ms, then lost
+    ],
+)
+def test_a_window_bridges_an_entity_out_of_view_but_not_a_pair_seen_apart(away_until, unseen, fps, kept):
+    """A knife on a plate is lost for a while, or seen away from it, then is back on it. Lost, the pair keeps its
+    window, so zone rules still see the overlap from before. Seen apart for longer than pair_gap_ms, the pair ended,
+    and its next touch starts a new window."""
+    frames = render([still("plate-t1", "plate", PLATE_AT, 1200), knife_on_the_plate(away_until, unseen)], 1200, fps)
+
+    windows = all_windows(frames, None, with_clips=False)
+
+    oldest_ms = windows[-1].features[0]["t_ms"]
+    assert (windows[-1].a_id, windows[-1].b_id) == (KNIFE, "plate-t1")
+    assert oldest_ms == 0 if kept else oldest_ms >= away_until
 
 
 @pytest.mark.safety

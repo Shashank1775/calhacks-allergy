@@ -111,24 +111,39 @@ def test_features_are_stable_across_15_30_and_60_fps():
         assert abs(at_rate[fps]["dwell_ms"] - at_rate[30]["dwell_ms"]) <= 67
 
 
-def test_dwell_survives_a_short_detector_miss_and_restarts_after_a_long_one():
+def test_dwell_bridges_a_loss_only_while_an_entity_is_out_of_view():
+    """A missed detection or two counts toward dwell. A longer loss is bridged but not counted while one of the pair is
+    out of view, as long as vision keeps a track; seen apart for longer than pair_gap_ms, the pair starts over."""
     tracker = FeatureTracker(KINDS, SETTINGS, ASPECT)
     knife = {"entity_id": KNIFE, "kind": "tool", "box": [0.4, 0.4, 0.43, 0.48], "zone": None}
     plate = {"entity_id": "plate-t1", "kind": "plate", "box": [0.4, 0.4, 0.56, 0.56], "zone": "plating"}
+
+    def in_view(t_ms: int, detections: list[dict]) -> None:
+        tracker.update({"frame_id": t_ms, "t_ms": t_ms, "detections": detections}, [])
 
     def dwell_at(t_ms: int) -> int:
         frame = {"frame_id": t_ms, "t_ms": t_ms, "detections": [knife, plate]}
         return tracker.update(frame, [(knife, plate)])[0]["dwell_ms"]
 
+    gap, track = SETTINGS.pair_gap_ms, SETTINGS.track_gap_ms
     assert dwell_at(0) == 0
     assert dwell_at(100) == 100
-    assert dwell_at(100 + SETTINGS.pair_gap_ms) == 100 + SETTINGS.pair_gap_ms  # missed for pair_gap_ms: kept
-    assert dwell_at(200 + 2 * SETTINGS.pair_gap_ms) == 0  # missed for longer: starts over
+    assert dwell_at(100 + gap) == 100 + gap  # missed for pair_gap_ms: counted
+    in_view(200 + gap, [plate])  # the knife is out of view
+    assert dwell_at(101 + 2 * gap) == 100 + gap  # lost for longer: kept, but not counted
+    in_view(102 + 3 * gap, [knife, plate])  # both in view, apart for longer than pair_gap_ms: the pair ends
+    assert dwell_at(103 + 3 * gap) == 0
+    assert dwell_at(200 + 3 * gap) == 97
+    in_view(201 + 3 * gap, [knife, plate])  # apart again, and back in the first frame past pair_gap_ms: ended too
+    assert dwell_at(201 + 4 * gap) == 0
+    assert dwell_at(300 + 4 * gap) == 99
+    in_view(301 + 4 * gap, [plate])
+    assert dwell_at(301 + 4 * gap + track) == 0  # lost for longer than vision keeps a track: over
 
 
 @pytest.mark.safety
 def test_a_self_pair_in_the_sink_bridges_a_loss_as_long_as_the_tracker_keeps_its_id_without_counting_it():
-    """One rinse must stay one wash (two would clean twice): a knife unseen in the sink for up to wash_gap_ms keeps
+    """One rinse must stay one wash (two would clean twice): a knife unseen in the sink for up to track_gap_ms keeps
     its dwell. The unseen time isn't counted as rinsing, though, since the knife may not have been under the water."""
     tracker = FeatureTracker(KINDS, SETTINGS, ASPECT)
     knife = {"entity_id": KNIFE, "kind": "tool", "box": [0.15, 0.78, 0.18, 0.86], "zone": "wash"}
@@ -137,17 +152,18 @@ def test_a_self_pair_in_the_sink_bridges_a_loss_as_long_as_the_tracker_keeps_its
         frame = {"frame_id": t_ms, "t_ms": t_ms, "detections": [knife]}
         return tracker.update(frame, [(knife, knife)])[0]["dwell_ms"]
 
-    gap = SETTINGS.wash_gap_ms
+    gap = SETTINGS.track_gap_ms
     assert dwell_at(0) == 0
     assert dwell_at(100) == 100
-    assert dwell_at(100 + gap) == 100  # unseen for wash_gap_ms: kept, but not counted
+    assert dwell_at(100 + gap) == 100  # unseen for track_gap_ms: kept, but not counted
     assert dwell_at(200 + gap) == 200
     assert dwell_at(201 + 2 * gap) == 0  # unseen for longer: starts over
 
 
-def test_the_wash_gap_covers_the_vision_trackers_lost_track_horizon():
-    """Vision keeps an entity's ID through a loss of up to track_lost_ms; a wash must bridge at least that long."""
-    assert SETTINGS.wash_gap_ms >= VisionSettings().track_lost_ms
+def test_the_track_gap_covers_the_vision_trackers_lost_track_horizon():
+    """Vision keeps an entity's ID through a loss of up to track_lost_ms; pairs and washes must bridge at least that
+    long."""
+    assert SETTINGS.track_gap_ms >= VisionSettings().track_lost_ms
 
 
 def test_wrist_proximity_is_a_distance_near_a_wrist_and_null_otherwise():

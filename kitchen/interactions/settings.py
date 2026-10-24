@@ -31,14 +31,15 @@ class InteractionSettings:
 
     # Features. Speed is averaged over this much time, so it doesn't grow with FPS from box jitter.
     speed_lookback_ms: int = 200
-    # A pair missing from candidates for up to this long (a detector miss, a hand in the way) keeps its dwell and
-    # window. Longer, and it starts over.
+    # A pair missing from candidates for up to this long (a detector miss, a hand in the way) counts as still there:
+    # its overlap and dwell go on through the gap.
     pair_gap_ms: int = 300
-    # A tool or hand in the wash zone (its self pair) keeps its dwell and its open wash through a loss this long: a
-    # hand over the knife, or its box center jittering across the sink's edge. Vision keeps the entity's ID through a
-    # loss of up to its track_lost_ms (1000), and one rinse split in two would clean twice. Time unseen for longer
-    # than pair_gap_ms is bridged but not counted as rinsing.
-    wash_gap_ms: int = 1000
+    # Vision keeps an entity's ID through a loss of up to its track_lost_ms (1000). A pair keeps its window, overlap
+    # history and dwell through a loss this long while one of its entities is out of view (a pair seen apart for
+    # longer than pair_gap_ms starts over), and a tool or hand in the wash zone (its self pair) keeps its open wash: a
+    # grab confirmed after a hand was lost still shows it began before, and one rinse split in two would clean twice.
+    # Time unseen for longer than pair_gap_ms is bridged but counts as neither overlap, dwell nor rinsing.
+    track_gap_ms: int = 1000
 
     # Pair windows and clips (AGENTS.md, Open questions: clip geometry: 16 steps over about 1 s, 128 x 128).
     window_ms: int = 1000

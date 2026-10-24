@@ -205,8 +205,8 @@ def test_a_wash_that_comes_due_while_a_touch_is_being_confirmed_never_erases_it(
 @pytest.mark.safety
 def test_a_wash_never_comes_due_while_a_hand_the_detector_then_loses_is_on_the_knife():
     """At 15 FPS a clean hand is on a soaking peanut knife at 3800 and 3867, 70 to 130 ms before its wash comes due,
-    then the detector misses the hand for 333 ms, longer than pair_gap_ms, so the pair's window starts over and the
-    touch is confirmed only at about 4333. Anything overlapping the knife restarts its wash dwell, so no wash comes due
+    then the detector misses the hand for 333 ms, longer than pair_gap_ms, so the loss doesn't count as overlap and the
+    touch is confirmed only at about 4267. Anything overlapping the knife restarts its wash dwell, so no wash comes due
     under the hand, and the hand, then the plate, keep the peanut."""
     end = 9000
     grab = 3933 - 130
@@ -305,6 +305,68 @@ def test_a_spoon_lifted_as_it_is_grabbed_then_unseen_still_carries_the_hand_onto
     frames = render(
         [still("bin-1", "bin", BIN_AT, 3000), still("plate-t1", "plate", PLATE_AT, 3000), spoon, hand], 3000, fps
     )
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    assert not any(event["a_id"] == HAND and event["b_id"] == "plate-t1" for event in events)  # never touched it
+    assert peanut_after(events, "plate-t1") >= ALLERGY_FLAG
+
+
+def grabbed_spoon_frames(lift: int, gone: tuple, unseen: str, fps: int) -> list[dict]:
+    """A hand that touched the peanut bin comes down on the handle of a spoon resting on a clean plate's rim at 1.4 s
+    and lifts it off at lift, the spoon (or the hand) unseen during the spans in gone. The hand never touches the
+    plate."""
+    end = 3500
+    spoon = Track(
+        "tool-spoon-1",
+        "tool",
+        ((0, (0.58, 0.5)), (lift, (0.58, 0.5)), (lift + 300, (0.8, 0.5)), (end, (0.8, 0.5))),
+        unseen=gone if unseen == "tool-spoon-1" else (),
+    )
+    hand = Track(
+        HAND,
+        "hand",
+        (
+            (0, BIN_AT),
+            (600, BIN_AT),
+            (1000, (0.62, 0.2)),
+            (1400, (0.62, 0.5)),
+            (lift, (0.62, 0.5)),
+            (lift + 300, (0.84, 0.5)),
+            (end, (0.84, 0.5)),
+        ),
+        unseen=gone if unseen == HAND else (),
+    )
+    return render(
+        [still("bin-1", "bin", BIN_AT, end), still("plate-t1", "plate", PLATE_AT, end), spoon, hand], end, fps
+    )
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [15, 30, 60])
+@pytest.mark.parametrize("unseen", ["tool-spoon-1", HAND])
+@pytest.mark.parametrize("dropout_ms", [400, 900])
+def test_a_grab_confirmed_after_a_long_dropout_still_carries_the_hand_onto_the_plate(dropout_ms, unseen, fps):
+    """A dirty hand grabs a spoon resting on a plate and lifts it at once; then the spoon (or the hand) is unseen for
+    dropout_ms, longer than pair_gap_ms but within vision's track_lost_ms, so the grab is confirmed only after the
+    dropout, with the spoon long off the plate. The pair keeps its window through the loss, so the grab still shows
+    it began while the spoon was on the plate: the plate gets the peanut."""
+    frames = grabbed_spoon_frames(1400, ((1450, 1450 + dropout_ms),), unseen, fps)
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    assert not any(event["a_id"] == HAND and event["b_id"] == "plate-t1" for event in events)  # never touched it
+    assert peanut_after(events, "plate-t1") >= ALLERGY_FLAG
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [15, 30, 60])
+@pytest.mark.parametrize("unseen", ["tool-spoon-1", HAND])
+def test_a_spoon_that_leaves_the_plate_during_a_long_dropout_still_carries_the_hand_onto_it(unseen, fps):
+    """A dirty hand grabs a spoon resting on a plate; 50 ms later the hand (or the spoon) is unseen for 400 ms, and
+    the spoon is lifted off the plate during that time. The grab is confirmed after the dropout, but it began while
+    the spoon was still on the plate: the plate gets the peanut."""
+    frames = grabbed_spoon_frames(1650, ((1450, 1850),), unseen, fps)
 
     events = replay(frames, ZONES, SETTINGS)
 
