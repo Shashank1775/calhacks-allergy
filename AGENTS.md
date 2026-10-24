@@ -29,7 +29,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step, 
 | **ConvLSTM** | A learned classifier over clips of two boxes plus a change mask: it learns whether objects touched and material moved, not what they are. Adopted only if it beats zone rules | [`kitchen/lstm/`](kitchen/lstm/) | **partner** |
 | **Graph** | Provenance graph: noisy-OR propagation, wash resets, time-forward paths, exact reachability, live entity risk | [`kitchen/graph/`](kitchen/graph/) | **partner** |
 | **Database** | SpacetimeDB module (tables, reducers) and the real `StateClient` | [`database/`](database/) | **partner** |
-| **Verdict** | When a plate reaches the pass: the graph's exact reachability, then the verdict policy (plain code, fail closed); late changes recheck | [`kitchen/verdict/`](kitchen/verdict/) | team `verdict` |
+| **Verdict** | When a plate reaches the pass: the graph's exact reachability and Laya's final plate check (stricter only), then the verdict policy (plain code, fail closed); late changes recheck | [`kitchen/verdict/`](kitchen/verdict/) | team `verdict` |
 | **Gate and screens** | Pass gate (servo, red/green light, buzzer), Cartesia Sonic voice ("Hold seven"), and the tablet and expo screens with camera overlays | [`kitchen/gate/`](kitchen/gate/), [`web/`](web/) | team `outputs` |
 | **Simulator** | One simulated world, two outputs: scenarios for graph and verdict tests, and **rendered training clips** for the ConvLSTM (abstract shapes, boxes, change masks, labels from world truth) | [`kitchen/sim/`](kitchen/sim/) | team `sim` |
 | **Shared** | Models generated from contracts, interfaces, clock, config, the one change-mask function and clip builder, fakes (including fakes for partner parts), contract tests | [`kitchen/shared/`](kitchen/shared/) | team `platform` |
@@ -54,7 +54,7 @@ sim world ─▶ scenarios ─▶ graph and verdict tests        sim world ─�
 These nine rules override everything. Tests guarding them carry the `safety` marker. Everywhere else, rules are referred to by their bold name.
 
 1. **Fail closed.** A missing input, an error, a timeout, a stale track or an unknown entity history produces **HOLD**, never PASS.
-2. **Plain-code verdict.** `hold = forbidden_allergen_reachable or confidence < ticket.pass_threshold or any_error`, computed from the partner graph's reachability. Learned models (Laya, the ConvLSTM) only produce its inputs: a low-confidence input becomes a one-tap question or a HOLD, never a PASS.
+2. **Plain-code verdict.** `hold = forbidden_allergen_flagged or confidence < ticket.pass_threshold or any_error`, where a forbidden allergen is flagged when its probability at the plate is at least `1 − pass_threshold`, computed from the partner graph's reachability. Learned models (Laya, the ConvLSTM) only produce its inputs: a low-confidence input becomes a one-tap question or a HOLD, never a PASS. Laya's final plate check is **stricter only**: it can add a hold reason (`laya_flagged`) and its failure holds (`laya_unavailable`), but it can never remove a hold reason or cause a PASS.
 3. **No unanswered questions.** A ticket whose parse has a field below `question_threshold` can't be sent until a person answers it.
 4. **Allergens, not contacts.** Tickets store forbidden allergens, never forbidden contacts. The graph decides which contacts matter.
 5. **Time runs forward.** A contamination path is valid only if its edges are in increasing time order.
@@ -236,7 +236,7 @@ There's always a working demo on `main` after the vertical slice. Each later mil
 | **M0 Foundations** | Everyone builds against fakes | `kitchen` project and CI; generated models; interfaces; all fakes, including the partner-part fakes and their contract tests; each step has a skeleton with a passing test; vision replays a video locally into frame JSONL plus change masks; the shared change-mask function and clip builder; sim renders a first labeled clip set and generates at least 20 valid scenarios |
 | **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End to end on fakes: typed note → `FakeLayaParser` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `FakeGate`, `FakeSpeaker`. All golden scenarios pass. `safety` tests for fail closed, plain-code verdict and late changes. The tablet can't send with open questions. Hailo deploy bundle ready (no device needed). A sim clip dataset with hard negatives and leak-free splits for the partner. Integration with the partner's parts as they land (`needs-partner`) |
 | **M2 Live on Pi** | The camera drives it | Connect the Hailo and upload the bundle; the owner runs the parity check; det + pose + ByteTrack at 30 FPS or more (`hardware`). Calibration and plate binding. Live zone-rule edges. Gate hardware with `fault` on a stale feed (`hardware`). Overlays. A recorded live session replays deterministically |
-| **M3 Models** | Learned parts, gated by evaluation | Fine-tuned Laya parses the eval set, with misses becoming questions. The partner's ConvLSTM vs zone rules, decided by the partner's benchmark. Cartesia Ink and Sonic live |
+| **M3 Models** | Learned parts, gated by evaluation | Fine-tuned Laya parses the eval set, with misses becoming questions; the plate-check Laya model flags exactly the expected allergens in the golden scenarios. The partner's ConvLSTM vs zone rules, decided by the partner's benchmark. Cartesia Ink and Sonic live |
 | **M4 Demo Hardening** | It survives a live demo | Live late-change recheck. Failure drills (kill any component → HOLD or `fault`, never PASS). Demo script rehearsed |
 
 ## 11. Open questions
@@ -249,7 +249,7 @@ Each has a default we run with until whoever owns it decides otherwise.
 | Default severity | `allergy` | owner |
 | Pass thresholds | 0.80 / 0.90 / 0.95 / 0.99 for preference / intolerance / allergy / anaphylactic | settled |
 | Trace sensitivity | Every transfer edge counts; the ticket table doesn't store trace sensitivity yet | verdict, owner approves |
-| What backs Laya | Our fine-tuned copy of `convaiinnovations/laya`, run locally ([decision](docs/decisions/laya-for-notes-and-labels.md)) | settled |
+| What backs Laya | Two fine-tuned copies of `convaiinnovations/laya`, run locally: ticket notes ([decision](docs/decisions/laya-for-notes-and-labels.md)) and the final plate check ([decision](docs/decisions/laya-plate-check.md)) | settled |
 | Database | SpacetimeDB 2.13 running locally (database `allergen-yhz81`, Rust module); Python reaches it with HTTP reducer calls plus polling | partner |
 | Contact and wipe edges | Allergens can move both ways | partner |
 | Unknown history | An unknown-history entity carries every allergen with probability 1 | partner |
@@ -288,7 +288,7 @@ gh pr list --label ready-to-merge                      # the owner's merge queue
 | Interaction / edge | A classified contact between two entities: `transfer.contact`, `transfer.scoop`, `transfer.wipe`, `clean.wash` or `unimportant` |
 | Pass / expo / plating spot | Where plates leave / the expediter's board / where a plate is bound to its ticket |
 | Verdict | PASS or HOLD for one plate against one ticket revision |
-| Laya | Our fine-tuned copy of the open Laya model. It doesn't write text: it answers typed questions with probabilities (calibrated once fine-tuned). As `LayaParser` it reads ticket notes. It plays no part in the verdict |
+| Laya | Our fine-tuned copy of the open Laya model. It doesn't write text: it answers typed questions with probabilities (calibrated once fine-tuned). We fine-tune two copies: `LayaParser` reads ticket notes, and `LayaPlateCheck` makes the final plate check from the graph's plate subgraph, where it can only add holds |
 | Zone rules / ConvLSTM | Hand-written classifier, always on / learned classifier (partner) over clips, adopted only if it wins |
 | Change mask | Per-frame single channel, bright where pixels changed since the last frame (brighter = more movement). One shared function for live and sim |
 | Clip | One candidate pair over time: box A mask, box B mask, change mask, plus elapsed time per step. The ConvLSTM's only input |

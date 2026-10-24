@@ -7,8 +7,9 @@ When a plate reaches the pass, or its ticket is amended, decide PASS or HOLD in 
 ## What happens here
 
 - A bound plate enters the `pass` zone, or its ticket gets a new revision. The service wakes up.
-- It asks the partner's graph for exact reachability (`reach`) and the plate's unknown-history ancestors (`unknown_ancestors`).
-- `decide()` combines that with the ticket: **HOLD** if a forbidden allergen is flagged, if an unknown ancestor exists, if clean-confidence is below the pass threshold, or if anything failed.
+- It asks the partner's graph for exact reachability (`reach`), the plate's unknown-history ancestors (`unknown_ancestors`) and the plate's subgraph (`subgraph`).
+- **Laya's final plate check** (`laya_check.py`) reads that subgraph and gives P(reached the plate) for each forbidden allergen. Each one at P ≥ 1 − `pass_threshold` adds a `laya_flagged` reason; if Laya can't answer, `laya_unavailable`. Laya can only add holds, never remove one.
+- `decide()` combines that with the ticket: **HOLD** if a forbidden allergen is flagged (by the graph's numbers or by Laya), if an unknown ancestor exists, if clean-confidence is below the pass threshold, or if anything failed.
 - The verdict and its chain are written in one call (`record_verdict`), so the gate, voice and expo board can react.
 
 **Clean-confidence** is how sure we are the plate carries none of the ticket's forbidden allergens:
@@ -28,6 +29,8 @@ The sum is the safe bound however the allergens depend on each other (one knife 
 |---|---|
 | `policy.py` | `decide()`, `clean_confidence()` and `VerdictSettings` (thresholds, staleness window, timeouts). Pure |
 | `service.py` | Watches `StateClient`, triggers on plate-at-pass and amendments, records verdicts. Also `FakeVerdictFeed`, which outputs builds against |
+| `laya_check.py` | Laya's final plate check: `LocalLayaCheck` (the fine-tuned plate model), `FakeLayaCheck` (exact noisy-OR) and `laya_hold_reasons()` |
+| `training/` | `plate_data.py` (random kitchens, their plate subgraphs and the exact answers; the golden scenarios as rows) and `eval_plate.py`. Training uses `kitchen/orders/training/train_laya.py` on pina1 |
 
 ## In and out
 
@@ -37,6 +40,8 @@ The sum is the safe bound however the allergens depend on each other (one knife 
 | In | Plate binding and plate zone (`pass` triggers a verdict) | `plate_binding`, `entity` | vision and the partner entity store, via `StateClient` |
 | In | Exact reachability with chains | `allergen_reach` via `ProvenanceGraph.reach` | partner graph |
 | In | Unknown-history ancestors | `ProvenanceGraph.unknown_ancestors` | partner graph |
+| In | The plate's subgraph | [`plate_subgraph`](../../contracts/schemas/plate_subgraph.schema.json) via `ProvenanceGraph.subgraph` | partner graph |
+| Uses | Laya's plate check | [`LayaPlateCheck`](../../contracts/apis.md#layaplatecheck) | the fine-tuned plate model ([decision](../../docs/decisions/laya-plate-check.md)) |
 | Out | Verdict and chain (`verdict` table) | `verdict`, `chain_step` | outputs (gate, voice, expo board) |
 
 ## Safety rules
@@ -46,7 +51,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
 | Rule | How we could break it | Test |
 |---|---|---|
 | Fail closed | An exception, timeout, `StateUnavailable`, `GraphUnavailable`, missing ticket or binding, or a stale plate reaches PASS | Fault injection at every `StateClient` and `ProvenanceGraph` call: the result is always HOLD with `error`, `missing_input` or `stale_track`, and confidence 0 |
-| Plain-code verdict | Anything but `decide()` makes the call, or confidence rises with more evidence | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence |
+| Plain-code verdict | Anything but `decide()` makes the call, confidence rises with more evidence, or Laya removes a hold | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence; a property test checks that no Laya answer removes a reason, and that a Laya failure holds |
 | Allergens, not contacts | The policy reads anything but the ticket's forbidden allergens | The policy reads only `ticket.forbidden` and the reach probabilities |
 | Known-clean source | An unknown ancestor is ignored | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` and `clean-plate-from-stack` |
 | Late changes recheck everything | An amendment reuses the previous verdict | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy` |
@@ -65,3 +70,4 @@ Time running forward belongs to the partner's graph; we check it end to end by r
 - The default pass thresholds are placeholders the owner can change. They live in `VerdictSettings` and are recorded on every verdict.
 - `FakeProvenanceGraph` tests the policy only; real-graph runs carry `needs-partner`.
 - A false wash erases real contamination. The partner's graph caps how much a wash can clean.
+- The plate model reads at most 20 edges (Laya's 512-token limit); a longer subgraph raises `LayaCheckUnavailable` and holds. It was trained on generated kitchens with full transfer (k = 1), so it leans strict.

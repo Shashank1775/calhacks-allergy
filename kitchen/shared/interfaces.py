@@ -3,12 +3,13 @@
 Owner: platform (agents)
 Step:  shared
 Reads: contracts/apis.md, kitchen.shared.models
-Emits: StateClient, EntityStore, ProvenanceGraph, InteractionClassifier, LayaParser, Transcriber,
-       Speaker, GateDriver, Clock; StateUnavailable, GraphUnavailable, LayaParserUnavailable
+Emits: StateClient, EntityStore, ProvenanceGraph, InteractionClassifier, LayaParser, LayaPlateCheck,
+       Transcriber, Speaker, GateDriver, Clock; StateUnavailable, GraphUnavailable, LayaParserUnavailable,
+       LayaCheckUnavailable
 Rules: signatures match contracts/apis.md exactly (a test checks method names); no implementations here;
        a missing method is a contracts PR, not a local addition
 
-Built so far: the three exceptions. The Protocols are not written yet.
+Built so far: the four exceptions. The Protocols are not written yet.
 """
 
 
@@ -25,3 +26,7 @@ class GraphUnavailable(Exception):  # noqa: N818
 
 class LayaParserUnavailable(Exception):  # noqa: N818
     """Laya couldn't parse a note (an empty note too). The Orders API answers 503 laya_unavailable; nothing guesses."""
+
+
+class LayaCheckUnavailable(Exception):  # noqa: N818
+    """Laya's final plate check couldn't answer. The verdict holds the plate (safety rule: fail closed)."""

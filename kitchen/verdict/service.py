@@ -3,9 +3,9 @@ Also FakeVerdictFeed, which replays scenario verdicts on a Clock for outputs to 
 
 Owner: verdict (agents)
 Step:  verdict
-Reads: StateClient (ticket, entity zone, plate_binding); ProvenanceGraph; Clock
+Reads: StateClient (ticket, entity zone, plate_binding); ProvenanceGraph (incl. subgraph); LayaPlateCheck; Clock
 Emits: verdict via StateClient.record_verdict
-Rules: fail closed: StateUnavailable, GraphUnavailable or a stale plate holds;
+Rules: fail closed: StateUnavailable, GraphUnavailable, LayaCheckUnavailable or a stale plate holds;
        late changes recheck everything: amendments recompute from full history
 
 Not built yet.

@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-10-24
 - **Decided by:** owner, director
-- **Update (2026-10-24):** the owner hard-coded the demo bins (`kitchen/orders/bins.py`), so Laya now reads ticket notes only. The bin-label parts below are history.
+- **Update (2026-10-24):** the owner hard-coded the demo bins (`kitchen/orders/bins.py`), so Laya now reads ticket notes only. The bin-label parts below are history. A second, separate Laya model makes the final plate check ([decision](laya-plate-check.md)).
 
 ## Context
 

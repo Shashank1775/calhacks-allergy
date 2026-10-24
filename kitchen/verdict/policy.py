@@ -3,9 +3,11 @@ Also clean_confidence() and VerdictSettings, the one home for thresholds, timeou
 
 Owner: verdict (agents)
 Step:  verdict
-Reads: ticket revision; allergen_reach; unknown ancestors; input health; VerdictSettings
+Reads: ticket revision; allergen_reach; unknown ancestors; Laya's hold reasons (laya_check.laya_hold_reasons);
+       input health; VerdictSettings
 Emits: verdict (decision, confidence, reasons, flagged, chain, versions)
-Rules: fail closed: any error or doubt holds and sets confidence to 0; plain-code verdict, no model in the decision;
+Rules: fail closed: any error or doubt holds and sets confidence to 0; plain-code verdict: Laya's reasons are only
+       appended, never used to drop one;
        allergen units only (ticket.forbidden); an unknown ancestor holds
 
 Not built yet.
