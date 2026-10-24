@@ -29,7 +29,7 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 - **Vision health** (`vision_health.ts`): polls `GET /health` when `WEB_VISION_URL` is set, and calls it stale until `last_frame_t_ms` advances, as the gate does.
 - **Spoken holds** (`voice.ts`): the browser says "Hold seven, peanut" once per hold, with the gate's own number and allergen words. The expo screen's "turn on voice" button is needed because browsers only speak after a click.
 - **Tablet: changing a ticket** (`tablet/amend_ticket.tsx`): pick a sent ticket, type the change, answer Laya's questions, send. It uses the same send gate, plus a message for `409 ticket_changed`.
-- **Live camera** (`expo/camera_panel.tsx`): vision's `GET /stream.mjpg`, with each entity's latest box from `entity_state` colored by risk (unknown history and strong allergens red, weak amber, clean green). A broken stream says "camera offline" and changes no verdict.
+- **Live camera** (`expo/camera_panel.tsx`): vision's `GET /stream.mjpg`, with each entity's latest box from `entity_state` colored by risk (unknown history and strong allergens red, weak amber, clean green). Only entities tracked now are listed and drawn: the newest `entity_state` time is "now", and an entity last seen more than 1 s before it (vision's `track_lost_ms`) has lost its track, so its last box is dropped. A broken stream says "camera offline" and changes no verdict.
 - **Home.** Video picker with local preview and a REPLAY marker; live camera card stamped 86'd.
 - **Tests.** 114 Vitest tests; the ones guarding a safety rule are named `safety: …`.
 
