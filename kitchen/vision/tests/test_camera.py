@@ -124,6 +124,31 @@ def test_webcam_t_ms_strictly_increasing_when_clock_stalls(monkeypatch):
     assert_strictly_increasing([frame.t_ms for frame in first_frames + second_frames])
 
 
+class SteppingCapture(FakeCapture):
+    """A FakeCapture whose every read() moves the clock on first, by the next step, like time passing between frames."""
+
+    def __init__(self, clock, steps_ms):
+        super().__init__(0, count=len(steps_ms))
+        self.clock = clock
+        self.steps_ms = list(steps_ms)
+
+    def read(self):
+        if self.steps_ms:
+            self.clock.advance(self.steps_ms.pop(0))
+        return super().read()
+
+
+@pytest.mark.safety
+def test_webcam_stamps_each_frame_with_the_clock_as_it_arrives(monkeypatch):
+    clock = FakeClock(start_ms=100)
+    monkeypatch.setattr(camera.cv2, "VideoCapture", lambda index: SteppingCapture(clock, [33, 34, 0, 5]))
+
+    frames = list(WebcamSource(0, clock))
+
+    # Clock readings 133, 167, 167, 172: each frame keeps its own reading, only the stalled one moves to last + 1.
+    assert [frame.t_ms for frame in frames] == [133, 167, 168, 172]
+
+
 def test_webcam_that_cant_open_raises(monkeypatch):
     monkeypatch.setattr(camera.cv2, "VideoCapture", lambda index: FakeCapture(index, opened=False))
     with pytest.raises(OSError, match="webcam 3"):

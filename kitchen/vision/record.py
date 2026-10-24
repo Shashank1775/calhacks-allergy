@@ -6,13 +6,15 @@ Reads: FrameOutputs from the frame loop (run.py); a recording directory to repla
 Emits: frames.jsonl + change.npz + manifest.json in a recording directory (under data/, which git ignores);
        read_recording and ReplaySource, which hand the FrameOutputs back
 Rules: time runs forward: a recording's t_ms is strictly increasing and replay keeps the recorded t_ms; every line
-       validates against observation_frame; a recording whose frames don't match its manifest is refused, not replayed
+       validates against observation_frame; a recording whose frames don't match its manifest is refused, not replayed;
+       an existing recording is never overwritten; masks stream to and from disk, so a long shift fits in memory
 
 A recording directory (record it under data/recordings/<name>/; large artifacts never go in git):
 - frames.jsonl   one ObservationFrame per line, canonical JSON (sorted keys, compact separators), so the same frames
                  always give the same bytes
 - change.npz     key "change": uint8 [N, S, S], each frame's change mask times 255, rounded (S is the clip size).
-                 Divide by 255 before the clip builder, which rejects integer masks (contracts/apis.md)
+                 Divide by 255 before the clip builder, which rejects integer masks (contracts/apis.md). It is a plain
+                 npz (np.load reads it), written and read one mask at a time
 - manifest.json  what the recording is, with these keys written by the Recorder:
                      camera_id          the frames' camera_id
                      width, height      the original camera frame's size (the clip builder's source_size)
@@ -21,14 +23,17 @@ A recording directory (record it under data/recordings/<name>/; large artifacts 
                      first_t_ms         t_ms of the first frame (null if empty)
                      last_t_ms          t_ms of the last frame (null if empty)
                      frames_sha256      sha256 of frames.jsonl, checked on replay
-                 and every key the caller passed, which must include change_mask_params ({gain, blur_sigma_px,
-                 decay}, as the clip builder records them) and should include source, zones_sha256, shift_start and
-                 model versions
+                 and every key the caller passed, which must be plain JSON (checked when recording starts) and must
+                 include change_mask_params ({gain, blur_sigma_px, decay}, as the clip builder records them) and
+                 should include source, zones_sha256, shift_start and model versions
+                 manifest.json is written last, so a directory that has one holds a whole recording
 """
 
 import hashlib
 import json
+import shutil
 import time
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -45,6 +50,12 @@ MANIFEST_FILE = "manifest.json"
 
 # Raw uint8 masks stream here while recording, so a long shift never holds every mask in memory.
 PARTIAL_CHANGE_FILE = "change.u8.partial"
+
+# The array inside change.npz, as np.savez names the key "change".
+CHANGE_ENTRY = "change.npy"
+
+# Bytes copied at a time when packing the masks into change.npz.
+COPY_CHUNK_BYTES = 64 * 1024
 
 # Keys the Recorder fills in itself; a caller passing one would be silently overwritten, so that's refused.
 RECORDER_KEYS = {"camera_id", "width", "height", "clip_size", "frame_count", "first_t_ms", "last_t_ms", "frames_sha256"}
@@ -90,14 +101,24 @@ class Recorder:
             raise ValueError(f"the Recorder writes these manifest keys itself: {sorted(reserved)}")
         if "change_mask_params" not in manifest:
             raise ValueError("the manifest needs change_mask_params (see change_mask_params(settings))")
+        # A value JSON can't hold (a Path, a numpy number, NaN) would only fail at close(), after a whole session was
+        # recorded, and leave a recording with no manifest that can't be replayed. So it's refused before any frame.
+        try:
+            self.caller_manifest = json.loads(json.dumps(manifest, allow_nan=False))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"the manifest must be plain JSON: {error}") from error
 
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self.caller_manifest = dict(manifest)
+        # Opening an earlier recording's files for writing would wipe it, so a directory that holds one is refused.
+        for name in (FRAMES_FILE, CHANGE_FILE, MANIFEST_FILE, PARTIAL_CHANGE_FILE):
+            if (self.out_dir / name).exists():
+                raise FileExistsError(f"{self.out_dir} already holds a recording ({name}); record into a new directory")
 
-        self.frames_file = open(self.out_dir / FRAMES_FILE, "wb")
-        self.masks_file = open(self.out_dir / PARTIAL_CHANGE_FILE, "wb")
+        self.frames_file = open(self.out_dir / FRAMES_FILE, "xb")
+        self.masks_file = open(self.out_dir / PARTIAL_CHANGE_FILE, "xb")
         self.frames_hash = hashlib.sha256()
+        self.closed = False
 
         # Set from the first frame; every later frame must match it.
         self.camera_id = None
@@ -133,8 +154,9 @@ class Recorder:
 
         if self.frame_count == 0:
             self.camera_id = observation["camera_id"]
-            self.width = output.width
-            self.height = output.height
+            # int() so a numpy size from a frame's shape still writes to manifest.json.
+            self.width = int(output.width)
+            self.height = int(output.height)
             self.clip_size = mask_shape[0]
             return
 
@@ -149,17 +171,19 @@ class Recorder:
             raise ValueError(f"change mask size changed to {mask_shape[0]} from {self.clip_size}")
 
     def close(self) -> None:
-        """Finish the recording: pack the masks into change.npz and write manifest.json. Safe to call twice."""
-        if self.frames_file.closed:
+        """Finish the recording: pack the masks into change.npz, then write manifest.json, then drop the partial file.
+
+        Safe to call twice. If a step fails (a full disk, say) nothing is lost: the partial file stays until the
+        manifest is written, and calling close() again retries.
+        """
+        if self.closed:
             return
         self.frames_file.close()
         self.masks_file.close()
 
         partial_path = self.out_dir / PARTIAL_CHANGE_FILE
         side = self.clip_size or 0
-        masks = np.fromfile(partial_path, dtype=np.uint8).reshape(self.frame_count, side, side)
-        np.savez_compressed(self.out_dir / CHANGE_FILE, change=masks)
-        partial_path.unlink()
+        pack_masks(partial_path, self.out_dir / CHANGE_FILE, (self.frame_count, side, side))
 
         manifest = {
             **self.caller_manifest,
@@ -173,12 +197,44 @@ class Recorder:
             "frames_sha256": self.frames_hash.hexdigest(),
         }
         (self.out_dir / MANIFEST_FILE).write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+        partial_path.unlink()
+        self.closed = True
 
     def __enter__(self) -> "Recorder":
         return self
 
     def __exit__(self, *exc_info) -> None:
         self.close()
+
+
+def pack_masks(partial_path: Path, change_path: Path, shape: tuple[int, int, int]) -> None:
+    """Write the raw uint8 masks in `partial_path` as change.npz, a chunk at a time, so the masks never all sit in memory.
+
+    The result is what np.savez_compressed would write: a zip with one deflated "change.npy" entry.
+    """
+    header = {"descr": np.lib.format.dtype_to_descr(np.dtype(np.uint8)), "fortran_order": False, "shape": shape}
+    with zipfile.ZipFile(change_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        # force_zip64 because a long shift's masks can pass the 2 GiB a plain zip entry holds.
+        with archive.open(CHANGE_ENTRY, "w", force_zip64=True) as entry, open(partial_path, "rb") as partial_file:
+            np.lib.format.write_array_header_1_0(entry, header)
+            shutil.copyfileobj(partial_file, entry, COPY_CHUNK_BYTES)
+
+
+def iter_masks(change_path: Path, frame_count: int, side: int) -> Iterator[np.ndarray]:
+    """Yield change.npz's uint8 masks one at a time, refusing a file whose array isn't [frame_count, side, side]."""
+    with zipfile.ZipFile(change_path) as archive, archive.open(CHANGE_ENTRY) as entry:
+        if np.lib.format.read_magic(entry) != (1, 0):
+            raise ValueError(f"{change_path} wasn't written by the Recorder (npy format version)")
+        shape, fortran_order, dtype = np.lib.format.read_array_header_1_0(entry)
+        if dtype != np.uint8 or fortran_order or shape != (frame_count, side, side):
+            raise ValueError(
+                f"{change_path}: masks are {dtype} {shape}, manifest says uint8 {(frame_count, side, side)}"
+            )
+        for _ in range(frame_count):
+            stored = np.frombuffer(entry.read(side * side), dtype=np.uint8)
+            if stored.size != side * side:
+                raise ValueError(f"{change_path} ends before its {frame_count} masks")
+            yield stored.reshape(side, side)
 
 
 def read_manifest(recording_dir: str | Path) -> dict:
@@ -203,12 +259,10 @@ def read_recording(recording_dir: str | Path) -> Iterator[FrameOutput]:
         raise ValueError(f"{FRAMES_FILE} in {recording_dir} doesn't match the manifest's frames_sha256")
 
     lines = frames_bytes.decode().splitlines()
-    with np.load(recording_dir / CHANGE_FILE) as change_file:
-        masks = change_file["change"]
-    if not len(lines) == len(masks) == manifest["frame_count"]:
-        raise ValueError(
-            f"{recording_dir}: {len(lines)} frames, {len(masks)} masks, manifest says {manifest['frame_count']}"
-        )
+    if len(lines) != manifest["frame_count"]:
+        raise ValueError(f"{recording_dir}: {len(lines)} frames, manifest says {manifest['frame_count']}")
+    # The mask count and size are checked against the manifest before the first frame is yielded.
+    masks = iter_masks(recording_dir / CHANGE_FILE, manifest["frame_count"], manifest["clip_size"] or 0)
 
     last_t_ms = -1
     for line, stored_mask in zip(lines, masks, strict=True):

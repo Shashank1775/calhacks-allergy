@@ -11,6 +11,8 @@ Rules: time runs forward (strictly increasing t_ms, kept on replay); a recording
 import hashlib
 import json
 import time
+import tracemalloc
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -167,6 +169,94 @@ def test_manifest_needs_change_mask_params_and_refuses_recorder_keys(tmp_path):
         Recorder(tmp_path, {"source": "webcam:0"})
     with pytest.raises(ValueError, match="frame_count"):
         Recorder(tmp_path, MANIFEST | {"frame_count": 99})
+
+
+def test_manifest_that_isnt_json_is_refused_before_recording(tmp_path):
+    # A Path or NaN would only fail at close(), after a whole session was recorded, so it's refused at the start.
+    with pytest.raises(ValueError, match="JSON"):
+        Recorder(tmp_path, MANIFEST | {"source": Path("data/prep.mp4")})
+    with pytest.raises(ValueError, match="JSON"):
+        Recorder(tmp_path, MANIFEST | {"threshold": float("nan")})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_failed_close_can_be_retried(tmp_path, monkeypatch):
+    recorder = Recorder(tmp_path, MANIFEST)
+    for output in sample_outputs(3):
+        recorder.write(output)
+
+    def full_disk(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", full_disk)
+    with pytest.raises(OSError, match="disk full"):
+        recorder.close()
+    monkeypatch.undo()
+
+    recorder.close()
+    assert read_manifest(tmp_path)["frame_count"] == 3
+    assert len(list(ReplaySource(tmp_path))) == 3
+
+
+@pytest.mark.parametrize("existing", ["frames.jsonl", "change.npz", "manifest.json", "change.u8.partial"])
+def test_recorder_refuses_a_directory_that_already_holds_a_recording(tmp_path, existing):
+    (tmp_path / existing).write_bytes(b"earlier")
+
+    with pytest.raises(FileExistsError, match=existing):
+        Recorder(tmp_path, MANIFEST)
+    assert (tmp_path / existing).read_bytes() == b"earlier"
+
+
+def test_recording_again_into_the_same_directory_leaves_the_first_intact(tmp_path):
+    record(sample_outputs(3), tmp_path)
+    frames_before = (tmp_path / "frames.jsonl").read_bytes()
+
+    with pytest.raises(FileExistsError):
+        Recorder(tmp_path, MANIFEST)
+
+    assert (tmp_path / "frames.jsonl").read_bytes() == frames_before
+    assert len(list(ReplaySource(tmp_path))) == 3
+
+
+def small_output(frame_id, side):
+    """A FrameOutput with no detections and a constant mask, cheap enough to write by the hundred."""
+    observation = {"frame_id": frame_id, "t_ms": frame_id, "camera_id": "cam0", "fps_estimate": 30.0, "detections": []}
+    mask = np.full((side, side), (frame_id % 256) / 255, dtype=np.float32)
+    return FrameOutput(observation=observation, change_mask=mask, width=640, height=480)
+
+
+def test_close_and_replay_never_hold_every_mask_in_memory(tmp_path):
+    side = 128
+    frame_count = 300
+    masks_bytes = frame_count * side * side  # about 4.9 MB
+    recorder = Recorder(tmp_path, MANIFEST)
+    for frame_id in range(frame_count):
+        recorder.write(small_output(frame_id, side))
+
+    tracemalloc.start()
+    recorder.close()
+    _, close_peak = tracemalloc.get_traced_memory()
+    tracemalloc.reset_peak()
+    replayed = 0
+    for output in read_recording(tmp_path):
+        assert output.change_mask[0, 0] == pytest.approx((replayed % 256) / 255)
+        replayed += 1
+    _, replay_peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert replayed == frame_count
+    assert close_peak < masks_bytes / 4
+    assert replay_peak < masks_bytes / 4
+    # The streamed change.npz is still a plain npz that numpy loads.
+    assert stored_masks(tmp_path).shape == (frame_count, side, side)
+
+
+def test_replay_refuses_masks_that_dont_match_the_manifest(tmp_path):
+    record(sample_outputs(2), tmp_path)
+    np.savez_compressed(tmp_path / "change.npz", change=np.zeros((3, SIZE, SIZE), dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="masks"):
+        list(read_recording(tmp_path))
 
 
 def test_empty_recording_replays_nothing(tmp_path):
