@@ -1,6 +1,6 @@
 # 0013: Cartesia Ink batch transcription and an Apify crawler for menu import
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-23
 - **Deciders:** director, mgr-orders (researched by worker/orders/orders-04)
 
@@ -64,7 +64,7 @@ Three contracts are fixed and this ADR does not change them:
 
 1. **Use `apify/website-content-crawler`.** Apify maintains it, it is the most-used option by far, it renders JavaScript menus, and it follows sub-menu links (lunch, dinner, drinks) under the given URL [A1], [A2]. The community menu scrapers were rejected: 1–9 users and no ratings each, and the two that state their limits skip PDF menus (MenuMiner also skips JavaScript menus) [A7], [A8], [A9]. RAG Web Browser would also work for a single page, but it fetches only the URL it is given [A6].
 2. **Run it synchronously and cap the run.** Call `run-sync-get-dataset-items` with `timeout=120` and `memory=4096`. One run can then use at most 4 GB × 120 s ≈ 0.13 CU, about $0.03 on the Free plan (*computed* from [A5]). The 120 s cap also stays well under the 300 s sync limit [A3]. Input: the menu URL as the only start URL, `maxCrawlDepth: 1`, `maxCrawlPages: 10`, `crawlerType: playwright:adaptive`, `saveMarkdown: true`, `respectRobotsTxtFile: true`.
-3. **One page becomes one prep-sheet seed.** The `markdown` of every page that has some becomes one seed text for the M4 profiling flow, and `{"items": n}` reports how many seeds were stored. `apis.md` doesn't define what `items` counts. This ADR reads it as seeds, which keeps the response shape. If the Director wants it to count dishes instead, that needs a dish-level extractor and a one-line wording change in `apis.md` (an RFC), not a new shape.
+3. **One page becomes one prep-sheet seed.** The `markdown` of every page that has some becomes one seed text for the M4 profiling flow, and `{"items": n}` reports how many seeds were stored. This is settled: the Director's review of PR #136 confirmed that `items` counts the prep-sheet seeds stored, which matches the `menu_import.py` header ("Emits: prep-sheet text for bin_labels; item count"). The response shape stays the same, and no RFC is needed.
 4. **The token goes in a header.** `APIFY_TOKEN` (already in `.env.example`) is sent as `Authorization: Bearer` [A4], never as a `?token=` query parameter, so it can't leak into request logs.
 5. **Fail clearly and seed nothing.** An HTTP error, a `408` or a run that returns no page text (a PDF or image-only menu, a bot wall) raises `MenuImportFailed`, and `/v1/menu/import` returns an error. There are no partial imports.
 6. **Seeds never confirm anything.** Menu text only enters profiling as `prep_sheet_text` for a bin a person picks, and it still goes through Jev and chef confirmation. Menus leave out ingredients (frying oil, garnish, shared fryers), so a profile built from menu text alone is never written with `confirmed_by_chef: true` (safety rule 1).
@@ -177,9 +177,19 @@ def fetch_menu_pages(menu_url: str, apify_token: str) -> list[dict]:
             timeout=RUN_TIMEOUT_S + 30,  # let Apify end the run before we hang up
         )
         response.raise_for_status()
-        return response.json()
+        pages = response.json()
     except (httpx.HTTPError, ValueError) as error:
         raise MenuImportFailed(str(error)) from error
+
+    # A 2xx reply should be a list of page objects. Any other shape is a failed
+    # import, so import_menu never reads fields from something unexpected.
+    if not isinstance(pages, list):
+        raise MenuImportFailed("crawler reply was not a list of pages")
+
+    if not all(isinstance(page, dict) for page in pages):
+        raise MenuImportFailed("crawler reply had a page that was not an object")
+
+    return pages
 
 
 def import_menu(menu_url: str, apify_token: str) -> list[str]:
@@ -201,7 +211,7 @@ def import_menu(menu_url: str, apify_token: str) -> list[str]:
 ## Consequences
 
 - **Easier:** the M3 Ink task can build the adapter against a fake HTTP transport (`httpx.MockTransport` or similar), with no network in tests (`kitchen/orders/README.md`). The M4 import is one function and one Actor call.
-- **Contracts:** unchanged. `Transcriber`, `/v1/transcribe` and `/v1/menu/import` keep their signatures and shapes. `TranscriberUnavailable` and `MenuImportFailed` stay inside the orders folders. Only the meaning of `items` is open (Decision, menu import, point 3).
+- **Contracts:** unchanged. `Transcriber`, `/v1/transcribe` and `/v1/menu/import` keep their signatures and shapes. `TranscriberUnavailable` and `MenuImportFailed` stay inside the orders folders. `items` counts the prep-sheet seeds stored (Decision, menu import, point 3).
 - **Watch:** no batch latency figure exists yet. Neither does a run time for the crawler, a default retention period for guest audio, or the exact batch field names. Each build task measures or confirms its items with a real key, then updates this ADR.
 - **Tests the build tasks should add:**
   - `safety`: an empty or whitespace transcript raises `TranscriberUnavailable` and `/v1/transcribe` never returns `{"text": ""}`.
@@ -210,7 +220,10 @@ def import_menu(menu_url: str, apify_token: str) -> list[str]:
 - **Questions for the owner** (they block nothing now: Ink goes live in M3, the import in M4):
   1. Create a Cartesia account and put its key in the local `.env` as `CARTESIA_API_KEY`. The Free plan (20K credits a month) covers about 4,000 ten-second notes. `.env.example` shares this key with outputs' Cartesia Sonic voice.
   2. Create an Apify account and put its token in `.env` as `APIFY_TOKEN`. The Free plan's $5 a month covers well over 100 capped imports (*computed*).
-  3. Is it acceptable to send servers' voice notes about guest allergies to Cartesia without Zero Data Retention, which needs an enterprise plan?
+  3. Is it acceptable to send servers' voice notes about guest allergies to Cartesia without Zero Data Retention, which needs an enterprise plan [C13]? How long Cartesia keeps audio by default is **unverified**.
+     - Option A: accept the default retention for the demo. Ink goes live in M3 as planned.
+     - Option B: wait for Zero Data Retention (an enterprise plan) before any audio goes to Cartesia. Servers type every note until then.
+     - **Recommendation: A, for the demo only.** The demo's notes are spoken by the team, not by real guests, and typing stays the fallback. Ask this again before the system takes real guests' notes.
   4. Which restaurant menu URL will the demo use? Checking it early tells us whether it is HTML, JavaScript or PDF.
 
 ## Sources
