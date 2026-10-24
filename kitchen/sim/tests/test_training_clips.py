@@ -65,14 +65,7 @@ def test_transfers_change_the_container_and_hover_does_not():
     """The model can only learn 'material moved' if the food really moves in transfer clips and stays put otherwise."""
     for kind, should_move in (("wipe", True), ("hover", False), ("pass_over", False), ("touch", False)):
         episode = simulate_episode(seed=3, family=0, kind=kind)
-        b_food = [
-            blob for blob in episode.food if np.linalg.norm(blob.position[0] - episode.containers[0].center[0]) < 0.2
-        ]
-        b_center = episode.containers[0].center
-        # Relative to B, so a touch that nudges the whole container doesn't count as food moving.
-        moved = max(
-            np.linalg.norm((blob.position[-1] - b_center[-1]) - (blob.position[0] - b_center[0])) for blob in b_food
-        )
+        moved = food_moved_in_b(episode)  # relative to B, so a nudged container doesn't count
         assert (moved > 1e-3) == should_move, kind
 
 
@@ -85,7 +78,7 @@ def inside_body(container, point, f):
 def food_moved_in_b(episode):
     """How far the food in B moved relative to B over the episode."""
     b = episode.containers[0].center
-    in_b = [blob for blob in episode.food if np.linalg.norm(blob.position[0] - b[0]) < 0.2]
+    in_b = [blob for blob in episode.food if np.linalg.norm(blob.position[0] - b[0]) < 0.2 and not blob.on_actor.all()]
     return max(np.linalg.norm((blob.position[-1] - b[-1]) - (blob.position[0] - b[0])) for blob in in_b)
 
 
@@ -106,17 +99,43 @@ def test_scoops_and_deposits_move_a_visible_portion_inside_b(seed):
 
 
 def test_the_v2_label_fixes_hold_over_many_seeds():
-    """Wipes always smear food; some touches land inside B; a nudge never moves B before A arrives; hover is contact."""
+    """Wipes always smear food; about half of touches land inside B; a nudge never moves B before A arrives."""
     assert all(food_moved_in_b(simulate_episode(seed, 0, "wipe")) > 1e-3 for seed in range(100))
-    touches = [simulate_episode(seed, 0, "touch") for seed in range(40)]
-    tips_inside = [
-        inside_body(t.containers[0], t.actor.tip[len(t.times_ms) // 2], len(t.times_ms) // 2) for t in touches
-    ]
-    assert 0 < sum(tips_inside) < len(touches)
-    for touch in touches:
-        contact_frame = int(np.searchsorted(touch.times_ms, touch.labels["contact_t_ms"]))
-        assert np.allclose(touch.containers[0].center[contact_frame], touch.containers[0].center[0])
+    inside = 0
+    for seed in range(200):
+        touch = simulate_episode(seed, 0, "touch")
+        b = touch.containers[0]
+        f = int(np.searchsorted(touch.times_ms, touch.labels["contact_t_ms"]))
+        inside += np.abs(touch.actor.tip[f] - b.center[f]).max() < 0.6 * b.half_size.max()
+        assert np.allclose(b.center[f], b.center[0])  # the nudge comes after A arrives
+    assert 0.35 < inside / 200 < 0.75
     assert (KINDS["hover"].contact, KINDS["hover"].transferred) == (True, False)
+
+
+def test_food_on_a_and_food_color_say_nothing_by_themselves():
+    """Some non-transfer clips carry food on A the whole time; some deposits are the same color as B's food."""
+    loaded = 0
+    for seed in range(200):
+        episode = simulate_episode(seed, 0, "pass_over")
+        loaded += any(blob.on_actor.all() for blob in episode.food)
+    assert 0.15 < loaded / 200 < 0.45
+
+    same_color = 0
+    for seed in range(100):
+        deposit = simulate_episode(seed, 0, "deposit")
+        dropped = next(blob for blob in deposit.food if blob.on_actor.any())
+        others = [blob.color for blob in deposit.food if blob is not dropped and not blob.on_actor.any()]
+        same_color += any(np.allclose(dropped.color, color) for color in others)
+    assert 0.1 < same_color / 100 < 0.5
+
+
+def test_stirred_food_stays_in_its_container():
+    """Food pushed by someone stirring never leaves B, so it never ends up under A on the counter."""
+    for seed in range(60):
+        episode = simulate_episode(seed, 0, "motion_nearby")
+        b = episode.containers[0]
+        in_b = [blob for blob in episode.food if not blob.on_actor.any() and inside_body(b, blob.position[0], 0)]
+        assert all(inside_body(b, blob.position[f], f) for blob in in_b for f in range(len(episode.times_ms)))
 
 
 def test_splits_use_disjoint_seeds_and_test_uses_unseen_layouts(tmp_path):

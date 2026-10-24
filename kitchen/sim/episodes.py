@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-GENERATOR_VERSION = "2.0.0"
+GENERATOR_VERSION = "2.2.0"
 STEPS = 16  # clip length T: about one second (AGENTS.md, Open questions: clip geometry)
 FRAMES = STEPS + 1  # one extra frame, so the first step has a change mask too
 STEP_MS = 1000 / STEPS
@@ -196,10 +196,11 @@ def fill_with_food(rng: np.random.Generator, container: Container) -> list[Food]
     for _ in range(int(rng.integers(3, 9))):
         offset = rng.uniform(-0.7, 0.7, 2) * container.half_size
         color = distinct_color(rng, [container.body_color])
+        radius = float(rng.uniform(*FOOD_RADIUS))
         blobs.append(
             Food(
-                position=container.center + offset,
-                radius=float(rng.uniform(*FOOD_RADIUS)),
+                position=np.tile(pull_inside(container, container.center[0] + offset, radius, 0), (FRAMES, 1)),
+                radius=radius,
                 stretch=np.ones(FRAMES),
                 angle=np.full(FRAMES, rng.uniform(0, np.pi)),
                 color=color,
@@ -247,7 +248,7 @@ def plan_path(rng: np.random.Generator, kind: str, b: Container, food: list[Food
         path = start + np.outer(u, end - start)
         return path, approach, None
 
-    # Half of all touches land inside B, so where A stops says nothing about the label.
+    # Half of all touches land inside B, so stopping inside B doesn't by itself mean food moved.
     inside_touch = kind == "touch" and rng.random() < 0.5
     if kind in ("scoop", "deposit", "hover") or inside_touch:
         target = center + rng.uniform(-0.5, 0.5, 2) * b.half_size
@@ -265,21 +266,26 @@ def plan_path(rng: np.random.Generator, kind: str, b: Container, food: list[Food
     path = keyframe_path(u, [(0.0, start), (arrive, target), (leave, target), (1.0, end)])
 
     # Every still dwell shares one wiggle band, so how steady A is says nothing about the label.
-    amplitude_by_kind = {"scoop": (0.004, 0.012), "wipe": (0.025, 0.06)}
+    amplitude_by_kind = {"wipe": (0.025, 0.06)}  # a scoop shows by the spoonful and the hole, not by jiggling
     low, high = amplitude_by_kind.get(kind, (0.0, 0.008))
     axis = rng.uniform(0, np.pi)
     path = path + dwell_wiggle(rng, u, arrive, leave, rng.uniform(low, high), axis)
     return path, approach, (arrive, leave)
 
 
-def drag_food(food: list[Food], movers: np.ndarray, frames: range, radius: float, strength: float) -> None:
-    """Food near a moving tip gets pushed along and smeared, frame by frame (a real transfer the camera can see)."""
+def drag_food(
+    container: Container, food: list[Food], movers: np.ndarray, frames: range, radius: float, strength: float
+) -> None:
+    """Food near a moving tip gets pushed along and smeared, frame by frame (a real transfer the camera can see).
+
+    Pushed food stays inside its container, so it never ends up on the counter under someone else's tool.
+    """
     for f in frames:
         step = movers[f] - movers[f - 1]
         for blob in food:
             blob.position[f:] = blob.position[f - 1]
             if np.linalg.norm(blob.position[f] - movers[f]) < radius + blob.radius:
-                blob.position[f:] += step * strength
+                blob.position[f:] = pull_inside(container, blob.position[f] + step * strength, blob.radius, f)
                 blob.stretch[f:] = min(blob.stretch[f - 1] + np.linalg.norm(step) * 25, 3.0)
                 blob.angle[f:] = np.arctan2(step[1], step[0])
 
@@ -416,7 +422,7 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
                 angle=np.zeros(FRAMES),
                 color=nearest_color(b_food, tip[arrive_frame]),
             )
-            drag_food(b_food, tip, range(arrive_frame + 1, leave_frame + 1), 0.05, 0.6)
+            drag_food(b, b_food, tip, range(arrive_frame + 1, leave_frame + 1), 0.05, 0.6)
             portion.position[leave_frame:] = tip[leave_frame:]
             portion.on_actor[leave_frame:] = True
             b_food.append(portion)
@@ -425,25 +431,37 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
             # camera sees it land rather than it appearing from under the tool.
             drop = (arrive_frame + leave_frame) // 2
             radius = float(rng.uniform(*PORTION_RADIUS))
-            color = distinct_color(rng, [b.body_color, *[blob.color for blob in b_food]])
-            carried = Food(tip.copy(), radius, np.ones(FRAMES), np.zeros(FRAMES), color)
             landing = tip[drop] - direction(angle[drop]) * (radius + 0.01)  # just past the tip, away from the handle
-            carried.position[drop:] = pull_inside(
-                b, landing, radius, drop
-            )  # a deposit lands in B, never on the counter
+            # Most deposits are something else (sauce onto rice); some are more of the same, which is harder to see.
+            if rng.random() < 0.3:
+                color = nearest_color(b_food, landing)
+            else:
+                color = distinct_color(rng, [b.body_color, *[blob.color for blob in b_food]])
+            carried = Food(tip.copy(), radius, np.ones(FRAMES), np.zeros(FRAMES), color)
+            # The smeared blob lands inside B, never on the counter.
+            carried.position[drop:] = pull_inside(b, landing, radius * 1.4, drop)
             carried.stretch[drop:] = 1.4
             carried.on_actor[:drop] = True
             b_food.append(carried)
         elif kind == "wipe":
-            drag_food(b_food, tip, range(arrive_frame + 1, FRAMES), 0.035, rng.uniform(0.3, 0.6))
+            drag_food(b, b_food, tip, range(arrive_frame + 1, FRAMES), 0.035, rng.uniform(0.3, 0.6))
         elif kind == "touch" and rng.random() < 0.7:
             # Touching nudges the container a little, one frame after A arrives so A is seen reaching it first;
             # nothing inside moves relative to the container.
             nudge(b, b_food, min(contact_frame + 1, FRAMES - 1), -direction(approach) * rng.uniform(0.006, 0.02))
 
+    carried_load = []
+    if not truth.transferred and rng.random() < 0.3:
+        # A loaded tool or hand that never puts its food down: food on A says nothing about a transfer by itself.
+        load = Food(
+            tip.copy(), float(rng.uniform(*PORTION_RADIUS)), np.ones(FRAMES), np.zeros(FRAMES), random_color(rng)
+        )
+        load.on_actor[:] = True
+        carried_load.append(load)  # kept apart from B's food, so nothing below drags it off A
+
     if kind == "motion_nearby":
         stirrer = stirring_hand(rng, b, u, approach)
-        drag_food(b_food, stirrer.tip, range(1, FRAMES), 0.04, rng.uniform(0.3, 0.6))
+        drag_food(b, b_food, stirrer.tip, range(1, FRAMES), 0.04, rng.uniform(0.3, 0.6))
         bystanders.append(stirrer)
     if rng.random() < 0.25:
         wanderer = wandering_hand(rng, b)
@@ -467,7 +485,7 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
         kind=kind,
         times_ms=times,
         containers=[b, *bystander_containers],
-        food=b_food + other_food,
+        food=b_food + other_food + carried_load,
         actor=actor,
         bystanders=bystanders,
         flicker=flicker,
