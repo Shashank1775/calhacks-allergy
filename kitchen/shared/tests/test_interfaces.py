@@ -90,5 +90,5 @@ def test_pair_window_has_exactly_the_fields_in_apis_md():
 def test_the_drift_check_sees_every_interface_in_apis_md():
     """Guards the parser above: if it stopped finding the blocks, every other test here would pass vacuously."""
     assert "StateClient" in CONTRACT_PROTOCOLS
-    assert len(CONTRACT_PROTOCOLS) == 9
+    assert len(CONTRACT_PROTOCOLS) == 10
     assert "PairWindow" in CONTRACT_CLASSES

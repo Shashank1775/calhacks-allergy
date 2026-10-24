@@ -137,6 +137,42 @@ def test_unknown_ancestors_are_the_expected_unknown_history_entities(make_graph,
 
 
 @pytest.mark.contract
+@pytest.mark.safety
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_is_valid_and_never_reaches_past_as_of(make_graph, scenario):
+    """Time runs forward: the subgraph holds no edge that starts after as_of_t_ms, and its edges are in time order.
+
+    Every edge's two entities and the plate itself are nodes, so the plate check can read each edge's start state.
+    """
+    graph = make_graph(scenario)
+    for plate_id in _plates(scenario):
+        as_of = _pass_time(scenario, plate_id)
+        subgraph = validate(graph.subgraph(plate_id, as_of), "plate_subgraph")
+        starts = [edge["t_start_ms"] for edge in subgraph["edges"]]
+        node_ids = {node["entity_id"] for node in subgraph["nodes"]}
+        assert subgraph["plate_id"] == plate_id
+        assert all(start <= as_of for start in starts)
+        assert starts == sorted(starts)
+        assert plate_id in node_ids
+        assert {edge["a_id"] for edge in subgraph["edges"]} | {edge["b_id"] for edge in subgraph["edges"]} <= node_ids
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_holds_every_expected_chain_edge(make_graph, scenario):
+    """The edges that carried an allergen to the plate are in its subgraph, so the plate check can see them."""
+    graph = make_graph(scenario)
+    for entry in scenario["expected"]:
+        if entry.get("chain_event_ids"):
+            as_of = max(
+                _pass_time(scenario, entry["plate_id"]),
+                _ticket(scenario, entry["plate_id"], entry["ticket_revision"])["created_t_ms"],
+            )
+            edge_ids = {edge["event_id"] for edge in graph.subgraph(entry["plate_id"], as_of)["edges"]}
+            assert set(entry["chain_event_ids"]) <= edge_ids
+
+
+@pytest.mark.contract
 def test_graph_version_is_a_nonempty_string(make_graph):
     version = make_graph(SCENARIOS[0]).version()
     assert isinstance(version, str) and version
@@ -144,7 +180,7 @@ def test_graph_version_is_a_nonempty_string(make_graph):
 
 @pytest.mark.contract
 @pytest.mark.safety
-@pytest.mark.parametrize("query", ["reach", "unknown_ancestors"])
+@pytest.mark.parametrize("query", ["reach", "unknown_ancestors", "subgraph"])
 def test_a_failing_graph_raises_graph_unavailable(make_unavailable_graph, query):
     """Fail closed: the verdict policy can only turn a broken graph into HOLD if it raises GraphUnavailable."""
     scenario = SCENARIOS[0]
