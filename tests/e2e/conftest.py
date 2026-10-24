@@ -47,6 +47,7 @@ class Kitchen:
     graph: object
     scenario: dict
     parser: object = field(default_factory=FakeLayaParser)  # the LayaParser behind the Orders API
+    plate_check: object = field(default_factory=FakeLayaCheck)  # Laya's final plate check, in the verdict service
     clock: FakeClock = field(default_factory=FakeClock)
     gate: FakeGate = field(default_factory=lambda: FakeGate(quiet=True))
     speaker: FakeSpeaker = field(default_factory=lambda: FakeSpeaker(quiet=True))
@@ -55,7 +56,7 @@ class Kitchen:
 
     def __post_init__(self):
         self.state.set_zones([PASS_ZONE])
-        self.verdict_service = VerdictService(self.state, self.graph, FakeLayaCheck(), self.clock)
+        self.verdict_service = VerdictService(self.state, self.graph, self.plate_check, self.clock)
         self.verdict_service.start()
         self.gate_loop = GateService(self.state, self.gate, self.speaker, self.clock, read_health=self.clock.now_ms)
         desk = TicketDesk(self.parser, self.state, self.clock)

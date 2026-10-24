@@ -3,7 +3,8 @@
 Owner: platform (agents)
 Step:  end-to-end harness (the same shift as tests/e2e, served over HTTP on a live clock)
 Reads: one golden scenario (contracts/scenarios/<name>.json); Kitchen from tests/e2e/conftest.py (the wiring);
-       Orders HTTP API requests from the tablet; ORDERS_CORS_ORIGINS
+       Orders HTTP API requests from the tablet; ORDERS_CORS_ORIGINS; LAYA_MODEL_DIR and LAYA_PLATE_MODEL_DIR (the
+       fine-tuned Laya checkpoints, optional)
 Emits: the Orders HTTP API, plus GET /state: a read-only snapshot of every table in contracts/state-tables.md;
        gate states and spoken holds on stdout (FakeGate, FakeSpeaker)
 Rules: fail closed: every verdict comes from kitchen.verdict, and the gate ticks every TICK_MS even after a failed
@@ -12,12 +13,16 @@ Rules: fail closed: every verdict comes from kitchen.verdict, and the gate ticks
        amendments go through the Orders API too, which triggers the verdict service's recheck
 
 The wiring is tests/e2e's Kitchen, so the runner and the end-to-end tests run the same thing: one FakeStateClient,
-the Orders API on TicketDesk with FakeLayaParser, VerdictService with FakeProvenanceGraph and FakeLayaCheck, and
-GateService with FakeGate and FakeSpeaker. The scenario's world (bins, plates, bindings, interaction edges) is loaded
-at start, its tickets are typed through the Orders API, and its amendments and plates reaching the pass play on the
-clock. Vision isn't running, so the gate's health reader is the clock itself.
+the Orders API on TicketDesk with a LayaParser, VerdictService with FakeProvenanceGraph and a LayaPlateCheck, and
+GateService with FakeGate and FakeSpeaker. The two Laya parts are the fine-tuned checkpoints when LAYA_MODEL_DIR and
+LAYA_PLATE_MODEL_DIR are set, and FakeLayaParser and FakeLayaCheck when they aren't. The scenario's world (bins,
+plates, bindings, interaction edges) is loaded at start, its tickets are typed through the Orders API, and its
+amendments and plates reaching the pass play on the clock. Vision isn't running, so the gate's health reader is the
+clock itself.
 
     uv run python tools/run_local.py knife-carries-peanut-to-plate      # then point web/ at http://localhost:8001
+    LAYA_MODEL_DIR=data/models/laya-v1 LAYA_PLATE_MODEL_DIR=data/models/laya-plate-v2 \\
+        uv run --with laya==0.4.14 python tools/run_local.py knife-carries-peanut-to-plate   # the real models
 """
 
 import argparse
@@ -32,6 +37,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 from kitchen.orders.api import DEFAULT_CORS_ORIGINS, DEFAULT_PORT
+from kitchen.orders.laya_parser import FakeLayaParser, LocalLayaParser
 from kitchen.orders.tickets import PASS_THRESHOLDS
 from kitchen.shared.clock import SystemClock
 from kitchen.shared.fakes import (
@@ -44,6 +50,7 @@ from kitchen.shared.fakes import (
 )
 from kitchen.shared.fakes.state_client import TABLES
 from kitchen.shared.models import CONTRACTS_DIR
+from kitchen.verdict.laya_check import FakeLayaCheck, LocalLayaCheck
 
 logger = logging.getLogger("run_local")
 
@@ -75,6 +82,18 @@ def load_harness():
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
     return harness
+
+
+def laya_models(note_dir: str | None, plate_dir: str | None) -> tuple:
+    """The note parser and the plate check: the fine-tuned Laya checkpoint in each folder, or the fake where the
+    folder isn't set (None or empty, as in .env.example).
+
+    A folder that is set but won't load raises LayaParserUnavailable or LayaCheckUnavailable, so the runner never
+    quietly judges plates with a fake the owner didn't ask for.
+    """
+    parser = LocalLayaParser(note_dir) if note_dir else FakeLayaParser()
+    plate_check = LocalLayaCheck(plate_dir) if plate_dir else FakeLayaCheck()
+    return parser, plate_check
 
 
 # ---------- the scenario's tickets, typed through the Orders API ----------
@@ -165,7 +184,8 @@ class LocalRunner:
     its lock, so the HTTP threads and the kitchen thread never run it at once.
     """
 
-    def __init__(self, scenario, clock, cors_origins: list[str] | None = None) -> None:
+    def __init__(self, scenario, clock, cors_origins: list[str] | None = None, parser=None, plate_check=None) -> None:
+        """`parser` and `plate_check` are the Laya parts (laya_models()); left out, they're the fakes."""
         self.scenario = read_scenario(scenario)
         # The world without its tickets: those are typed through the Orders API in start().
         world = dict(self.scenario, tickets=[], amendments=[])
@@ -174,7 +194,15 @@ class LocalRunner:
         load_scenario(state, world)
         graph = FakeProvenanceGraph(world)
         kitchen = load_harness().Kitchen
-        self.shift = kitchen(state=state, graph=graph, scenario=world, clock=clock, cors_origins=cors_origins or [])
+        self.shift = kitchen(
+            state=state,
+            graph=graph,
+            scenario=world,
+            clock=clock,
+            cors_origins=cors_origins or [],
+            parser=parser or FakeLayaParser(),
+            plate_check=plate_check or FakeLayaCheck(),
+        )
         self.app = self.shift.app
         self.app.add_api_route("/state", self.state_snapshot, methods=["GET"])
         self.timeline = [item for item in scenario_timeline(self.scenario) if item.kind != "event"]
@@ -243,16 +271,22 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     names = [path.stem for path in GOLDEN_SCENARIO_PATHS]
-    parser = argparse.ArgumentParser(description="Run the whole kitchen locally on fakes, replaying a golden scenario.")
-    parser.add_argument("scenario", nargs="?", default="knife-carries-peanut-to-plate", choices=names)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    args = parser.parse_args(argv)
+    cli = argparse.ArgumentParser(description="Run the whole kitchen locally, replaying a golden scenario.")
+    cli.add_argument("scenario", nargs="?", default="knife-carries-peanut-to-plate", choices=names)
+    cli.add_argument("--port", type=int, default=DEFAULT_PORT)
+    args = cli.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # the scenario's own Orders API calls, one line each
     origins = os.environ.get("ORDERS_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
     path = next(path for path in GOLDEN_SCENARIO_PATHS if path.stem == args.scenario)
-    runner = LocalRunner(path, SystemClock(), cors_origins=origins)
+    note_dir, plate_dir = os.environ.get("LAYA_MODEL_DIR"), os.environ.get("LAYA_PLATE_MODEL_DIR")
+    print(
+        f"run_local: notes parsed by {note_dir or 'FakeLayaParser'}, plates checked by {plate_dir or 'FakeLayaCheck'}",
+        flush=True,
+    )
+    parser, plate_check = laya_models(note_dir, plate_dir)
+    runner = LocalRunner(path, SystemClock(), cors_origins=origins, parser=parser, plate_check=plate_check)
     print(f"run_local: {args.scenario} on http://localhost:{args.port} (GET /state), CORS for {origins}", flush=True)
     runner.start()
     threading.Thread(target=run_kitchen, args=(runner,), daemon=True, name="kitchen").start()

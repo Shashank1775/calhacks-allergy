@@ -55,7 +55,7 @@ WEB_MOCK_API=1
 npm --prefix web run dev
 ```
 
-**Against the local runner** (`tools/run_local.py`: orders, verdict and gate on fakes, replaying one golden scenario), put this in `web/.env.local`, with no `WEB_MOCK_API`:
+**Against the local runner** (`tools/run_local.py`: orders, verdict and gate on fakes, or on the fine-tuned Laya models when their folders are set, replaying one golden scenario), put this in `web/.env.local`, with no `WEB_MOCK_API`:
 
 ```
 WEB_STATE_SOURCE=local
