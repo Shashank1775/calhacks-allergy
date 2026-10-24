@@ -20,9 +20,12 @@ GENERATOR_VERSION = "2.0.0"
 STEPS = 16  # clip length T: about one second (AGENTS.md, Open questions: clip geometry)
 FRAMES = STEPS + 1  # one extra frame, so the first step has a change mask too
 STEP_MS = 1000 / STEPS
-# A spoonful seen from overhead: about 3 to 6 px across in a 128-px clip. Smaller portions sank into the camera
-# noise in v1, so the model missed real scoops and deposits.
+# A spoonful seen from overhead: a radius of about 3 to 6 px (6 to 12 px across) in a 128-px clip. Smaller portions
+# sank into the camera noise in v1, so the model missed real scoops and deposits. Ordinary food spans the same sizes,
+# so a big blob moving is never a giveaway on its own.
 PORTION_RADIUS = (0.025, 0.045)
+FOOD_RADIUS = (0.012, PORTION_RADIUS[1])
+RIM_WIDTH = 0.012  # drawn inside each container's half_size
 
 
 @dataclass(frozen=True)
@@ -45,7 +48,7 @@ KINDS = {
     "pass_over": Kind(False, False, "unimportant", None, "overlap_no_contact", 0.15),
     # A tool resting over the food in B: an overhead camera can't tell that from touching it, so it counts as
     # contact (the safe side). No food moves, so it isn't a transfer.
-    "hover": Kind(True, False, "transfer.contact", "both", None, 0.10),
+    "hover": Kind(True, False, "transfer.contact", "both", "contact_no_motion", 0.10),
     "motion_nearby": Kind(False, False, "unimportant", None, "motion_no_contact", 0.10),
     "approach_leave": Kind(False, False, "unimportant", None, None, 0.15),
 }
@@ -196,7 +199,7 @@ def fill_with_food(rng: np.random.Generator, container: Container) -> list[Food]
         blobs.append(
             Food(
                 position=container.center + offset,
-                radius=float(rng.uniform(0.012, 0.03)),
+                radius=float(rng.uniform(*FOOD_RADIUS)),
                 stretch=np.ones(FRAMES),
                 angle=np.full(FRAMES, rng.uniform(0, np.pi)),
                 color=color,
@@ -286,6 +289,17 @@ def nudge(b: Container, food: list[Food], frame: int, shift: np.ndarray) -> None
     b.center[frame:] += shift
     for blob in food:
         blob.position[frame:] += shift
+
+
+def pull_inside(container: Container, point: np.ndarray, margin: float, f: int) -> np.ndarray:
+    """The point, moved toward the container's center if needed so a blob of radius `margin` sits inside its body."""
+    offset = point - container.center[f]
+    room = np.maximum(container.half_size - RIM_WIDTH - margin, 1e-3)
+    if container.is_round:
+        reach = np.sqrt(((offset / room) ** 2).sum())
+    else:
+        reach = np.abs(offset / room).max()
+    return container.center[f] + offset / max(reach, 1.0)
 
 
 def nearest_color(food: list[Food], point: np.ndarray) -> np.ndarray:
@@ -394,9 +408,10 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
         if kind == "scoop":
             # A digs into the food under its tip, stirring what's around it, then lifts a spoonful out. The spoonful
             # rides away on A and leaves a hole where it was: the cue that separates a scoop from a hover.
+            radius = float(rng.uniform(*PORTION_RADIUS))
             portion = Food(
-                position=np.tile(tip[arrive_frame], (FRAMES, 1)),
-                radius=float(rng.uniform(*PORTION_RADIUS)),
+                position=np.tile(pull_inside(b, tip[arrive_frame], radius, arrive_frame), (FRAMES, 1)),
+                radius=radius,
                 stretch=np.ones(FRAMES),
                 angle=np.zeros(FRAMES),
                 color=nearest_color(b_food, tip[arrive_frame]),
@@ -412,7 +427,10 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
             radius = float(rng.uniform(*PORTION_RADIUS))
             color = distinct_color(rng, [b.body_color, *[blob.color for blob in b_food]])
             carried = Food(tip.copy(), radius, np.ones(FRAMES), np.zeros(FRAMES), color)
-            carried.position[drop:] = tip[drop] - direction(angle[drop]) * (radius + 0.01)  # away from the handle
+            landing = tip[drop] - direction(angle[drop]) * (radius + 0.01)  # just past the tip, away from the handle
+            carried.position[drop:] = pull_inside(
+                b, landing, radius, drop
+            )  # a deposit lands in B, never on the counter
             carried.stretch[drop:] = 1.4
             carried.on_actor[:drop] = True
             b_food.append(carried)

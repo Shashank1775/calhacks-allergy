@@ -16,7 +16,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from kitchen.sim.episodes import KINDS, STEPS, simulate_episode
+from kitchen.sim.episodes import KINDS, PORTION_RADIUS, RIM_WIDTH, STEPS, simulate_episode
 from kitchen.sim.training_clips import SPLIT_SEED_OFFSET, TEST_FAMILIES, TRAIN_FAMILIES, make_clip, write_split
 
 SCHEMAS = Path(__file__).resolve().parents[3] / "contracts" / "schemas"
@@ -76,23 +76,47 @@ def test_transfers_change_the_container_and_hover_does_not():
         assert (moved > 1e-3) == should_move, kind
 
 
-@pytest.mark.parametrize("seed", range(5))
-def test_scoops_and_deposits_move_a_visible_portion(seed):
-    """v2: the moved portion is spoonful-sized, and a deposit lands outside A's footprint so the camera sees it."""
-    from kitchen.sim.episodes import PORTION_RADIUS, actor_extent
+def inside_body(container, point, f):
+    """True if a point is inside a container's body (inside the rim) at frame f."""
+    offset = np.abs(point - container.center[f]) / (container.half_size - RIM_WIDTH)
+    return (offset**2).sum() <= 1.0 if container.is_round else offset.max() <= 1.0
 
+
+def food_moved_in_b(episode):
+    """How far the food in B moved relative to B over the episode."""
+    b = episode.containers[0].center
+    in_b = [blob for blob in episode.food if np.linalg.norm(blob.position[0] - b[0]) < 0.2]
+    return max(np.linalg.norm((blob.position[-1] - b[-1]) - (blob.position[0] - b[0])) for blob in in_b)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_scoops_and_deposits_move_a_visible_portion_inside_b(seed):
+    """v2: the moved portion is spoonful-sized, and it starts (scoop) or lands (deposit) inside B's body."""
     scoop = simulate_episode(seed=seed, family=0, kind="scoop")
-    portion = max(scoop.food, key=lambda blob: np.linalg.norm(blob.position[-1] - blob.position[0]))
+    portion = next(blob for blob in scoop.food if blob.on_actor.any())
     assert portion.radius >= PORTION_RADIUS[0]
+    assert inside_body(scoop.containers[0], portion.position[0], 0)
     assert np.linalg.norm(portion.position[-1] - portion.position[0]) > 2 * portion.radius  # it left its spot
 
     deposit = simulate_episode(seed=seed, family=0, kind="deposit")
-    dropped = deposit.food[[i for i, blob in enumerate(deposit.food) if blob.on_actor.any()][0]]
+    dropped = next(blob for blob in deposit.food if blob.on_actor.any())
+    drop = int(np.argmin(dropped.on_actor))  # the first frame the portion is off A
     assert dropped.radius >= PORTION_RADIUS[0]
-    assert not np.allclose(dropped.color, [blob.color for blob in deposit.food if blob is not dropped][0])
-    x1, y1, x2, y2 = actor_extent(deposit.actor, len(deposit.times_ms) - 1)
-    landed = dropped.position[-1]
-    assert not (x1 <= landed[0] <= x2 and y1 <= landed[1] <= y2)  # not hidden under A once A has moved on
+    assert inside_body(deposit.containers[0], dropped.position[drop], drop)
+
+
+def test_the_v2_label_fixes_hold_over_many_seeds():
+    """Wipes always smear food; some touches land inside B; a nudge never moves B before A arrives; hover is contact."""
+    assert all(food_moved_in_b(simulate_episode(seed, 0, "wipe")) > 1e-3 for seed in range(100))
+    touches = [simulate_episode(seed, 0, "touch") for seed in range(40)]
+    tips_inside = [
+        inside_body(t.containers[0], t.actor.tip[len(t.times_ms) // 2], len(t.times_ms) // 2) for t in touches
+    ]
+    assert 0 < sum(tips_inside) < len(touches)
+    for touch in touches:
+        contact_frame = int(np.searchsorted(touch.times_ms, touch.labels["contact_t_ms"]))
+        assert np.allclose(touch.containers[0].center[contact_frame], touch.containers[0].center[0])
+    assert (KINDS["hover"].contact, KINDS["hover"].transferred) == (True, False)
 
 
 def test_splits_use_disjoint_seeds_and_test_uses_unseen_layouts(tmp_path):
