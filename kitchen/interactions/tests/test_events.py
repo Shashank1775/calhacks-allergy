@@ -5,9 +5,9 @@ Step:  Interactions (tests)
 Reads: kitchen.interactions.events; FakeStateClient, FakeClock; scenes
 Emits: pytest tests
 Rules: 5 t_start_ms <= t_end_ms, each pair and action in time order and never overlapping, whichever classifier
-       answered; a new touch cuts the transfers open on its entities; frames move forward; 1 buffered and retried on
-       StateUnavailable, never dropped; a transfer's first hit is written the frame it is seen; a wash is a self-loop,
-       needs wash_floor, and one rinse is one wash
+       answered; one touch is one edge, and news from a new touch crosses every touch going on its entities, once;
+       frames move forward; 1 buffered and retried on StateUnavailable, never dropped; a transfer's first hit is
+       written the frame it is seen; a wash is a self-loop, needs wash_floor, and one rinse is one wash
 """
 
 import json
@@ -38,7 +38,6 @@ from kitchen.interactions.tests.scenes import (
     Scene,
     Track,
     render,
-    spans,
     still,
     unmatched,
 )
@@ -48,6 +47,8 @@ from kitchen.shared.models import validate
 
 SETTINGS = InteractionSettings()
 ZONE_RULES = {"name": "zone_rules", "version": "test"}
+HAND = "hand-p1-right"
+CONTACT = [("transfer.contact", 0.8)]
 MASK = np.zeros((128, 128), dtype=np.float32)
 
 
@@ -166,69 +167,143 @@ def test_unimportant_and_weak_transfers_make_no_edge():
 
 
 @pytest.mark.safety
-def test_a_transfers_first_hit_is_written_at_once_and_the_rest_keeps_its_highest_probability():
+def test_a_touch_is_one_edge_at_its_first_hit_and_a_surer_hit_adds_only_the_difference():
+    """A contact at 0.6, then 0.9, 0.7 and 0.8: one edge at 0.6 the frame it starts, and one at 33 for the
+    difference, (0.9 - 0.6) / (1 - 0.6) = 0.75, so the two add up to 0.9 under noisy-OR. Hits no surer than 0.9
+    write nothing. A wash on another knife in the same frames keeps its lowest probability."""
     segmenter = Segmenter(SETTINGS)
     other_knife = {"a_id": "tool-knife-2", "b_id": "tool-knife-2", "b_kind": "tool"}
-
-    first = segmenter.add_frame(
-        0, [judged_at(0, [("transfer.contact", 0.6)]), judged_at(0, [("clean.wash", 0.95)], **other_knife)]
-    )
-    for t_ms, contact, wash in ((33, 0.9, 0.99), (66, 0.7, 0.92), (99, 0.8, 0.97)):
+    written = []
+    for t_ms, contact, wash in ((0, 0.6, 0.95), (33, 0.9, 0.99), (66, 0.7, 0.92), (99, 0.8, 0.97)):
         frame = [
             judged_at(t_ms, [("transfer.contact", contact)]),
             judged_at(t_ms, [("clean.wash", wash)], **other_knife),
         ]
-        assert segmenter.add_frame(t_ms, frame) == []
-    rest = {event["action"]: event for event in segmenter.close_all()}
+        written += segmenter.add_frame(t_ms, frame)
+    (wash,) = segmenter.close_all()
 
-    # The touch reaches the database the frame it starts; the rest of it is one event from the next hit.
-    assert [(event["t_start_ms"], event["t_end_ms"], event["probability"]) for event in first] == [(0, 0, 0.6)]
-    contact = rest["transfer.contact"]
-    assert (contact["t_start_ms"], contact["t_end_ms"], contact["probability"]) == (33, 99, 0.9)
-    assert rest["clean.wash"]["probability"] == 0.92  # a wash lowers risk, so it keeps its lowest
+    assert [(e["t_start_ms"], e["t_end_ms"], e["probability"]) for e in written] == [
+        (0, 0, 0.6),
+        (33, 33, pytest.approx(0.75)),
+    ]
+    assert 1 - (1 - 0.6) * (1 - written[1]["probability"]) == pytest.approx(0.9)
+    assert wash["probability"] == 0.92  # a wash lowers risk, so it keeps its lowest
 
 
-def test_one_event_per_pair_and_action_names_the_classifier_of_its_strongest_hit():
-    """A primary that fails on one frame doesn't split a touch: zone rules' hit joins the same event, and the event
-    names whichever classifier gave its highest probability."""
+def test_a_surer_hit_from_the_fallback_names_the_fallback():
+    """A primary that fails on one frame doesn't start a new touch: zone rules' surer hit adds an edge for the
+    difference, named for zone rules, and the primary's weaker hits after it write nothing."""
     lstm = {"name": "lstm", "version": "fake-1"}
     segmenter = Segmenter(SETTINGS)
-    segmenter.add_frame(0, [judged_at(0, [("transfer.contact", 0.7)], lstm)])
+    written = segmenter.add_frame(0, [judged_at(0, [("transfer.contact", 0.7)], lstm)])
     for t_ms, probability, classifier in ((33, 0.6, lstm), (66, 0.8, ZONE_RULES), (99, 0.6, lstm)):
-        segmenter.add_frame(t_ms, [judged_at(t_ms, [("transfer.contact", probability)], classifier)])
+        written += segmenter.add_frame(t_ms, [judged_at(t_ms, [("transfer.contact", probability)], classifier)])
 
-    (rest,) = segmenter.close_all()
-
-    assert (rest["t_start_ms"], rest["t_end_ms"], rest["probability"]) == (33, 99, 0.8)
-    assert rest["classifier"] == ZONE_RULES
+    assert segmenter.close_all() == []
+    assert [(e["t_start_ms"], e["classifier"]) for e in written] == [(0, lstm), (66, ZONE_RULES)]
+    assert written[1]["probability"] == pytest.approx((0.8 - 0.7) / (1 - 0.7))
 
 
 @pytest.mark.safety
-def test_a_new_touch_cuts_the_transfers_open_on_its_entities_so_they_carry_what_it_brought():
-    """A spoon rests on a plate (an open contact); at 165 a hand starts touching the spoon. The spoon-plate contact is
-    cut there, and its rest starts after the hand's first hit and is written at once, so the graph carries the
-    hand's allergens on to the plate. A scoop starting on the same pair at 99 carries nothing new and cuts nothing."""
+def test_news_from_a_new_touch_crosses_each_touch_going_on_its_entities_once():
+    """A spoon rests on a plate (a contact from 0, a scoop from 99); at 165 a hand starts touching the spoon. Each
+    spoon-plate touch writes one more edge at its next hit, 198, after the hand's first hit, so the graph carries the
+    hand's allergens on to the plate; after that they write nothing. The scoop starting on the same pair at 99 is no
+    news to the contact."""
     segmenter = Segmenter(SETTINGS)
     spoon_plate = {"a_id": "tool-spoon-1", "b_id": "plate-t1", "b_kind": "plate"}
-    hand_spoon = {"a_id": "hand-p1-right", "b_id": "tool-spoon-1", "b_kind": "tool"}
+    hand_spoon = {"a_id": HAND, "b_id": "tool-spoon-1", "b_kind": "tool"}
     written: dict[int, list] = {}
     for t_ms in range(0, 400, 33):
-        labels = [("transfer.contact", 0.8)] + ([("transfer.scoop", 0.9)] if t_ms >= 99 else [])
+        labels = CONTACT + ([("transfer.scoop", 0.9)] if t_ms >= 99 else [])
         frame = [judged_at(t_ms, labels, **spoon_plate)]
         if t_ms >= 165:
-            frame.append(judged_at(t_ms, [("transfer.contact", 0.8)], **hand_spoon))
+            frame.append(judged_at(t_ms, CONTACT, **hand_spoon))
         written[t_ms] = segmenter.add_frame(t_ms, frame)
     events = [event for t_ms in sorted(written) for event in written[t_ms]] + segmenter.close_all()
 
-    contacts = [e for e in events if (e["b_id"], e["action"]) == ("plate-t1", "transfer.contact")]
-    assert [(e["t_start_ms"], e["t_end_ms"]) for e in contacts] == [(0, 0), (33, 165), (198, 198), (231, 396)]
-    # At 165: the hand's first hit, and both spoon-plate transfers cut there (the scoop's first hit was at 99).
-    assert [(e["b_id"], e["action"], e["t_start_ms"], e["t_end_ms"]) for e in written[165]] == [
-        ("plate-t1", "transfer.contact", 33, 165),
-        ("plate-t1", "transfer.scoop", 132, 165),
-        ("tool-spoon-1", "transfer.contact", 165, 165),
+    assert [(e["b_id"], e["action"], e["t_start_ms"]) for e in events] == [
+        ("plate-t1", "transfer.contact", 0),
+        ("plate-t1", "transfer.scoop", 99),
+        ("tool-spoon-1", "transfer.contact", 165),
+        ("plate-t1", "transfer.contact", 198),
+        ("plate-t1", "transfer.scoop", 198),
     ]
-    assert ("plate-t1", 198, 198) in [(e["b_id"], e["t_start_ms"], e["t_end_ms"]) for e in written[198]]
+    assert all(e["t_start_ms"] == e["t_end_ms"] for e in events)
+    assert [e["probability"] for e in written[198]] == [0.8, 0.9]  # each at its touch's strength
+
+
+@pytest.mark.safety
+def test_touches_starting_in_the_same_frame_carry_each_others_news_whatever_their_ids():
+    """A hand lays a spoon on a plate, both contacts first seen in the same frame. Their edges share a start, so the
+    graph orders them by event ID, and one may apply before the other's news. Each carries the other's news once at
+    its next hit, so the plate gets the hand's allergens, and the hand the plate's, either way round."""
+    segmenter = Segmenter(SETTINGS)
+    hand_spoon = {"a_id": HAND, "b_id": "tool-spoon-1", "b_kind": "tool"}
+    spoon_plate = {"a_id": "tool-spoon-1", "b_id": "plate-t1", "b_kind": "plate"}
+    events = []
+    for t_ms in range(0, 300, 33):
+        events += segmenter.add_frame(
+            t_ms, [judged_at(t_ms, CONTACT, **hand_spoon), judged_at(t_ms, CONTACT, **spoon_plate)]
+        )
+
+    assert [(e["a_id"], e["t_start_ms"]) for e in events] == [
+        (HAND, 0),
+        ("tool-spoon-1", 0),
+        (HAND, 33),
+        ("tool-spoon-1", 33),
+    ]
+
+
+def test_news_never_bounces_between_touches_forever():
+    """A hand holds a spoon from 0; the spoon lands on a plate at 99 and stays; at 990 the hand also touches the bin,
+    and everything stays touching for three seconds. Each piece of news crosses each touch going on once: the spoon
+    landing crosses the hand's grip, and the bin crosses the grip, then the spoon on the plate. Nothing more."""
+    segmenter = Segmenter(SETTINGS)
+    hand_spoon = {"a_id": HAND, "b_id": "tool-spoon-1", "b_kind": "tool"}
+    spoon_plate = {"a_id": "tool-spoon-1", "b_id": "plate-t1", "b_kind": "plate"}
+    hand_bin = {"a_id": HAND, "b_id": "bin-1", "b_kind": "bin"}
+    events = []
+    for t_ms in range(0, 3000, 33):
+        frame = [judged_at(t_ms, CONTACT, **hand_spoon)]
+        if t_ms >= 99:
+            frame.append(judged_at(t_ms, CONTACT, **spoon_plate))
+        if t_ms >= 990:
+            frame.append(judged_at(t_ms, CONTACT, **hand_bin))
+        events += segmenter.add_frame(t_ms, frame)
+    events += segmenter.close_all()
+
+    assert [(e["a_id"], e["b_id"], e["t_start_ms"]) for e in events] == [
+        (HAND, "tool-spoon-1", 0),
+        ("tool-spoon-1", "plate-t1", 99),
+        (HAND, "tool-spoon-1", 132),
+        (HAND, "bin-1", 990),
+        (HAND, "tool-spoon-1", 1023),
+        ("tool-spoon-1", "plate-t1", 1056),
+    ]
+
+
+def test_news_crosses_a_ring_of_touching_things_once_each():
+    """A spoon, a knife and a plate all touch each other for two seconds; at 495 a hand touches the knife. The hand's
+    news goes round the ring once: every touch writes at most one more edge for it."""
+    segmenter = Segmenter(SETTINGS)
+    ring = [
+        {"a_id": "tool-knife-1", "b_id": "tool-spoon-1", "b_kind": "tool"},
+        {"a_id": "tool-spoon-1", "b_id": "plate-t1", "b_kind": "plate"},
+        {"a_id": "tool-knife-1", "b_id": "plate-t1", "b_kind": "plate"},
+    ]
+    hand_knife = {"a_id": HAND, "b_id": "tool-knife-1", "b_kind": "tool"}
+    events = []
+    for t_ms in range(0, 2000, 33):
+        frame = [judged_at(t_ms, CONTACT, **pair) for pair in ring]
+        if t_ms >= 495:
+            frame.append(judged_at(t_ms, CONTACT, **hand_knife))
+        events += segmenter.add_frame(t_ms, frame)
+
+    after_the_hand = [e for e in events if e["t_start_ms"] > 495]
+    pairs_after = [(e["a_id"], e["b_id"]) for e in after_the_hand]
+    assert len(pairs_after) == len(set(pairs_after)) == 3
+    assert max(e["t_start_ms"] for e in after_the_hand) <= 495 + 3 * 33
 
 
 PAIRS = [
@@ -243,12 +318,11 @@ HITS = st.sets(st.tuples(st.sampled_from(range(len(PAIRS))), st.sampled_from(ACT
 FRAMES = st.lists(st.tuples(st.integers(1, 400), HITS), max_size=60)
 
 
-def segment_frames(frames: list[tuple[int, set]]) -> tuple[list, list, dict]:
-    """Run (gap before the frame, hits) frames through a Segmenter. Returns every hit as (key, t_ms), every event in
-    the order written, and each new touch's t_ms -> the events written that frame."""
+def segment_frames(frames: list[tuple[int, set]]) -> tuple[list, list]:
+    """Run (gap before the frame, hits) frames through a Segmenter. Returns every hit as (key, t_ms), and every event
+    with the t_ms of the frame that wrote it, in the order written."""
     segmenter = Segmenter(SETTINGS)
-    hits, events, written_with_touch = [], [], {}
-    last_hit: dict = {}
+    hits, written = [], []
     t_ms = 0
     for gap, frame_hits in frames:
         t_ms += gap
@@ -256,17 +330,23 @@ def segment_frames(frames: list[tuple[int, set]]) -> tuple[list, list, dict]:
         for pair_index, action in sorted(frame_hits):
             a_id, b_id, b_kind = PAIRS[pair_index]
             judged.append(judged_at(t_ms, [(action, 0.8)], a_id=a_id, b_id=b_id, b_kind=b_kind))
-            key = (a_id, b_id, action)
-            hits.append((key, t_ms))
-            if key not in last_hit or t_ms - last_hit[key] > SETTINGS.merge_gap_ms:
-                written_with_touch[(key, t_ms)] = None
-            last_hit[key] = t_ms
-        frame_events = segmenter.add_frame(t_ms, judged)
-        for touch in written_with_touch:
-            if touch[1] == t_ms:
-                written_with_touch[touch] = frame_events
-        events += frame_events
-    return hits, events + segmenter.close_all(), written_with_touch
+            hits.append(((a_id, b_id, action), t_ms))
+        written += [(event, t_ms) for event in segmenter.add_frame(t_ms, judged)]
+    written += [(event, t_ms) for event in segmenter.close_all()]
+    return hits, written
+
+
+def touches_of(hits: list[tuple]) -> list[tuple[tuple, list[int]]]:
+    """Each touch as (pair and action, its hit times): hits of one pair and action at most merge_gap_ms apart."""
+    touches: list[tuple[tuple, list[int]]] = []
+    latest: dict = {}
+    for key, t_ms in hits:
+        if key in latest and t_ms - touches[latest[key]][1][-1] <= SETTINGS.merge_gap_ms:
+            touches[latest[key]][1].append(t_ms)
+        else:
+            latest[key] = len(touches)
+            touches.append((key, [t_ms]))
+    return touches
 
 
 def key_of(event: dict) -> tuple:
@@ -274,49 +354,67 @@ def key_of(event: dict) -> tuple:
     return (event["a_id"], event["b_id"], event["action"])
 
 
+def neighbours(key: tuple, other: tuple) -> bool:
+    """Whether two transfers are on different pairs that share an entity, so news on one concerns the other."""
+    return key[:2] != other[:2] and bool(set(key[:2]) & set(other[:2]))
+
+
 @pytest.mark.safety
-@settings(max_examples=150, deadline=None)
+@settings(max_examples=200, deadline=None)
 @given(FRAMES)
-def test_segmenting_never_drops_overlaps_or_reorders_a_hit_and_new_touches_are_written_at_once(frames):
-    hits, events, new_touches = segment_frames(frames)
+def test_a_touch_is_one_edge_plus_one_per_news_and_news_crosses_every_touch_going_on(frames):
+    hits, written = segment_frames(frames)
+    events = [event for event, _ in written]
 
-    # Every hit is in exactly one event of its pair and action, and every event starts and ends on real hits.
-    for key, t_ms in hits:
-        assert sum(key_of(e) == key and e["t_start_ms"] <= t_ms <= e["t_end_ms"] for e in events) == 1
+    # Every edge is one hit of its pair and action, written the frame of that hit.
     hit_set = set(hits)
-    assert all((key_of(e), e["t_start_ms"]) in hit_set and (key_of(e), e["t_end_ms"]) in hit_set for e in events)
+    for event, t_ms in written:
+        assert event["t_start_ms"] == event["t_end_ms"] == t_ms
+        assert (key_of(event), t_ms) in hit_set
 
-    # One pair and action's events come out in time order and never overlap; IDs are unique and replays repeat them.
-    for key in {key_of(e) for e in events}:
-        same = [e for e in events if key_of(e) == key]
-        assert all(earlier["t_end_ms"] < later["t_start_ms"] for earlier, later in pairwise(same))
+    # IDs are unique and replays repeat them; one pair and action's edges come out in time order.
     assert len({e["event_id"] for e in events}) == len(events)
-    assert segment_frames(frames)[1] == events
+    assert segment_frames(frames)[1] == written
+    edge_times: dict = {}
+    for event in events:
+        edge_times.setdefault(key_of(event), []).append(event["t_start_ms"])
+    assert all(times == sorted(set(times)) for times in edge_times.values())
 
-    for (key, t_ms), written in new_touches.items():
-        # A new touch's first hit reaches the database the frame it is seen...
-        assert any(key_of(e) == key and (e["t_start_ms"], e["t_end_ms"]) == (t_ms, t_ms) for e in written)
-        # ...and no transfer on another pair sharing an entity spans it, so the graph applies it in order.
-        for e in events:
-            if (e["a_id"], e["b_id"]) != key[:2] and {e["a_id"], e["b_id"]} & set(key[:2]):
-                assert not e["t_start_ms"] < t_ms < e["t_end_ms"]
+    touches = touches_of(hits)
+    for key, times in touches:
+        mine = [t for t in edge_times.get(key, []) if times[0] <= t <= times[-1]]
+        # A touch's first hit is written the frame it is seen...
+        assert mine and mine[0] == times[0]
+        # ...and it writes again only to carry news: an edge on a neighbouring touch since its own last one.
+        for before, after in pairwise(mine):
+            assert any(neighbours(key, key_of(e)) and before <= e["t_start_ms"] < after for e in events)
+
+    # A new touch is news to every touch going on its entities, which carries it across at its next hit, after it.
+    for new_key, new_times in touches:
+        started = new_times[0]
+        for key, times in touches:
+            if neighbours(key, new_key) and times[0] <= started < times[-1]:
+                next_hit = next(t for t in times if t > started)
+                assert next_hit in edge_times[key], (new_key, started, key)
 
 
-def test_a_long_transfer_is_cut_so_its_edge_is_not_held_back():
+def test_a_long_touch_is_one_edge_written_the_frame_it_starts():
     # A hand resting on the plate for three seconds.
-    hand = Track("hand-p1-right", "hand", ((0, (0.5, 0.55)), (3000, (0.5, 0.55))))
+    hand = Track(HAND, "hand", ((0, (0.5, 0.55)), (3000, (0.5, 0.55))))
     frames = Scene([still("plate-t1", "plate", PLATE_AT, 3000), hand], 3000, []).frames()
+    step = InteractionStep(ZONES, settings=SETTINGS)
 
-    events = replay(frames, ZONES, SETTINGS)
+    written = [(event, frame["t_ms"]) for frame in frames for event in step.process(frame)]
 
-    assert len(events) >= 3
-    assert all(event["t_end_ms"] - event["t_start_ms"] <= SETTINGS.max_event_ms for event in events)
+    assert step.finish() == []
+    ((event, t_ms),) = written
+    assert event["t_start_ms"] == event["t_end_ms"] == t_ms
 
 
 def test_a_wash_is_never_cut():
     (wash,) = replay(SCENES["wash"].frames(), ZONES, SETTINGS)
 
-    assert wash["t_end_ms"] - wash["t_start_ms"] > SETTINGS.max_event_ms
+    assert wash["t_end_ms"] - wash["t_start_ms"] > 1000  # the whole rinse, about 1.2 s
 
 
 @pytest.mark.safety
@@ -414,7 +512,7 @@ def test_intermittent_failures_lose_nothing_and_keep_the_order():
     assert state.list_interactions() == events
 
 
-def test_pipeline_e2e_a_touch_is_written_the_frame_it_starts_and_every_edge_soon_after_it_ends():
+def test_pipeline_e2e_a_transfer_is_written_the_frame_of_its_hit_and_a_wash_soon_after_the_rinse():
     state = FakeStateClient()
     clock = FakeClock()
     written_at: dict = {}
@@ -426,12 +524,11 @@ def test_pipeline_e2e_a_touch_is_written_the_frame_it_starts_and_every_edge_soon
     transfers = [event for event in recorded if event["action"] != "clean.wash"]
     assert transfers and len(transfers) < len(recorded)
     for event in recorded:
-        # A transfer is written merge_gap_ms after its last hit, a wash wash_gap_ms after (it bridges a loss).
-        allowed_ms = (SETTINGS.wash_gap_ms if event["action"] == "clean.wash" else SETTINGS.merge_gap_ms) + 200
-        assert written_at[event["event_id"]] - event["t_end_ms"] <= allowed_ms, event["event_id"]
-    for touch in spans(transfers):
-        first = next(event for event in transfers if event["event_id"] == touch["event_id"])
-        assert written_at[first["event_id"]] == first["t_start_ms"], first["event_id"]
+        if event["action"] == "clean.wash":
+            # A wash is written wash_gap_ms after its last hit, since it bridges a loss.
+            assert written_at[event["event_id"]] - event["t_end_ms"] <= SETTINGS.wash_gap_ms + 200, event["event_id"]
+        else:
+            assert written_at[event["event_id"]] == event["t_start_ms"] == event["t_end_ms"], event["event_id"]
 
 
 def write_recording(tmp_path, frames: list[dict], with_masks: bool) -> dict:

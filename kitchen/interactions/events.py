@@ -8,9 +8,9 @@ Emits: interaction_event via StateClient.record_interaction (interaction table) 
 Rules: 5 frames must move forward, t_start_ms <= t_end_ms, each pair and action's events come out in time order and
        never overlap, edge order follows cause and effect, and event IDs are deterministic, so a replay writes no
        duplicates; 1 events are buffered and retried on StateUnavailable, never dropped; a transfer's first hit is
-       written the frame it is seen; a wash is a self-loop (a_id == b_id), only a self pair can make one, only with
-       probability at least wash_floor, one rinse is one wash, and no wash comes before a transfer it followed;
-       "unimportant" makes no edge
+       written the frame it is seen; one touch is one edge, plus one each time it carries news across; a wash is a
+       self-loop (a_id == b_id), only a self pair can make one, only with probability at least wash_floor, one rinse
+       is one wash, and no wash comes before a transfer it followed; "unimportant" makes no edge
 
 How a frame becomes edges: candidate pairs (candidates.py) -> feature rows (features.py) -> one PairWindow per pair
 (windows.py) -> labels from the classifier wrapper (classifier.py) -> the Segmenter here, which turns each frame's
@@ -62,7 +62,7 @@ def direction_for(action: str, b_kind: str) -> str:
     return "both"
 
 
-# A transfer's open event is keyed by pair and action, whichever classifier answered each frame.
+# A touch is keyed by pair and action, whichever classifier answered each frame.
 Key = tuple[str, str, str]
 
 
@@ -87,7 +87,7 @@ class Hit:
 
 @dataclass
 class Segment:
-    """An open event: consecutive hits of one action on one pair."""
+    """An event being built: a one-hit transfer edge, or a wash's consecutive hits on one entity."""
 
     a_id: str
     b_id: str
@@ -101,15 +101,11 @@ class Segment:
     probability: float
 
     def extend(self, hit: Hit) -> None:
-        """Add a hit. A transfer keeps its highest probability, a wash its lowest (a wash lowers risk), and the event
-        names the classifier that gave that probability."""
+        """Add a wash hit. A wash keeps its lowest probability, since a wash lowers risk, and the event names the
+        classifier that gave it."""
         self.t_end_ms = hit.t_ms
         self.frame_end = hit.frame_id
-        if self.action == "clean.wash":
-            stronger = hit.probability < self.probability
-        else:
-            stronger = hit.probability > self.probability
-        if stronger:
+        if hit.probability < self.probability:
             self.probability = hit.probability
             self.classifier = hit.classifier
 
@@ -147,16 +143,47 @@ def segment_from(hit: Hit) -> Segment:
     )
 
 
-class Segmenter:
-    """Turns each frame's labels into events, so edges reach the database early and apply in cause-and-effect order.
+def one_hit_event(hit: Hit, probability: float, classifier: dict) -> InteractionEvent:
+    """A transfer edge at one hit: when the touch starts, or when it carries news or a surer hit across."""
+    segment = segment_from(hit)
+    segment.probability = probability
+    segment.classifier = classifier
+    return segment.event()
 
-    The graph applies edges in (t_start_ms, t_end_ms, event_id) order, so an event counts as happening at its start:
-    - A touch is a transfer's hits on one pair and action less than merge_gap_ms apart. Its first hit is written at
-      once as a one-hit event, so a plate carried to the pass by a dirty hand has its edge when it arrives. The rest
-      is one event from the next hit, written merge_gap_ms after the touch's last hit, or cut every max_event_ms.
-    - When a new touch starts, every other open transfer on either of its entities is cut there and its rest starts
-      after it (written at once, again a new touch), so what the new touch brings is carried on: a dirty hand that
-      grabs a spoon resting on a plate dirties the plate. Transfers on the same pair carry nothing new and aren't cut.
+
+@dataclass
+class Touch:
+    """A transfer going on: hits of one action on one pair, less than merge_gap_ms apart.
+
+    `news` holds the news this touch's edges have carried so far, and `owed` the news that reached one of its
+    entities since then, which its next edge carries across. `probability` is the strongest hit so far, and
+    `classifier` the one that gave it.
+    """
+
+    last_hit_ms: int
+    probability: float
+    classifier: dict
+    news: set[int]
+    owed: set[int]
+
+
+class Segmenter:
+    """Turns each frame's labels into events: one edge per touch, written early, applied in cause-and-effect order.
+
+    The graph applies edges in (t_start_ms, t_end_ms, event_id) order with noisy-OR, so every edge counts as one more
+    chance to move allergens, at its start. Writing a touch as several edges would raise both sides once per edge, and
+    a contact's allergens would echo back and forth: a washed knife resting on a plate would hold an allergy plate.
+    - A touch is a transfer's hits on one pair and action less than merge_gap_ms apart. It is one edge: its first hit,
+      written at once as a one-hit event, so a plate carried to the pass by a dirty hand has its edge when it arrives.
+    - News. Each touch's first hit is news to its two entities. At the end of the frame, every other touch going on
+      either of them (on another pair) owes that news, and writes one more edge at its next hit, in a later frame, so
+      it applies after the news. That edge is news to its own entities too, so news carries on along a chain of
+      things all touching: a dirty hand that grabs a spoon resting on a plate dirties the plate. A touch carries each
+      news item once, so a cycle of touching things, or two touches on one entity, can't pass news back and forth
+      forever. Transfers on the same pair carry nothing new to each other, so they never owe each other news.
+    - A later hit surer than the touch's strongest so far (a primary and zone rules answering in turn) writes an edge
+      for the difference, (p - p_before) / (1 - p_before), so the touch's edges add up to its surest hit under
+      noisy-OR. It is news like a first hit.
     - A wash is one event per rinse, bridged across a loss of up to wash_gap_ms. It counts only once no transfer has
       touched the entity for wash_min_dwell_ms, so it never comes before a touch during the soak, and a transfer on
       the entity ends its open wash. A new wash on an entity no transfer has touched since its last one is dropped:
@@ -165,10 +192,9 @@ class Segmenter:
 
     def __init__(self, settings: InteractionSettings) -> None:
         self.settings = settings
-        self._open: dict[Key, Segment] = {}  # open transfers
+        self._touches: dict[Key, Touch] = {}  # transfers going on
+        self._news_count = 0  # news IDs, numbered in the order the news happened
         self._washes: dict[str, Segment] = {}  # open washes, by entity
-        self._last_hit_ms: dict[Key, int] = {}  # each recent touch's last hit, to tell a new touch from a going one
-        self._write_next: set[Key] = set()  # transfers cut for a new touch: their next hit is written at once
         self._last_transfer_ms: dict[str, int] = {}  # entity -> its last transfer hit, within wash_min_dwell_ms
         self._washed: set[str] = set()  # entities washed, and touched by no transfer since
 
@@ -196,52 +222,71 @@ class Segmenter:
 
     def add_frame(self, t_ms: int, judged: list[tuple[InteractionFeatures, Labels, dict]]) -> list[InteractionEvent]:
         """Add one frame's judged windows, each (newest feature row, labels, classifier). Returns the events to write
-        now, in edge order: first hits, cut and finished transfers, finished washes.
+        now, in edge order: transfer edges, then finished washes.
 
-        Transfers go first, so a transfer on an entity this frame already stops its wash this frame.
+        Transfers go first, so a transfer on an entity this frame already stops its wash this frame. News from this
+        frame's edges spreads after all of them, so a touch that owes it writes in a later frame, after the news.
         """
         hits = [hit for latest, labels, classifier in judged for hit in self.edge_hits(latest, labels, classifier)]
         written = []
-        new_touches: list[Hit] = []
+        spreading: list[tuple[Hit, set[int]]] = []
         for hit in hits:
             if hit.action != "clean.wash":
-                written += self.add_transfer(hit, new_touches)
-        written += self.cut_for_new_touches(t_ms, new_touches)
+                written += self.add_transfer(hit, spreading)
+        self.spread_news(spreading)
         for hit in hits:
             if hit.action == "clean.wash":
                 written += self.add_wash(hit)
         written += self.close_stale(t_ms)
         return sorted(written, key=event_order)
 
-    def add_transfer(self, hit: Hit, new_touches: list[Hit]) -> list[InteractionEvent]:
-        """One transfer hit: extend its open event, or start one. Returns any event to write now.
-
-        A new touch's first hit, and the first hit after a cut for a new touch, is written at once as a one-hit
-        event and noted in new_touches; the touch goes on from its next hit.
-        """
+    def add_transfer(self, hit: Hit, spreading: list[tuple[Hit, set[int]]]) -> list[InteractionEvent]:
+        """One transfer hit: start a touch, carry news or a surer hit across a going one, or nothing. Returns the edge
+        to write now, if any, and adds the news it carries to `spreading`."""
         written = []
         for entity_id in (hit.a_id, hit.b_id):
             written += self.note_transfer(entity_id, hit.t_ms)
 
-        key = hit.key
-        last_ms = self._last_hit_ms.get(key)
-        new_touch = last_ms is None or hit.t_ms - last_ms > self.settings.merge_gap_ms
-        self._last_hit_ms[key] = hit.t_ms
-        segment = self._open.get(key)
-        # A touch that ended, or one that ran max_event_ms, is written; this hit starts a new event.
-        if segment is not None and (new_touch or hit.t_ms - segment.t_start_ms > self.settings.max_event_ms):
-            written.append(self._open.pop(key).event())
-            segment = None
+        touch = self._touches.get(hit.key)
+        if touch is None or hit.t_ms - touch.last_hit_ms > self.settings.merge_gap_ms:
+            fresh = {self.next_news()}
+            self._touches[hit.key] = Touch(hit.t_ms, hit.probability, hit.classifier, news=fresh, owed=set())
+            spreading.append((hit, fresh))
+            return written + [one_hit_event(hit, hit.probability, hit.classifier)]
 
-        if segment is not None:
-            segment.extend(hit)
-        elif new_touch or key in self._write_next:
-            self._write_next.discard(key)
-            written.append(segment_from(hit).event())
-            new_touches.append(hit)
+        touch.last_hit_ms = hit.t_ms
+        surer = hit.probability > touch.probability
+        if not touch.owed and not surer:
+            return written  # the touch goes on: its edge is already written, and nothing new reached it
+
+        # Owed news crosses at the touch's full strength. A surer hit alone crosses only the difference, so the
+        # touch's edges add up to that hit's probability under noisy-OR, not to the sum of its hits.
+        if touch.owed:
+            probability = max(hit.probability, touch.probability)
         else:
-            self._open[key] = segment_from(hit)
-        return written
+            probability = (hit.probability - touch.probability) / (1.0 - touch.probability)
+        carried = touch.owed
+        touch.owed = set()
+        if surer:
+            touch.probability, touch.classifier = hit.probability, hit.classifier
+            carried = carried | {self.next_news()}
+        touch.news |= carried
+        spreading.append((hit, carried))
+        return written + [one_hit_event(hit, probability, touch.classifier)]
+
+    def next_news(self) -> int:
+        """A new news ID."""
+        self._news_count += 1
+        return self._news_count
+
+    def spread_news(self, spreading: list[tuple[Hit, set[int]]]) -> None:
+        """Every touch going on an entity that an edge this frame carried news to owes that news, unless it carried
+        it already or is on the edge's own pair. Its next hit, in a later frame, writes it."""
+        for hit, carried in spreading:
+            entities = {hit.a_id, hit.b_id}
+            for (a_id, b_id, _), touch in self._touches.items():
+                if (a_id, b_id) != (hit.a_id, hit.b_id) and {a_id, b_id} & entities:
+                    touch.owed |= carried - touch.news
 
     def note_transfer(self, entity_id: str, t_ms: int) -> list[InteractionEvent]:
         """A transfer touched the entity: its wash dwell starts over, it may be washed again, and an open wash on it
@@ -250,24 +295,6 @@ class Segmenter:
         self._washed.discard(entity_id)
         wash = self._washes.pop(entity_id, None)
         return [] if wash is None else [wash.event()]
-
-    def cut_for_new_touches(self, t_ms: int, new_touches: list[Hit]) -> list[InteractionEvent]:
-        """Cut every open transfer that started before this frame and shares an entity with a new touch on another
-        pair. Its part so far is written, and its rest starts at its next hit, after the new touch's first hit.
-
-        Without the cut, a long transfer stamped at its start applies before the new touch for all of its length,
-        and what the new touch brings never crosses it.
-        """
-        written = []
-        for new in new_touches:
-            entities = {new.a_id, new.b_id}
-            for key, segment in list(self._open.items()):
-                shares_an_entity = segment.a_id in entities or segment.b_id in entities
-                same_pair = (segment.a_id, segment.b_id) == (new.a_id, new.b_id)
-                if shares_an_entity and not same_pair and segment.t_start_ms < t_ms:
-                    written.append(self._open.pop(key).event())
-                    self._write_next.add(key)
-        return written
 
     def add_wash(self, hit: Hit) -> list[InteractionEvent]:
         """One wash hit on a self pair: extend the entity's open wash, start one, or drop it. Returns any event to
@@ -295,17 +322,15 @@ class Segmenter:
         return written
 
     def close_stale(self, t_ms: int) -> list[InteractionEvent]:
-        """Close every transfer with no hit for longer than merge_gap_ms and every wash with none for wash_gap_ms,
-        and forget what can no longer matter."""
+        """End every touch with no hit for longer than merge_gap_ms, close every wash with none for wash_gap_ms, and
+        forget what can no longer matter. A touch's edges are already written, so only washes are written here."""
         s = self.settings
-        stale = [key for key, segment in self._open.items() if t_ms - segment.t_end_ms > s.merge_gap_ms]
-        written = [self._open.pop(key).event() for key in stale]
+        ended = [key for key, touch in self._touches.items() if t_ms - touch.last_hit_ms > s.merge_gap_ms]
+        for key in ended:
+            del self._touches[key]
         rinsed = [entity_id for entity_id, wash in self._washes.items() if t_ms - wash.t_end_ms > s.wash_gap_ms]
-        written += [self._washes.pop(entity_id).event() for entity_id in rinsed]
+        written = [self._washes.pop(entity_id).event() for entity_id in rinsed]
 
-        for key in [key for key, last_ms in self._last_hit_ms.items() if t_ms - last_ms > s.merge_gap_ms]:
-            del self._last_hit_ms[key]
-            self._write_next.discard(key)
         settled = [
             entity for entity, last_ms in self._last_transfer_ms.items() if t_ms - last_ms >= s.wash_min_dwell_ms
         ]
@@ -314,10 +339,9 @@ class Segmenter:
         return written
 
     def close_all(self) -> list[InteractionEvent]:
-        """Close every open transfer and wash (the stream ended), in edge order."""
-        events = [segment.event() for segment in self._open.values()]
-        events += [wash.event() for wash in self._washes.values()]
-        self._open.clear()
+        """Close every open wash (the stream ended), in edge order. Every touch's edges are already written."""
+        events = [wash.event() for wash in self._washes.values()]
+        self._touches.clear()
         self._washes.clear()
         return sorted(events, key=event_order)
 

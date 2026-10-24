@@ -9,8 +9,9 @@ Rules: 1 fail closed: one rinse is one wash, and a wash never erases what reache
        sink; 5 time runs forward: edge order follows cause and effect, and a transfer reaches the database the frame
        it is first seen, so a plate at the pass is judged with it
 
-Each scene is one a review found letting a plate PASS. The graph applies edges in (t_start_ms, t_end_ms) order with
-noisy-OR, so these tests check the edges the step writes, through the graph that reads them.
+Each scene is one a review found letting a plate PASS, plus one a demo found holding a plate that should pass (a
+touch written as several edges). The graph applies edges in (t_start_ms, t_end_ms) order with noisy-OR, so these
+tests check the edges the step writes, through the graph that reads them.
 """
 
 import pytest
@@ -72,6 +73,34 @@ def test_one_rinse_with_a_dropout_is_one_wash_and_the_plate_holds(fps):
 
     assert [event["action"] for event in events].count("clean.wash") == 1
     assert peanut_after(events, "plate-t1") >= ANAPHYLACTIC_FLAG
+
+
+@pytest.mark.parametrize("fps", [15, 30, 60])
+def test_a_washed_knife_resting_on_a_plate_is_one_touch_so_an_allergy_plate_can_pass(fps):
+    """A knife scoops from the peanut bin, is rinsed for 4 s, then rests on a plate for 2 s. That is one touch and
+    one edge: the plate gets 80% of the 5% the wash left, about 0.04, under an allergy ticket's 0.05 flag, while an
+    anaphylactic ticket's 0.01 still holds. Written as several edges, the knife and the plate would raise each other
+    past 0.05 the longer it lay there."""
+    knife = Track(
+        KNIFE,
+        "tool",
+        (
+            (0, BIN_AT),
+            (600, BIN_AT),
+            (1000, WASH_AT),
+            (5000, WASH_AT),
+            (5400, PLATE_AT),
+            (7400, PLATE_AT),
+            (7700, (0.8, 0.5)),
+            (8000, (0.8, 0.5)),
+        ),
+    )
+    frames = render([still("bin-1", "bin", BIN_AT, 8000), still("plate-t1", "plate", PLATE_AT, 8000), knife], 8000, fps)
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    assert [event["action"] for event in events if event["b_id"] == "plate-t1"] == ["transfer.contact"]
+    assert ANAPHYLACTIC_FLAG <= peanut_after(events, "plate-t1") < ALLERGY_FLAG
 
 
 @pytest.mark.safety
