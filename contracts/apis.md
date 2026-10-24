@@ -245,12 +245,14 @@ Owner: **orders** (`kitchen/orders/api.py`). Consumer: **outputs** (tablet scree
 
 ## Vision HTTP API (on the Pi)
 
-Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start plate" button, camera overlays, gate health watch).
+Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start plate" button, camera overlays, gate health watch, zone editor).
 
 | Method and path | Body | Returns | Notes |
 |---|---|---|---|
 | `POST /plates/start` | `{"ticket_id": str}` | `{"plate_id": str}` | Binds the plate at the plating spot. Otherwise `409 no_plate_at_spot`, `409 multiple_plates_at_spot` or `409 plate_already_bound`; never guesses |
 | `GET /stream.mjpg` | — | MJPEG | Raw camera stream |
 | `GET /health` | — | `{"fps": float, "detector": "onnx"\|"hailo", "last_frame_t_ms": int}` | `detector` is `onnx` until the Hailo is connected. The gate goes to `fault` if this goes stale |
+| `GET /zones` | — | `{"zones": [{"zone_id": str, "kind": str, "polygon": [[x, y], ...]}, ...]}` | The zones in use now, in the zones file format (`kitchen/vision/zones.py`): `kind` as in the `zone` table, points normalized 0..1 like boxes, bin slots named `slot-<n>` |
+| `PUT /zones` | `{"zones": [...]}`, as `GET /zones` returns | The zones now in use, as `GET /zones` | Replaces every zone. A body that isn't a valid zones file is `422 bad_zones` (the message says which zone and why), and nothing changes. Otherwise it saves the zones file (`500 internal_error` if it can't, and nothing changes), uses the new zones from the next frame, and replaces the `zone` table (`503 state_unavailable` if the database can't be written, and the old zones stay). Entities keep their IDs and origins: a zone change never renames a bin or makes anything clean |
 
 Overlays are drawn client-side from each entity's latest `entity_state` (box and allergens).
