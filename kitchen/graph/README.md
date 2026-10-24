@@ -4,7 +4,7 @@
 
 ## What agents expect
 
-The interface is [`ProvenanceGraph` in contracts/apis.md](../../contracts/apis.md#provenancegraph): `reach`, `subgraph`, `unknown_ancestors`, `version`. It raises `GraphUnavailable` on any failure. The graph builds itself from `StateClient` (`entity`, `bin_profile`, `plate_binding`, `interaction`), and writes each entity's live allergens as `entity_state` rows (`move_entity`) for the camera overlays.
+The interface is [`ProvenanceGraph` in contracts/apis.md](../../contracts/apis.md#provenancegraph): `reach`, `subgraph`, `unknown_ancestors`, `version`. It raises `GraphUnavailable` on any failure. The graph builds itself from `StateClient` (`entity`, `bin_profile`, `plate_binding`, `interaction`). `LiveRisk` (`risk.py`) writes each entity's live allergens as `entity_state` rows (`move_entity`) for the camera overlays.
 
 The graph math the agents assume (from the original spec):
 
@@ -32,9 +32,19 @@ These live in `kitchen/shared/contract_tests/` (written by platform). Your graph
 - `reachability.py`: `reach` (every allergen above 0, with its strongest chain from a bin), `unknown_ancestors`, and `subgraph` (the edges on time-forward paths into the plate, plus a node for each entity they touch).
 - **Chains.** A chain starts at a bin. A wash ends the washed entity's chains, since what's left is residue. Allergens from residue or unknown history get an empty chain; their probability still counts, and `unknown_ancestors` names the unknown-history entities.
 - **Fail closed.** Any error, or a plate the database doesn't hold, raises `GraphUnavailable`. An edge naming an entity the database doesn't hold treats that entity as unknown history.
-- **Not built yet:** `risk.py` (live `entity_state` rows for the overlays).
+- `risk.py`: `LiveRisk(state, clock)`, the live `entity_state` rows for the camera overlays. It is not part of the verdict path.
+  Whenever an interaction edge lands (a flag set from the change feed, so nothing heavy runs on the camera's frame-loop thread), a
+  background thread at about 5 Hz reads the shift with `read_shift`, runs `propagate`, and appends one row for each tool, hand and
+  plate whose shown risk changed: probabilities rounded to 3 decimals (never rounded down to 0), `unknown: true` only for an
+  unwashed `origin: unknown` entity, and `caused_by` set to the latest edge touching it (without `caused_by` the joins ignore the
+  allergens). The row copies `zone`, `box` and `t_ms` from the entity's newest row, so it moves nothing: `last_seen_t_ms` stays
+  put and a plate at the pass isn't judged again. `update_once()` does one update on the caller's thread; `start(hz)` / `stop()`
+  run it in the background. An error writes nothing and is tried again next tick, so a failure never shows a clean entity.
+  **Bins get no rows:** `start_profile` reads a bin's start from the profile the database joins to it, so a row would become the
+  bin's start and the graph would count the same contact twice. (A bin that picked up an allergen from a tool still shows its
+  own profile. Showing it needs the graph to read `bin_profile` itself, which the `StateClient` doesn't offer; see the PR.)
 
-Tests: `uv run pytest kitchen/graph` (the shared contract suite plus the graph's own), `VERDICT_GOLDEN_GRAPH=real uv run pytest kitchen/verdict`, and `uv run pytest tests/e2e --graph real`.
+Tests: `uv run pytest kitchen/graph` (the shared contract suite plus the graph's own, and `tests/test_risk.py` for `LiveRisk`), `VERDICT_GOLDEN_GRAPH=real uv run pytest kitchen/verdict`, and `uv run pytest tests/e2e --graph real`.
 
 ## Handing off
 
