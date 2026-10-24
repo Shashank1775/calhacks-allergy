@@ -128,6 +128,15 @@ class VisionSettings:
     track_match_iou: float = 0.3
     track_lost_ms: int = 1000
 
+    # Which tracker runs (tracking.py): "iou", the default, matches each detection to a track's last box; "motion" is
+    # experimental and stays off until real overhead footage shows it helps (compare_trackers.py). Motion mode matches
+    # a recently seen track at its predicted box, lets it take the one detection within motion_gate_diagonals of its
+    # box's diagonal when nothing else is nearby, and adds stricter identity guards. "Recently seen" means matched in
+    # the last update or the one before, at most motion_recent_ms ago.
+    tracker: str = "iou"
+    motion_recent_ms: int = 250
+    motion_gate_diagonals: float = 1.0
+
     # Known-clean source: what is visible this long after the shift starts counts as there at shift start (clean).
     shift_start_ms: int = 3000
 
