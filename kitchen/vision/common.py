@@ -120,18 +120,20 @@ class VisionSettings:
     # Side of the square hand box, normalized to the frame's larger side; it extends from the wrist away from the elbow.
     hand_box_size: float = 0.08
 
-    # Tracking (ByteTrack style): high and low score bands, the IoU a match needs, and how many frames a lost track
-    # waits before it ends. A track that ends is never revived: the object, if seen again, is a new entity.
+    # Tracking (ByteTrack style): high and low score bands, the IoU a match needs, and how long a lost track (or a
+    # hand whose wrist went unseen) waits before it ends. Time, not frames, so a slow frame rate can't stretch it. A
+    # track that ends is never revived: the object, if seen again, is a new entity with unknown history.
     track_high_score: float = 0.5
     track_low_score: float = 0.1
     track_match_iou: float = 0.3
-    track_lost_frames: int = 30
+    track_lost_ms: int = 1000
 
     # Known-clean source: what is visible this long after the shift starts counts as there at shift start (clean).
     shift_start_ms: int = 3000
 
     # "Start plate" binds only from a frame at most this old (plates.py): a frozen camera's last frame must not bind
-    # whatever plate used to be on the spot. At 30 FPS this allows about 15 dropped frames.
+    # whatever plate used to be on the spot. At 30 FPS this allows about 15 dropped frames. It also counts every plate
+    # seen at the spot over the last track_lost_ms, so a second plate missed for a frame still refuses the bind.
     plate_bind_max_age_ms: int = 500
 
     # The change mask, with the agreed clip geometry (AGENTS.md, Open questions: clip geometry).
