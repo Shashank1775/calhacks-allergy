@@ -166,6 +166,7 @@ class LayaParser(Protocol):
 ```
 
 - Raises `LayaParserUnavailable`. With no cached result, the tablet falls back to manual entry. It never guesses.
+- Laya reads text only. A `profile_bin` call with only an image raises `LayaParserUnavailable`; it never returns an empty profile.
 - **Fake:** `FakeLayaParser`, a deterministic keyword parser covering the notes in the orders eval set.
 
 ## Transcriber and Speaker

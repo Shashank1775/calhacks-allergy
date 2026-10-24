@@ -13,7 +13,7 @@ We need a model that turns a ticket note into forbidden allergens and a bin labe
 
 ## Decision
 
-- Use **Laya**, fine-tuned on our own examples. Training runs on pina1 with Laya's own `laya.train` recipe.
+- Use **Laya**, fine-tuned on our own examples. Training runs on pina1 (the lab's GPU server, reached over the Georgia Tech VPN) with Laya's own `laya.train` recipe.
 - The interface is `LayaParser` (contracts/apis.md). Its adapter asks Laya typed questions (does the note forbid each allergen, how severe, do traces matter, is an ingredient allowed; does the bin contain each allergen) and builds `ParseResult` and `AllergenProfile` from the answers.
 - Answers below the question threshold become one-tap questions, as before.
 
@@ -21,4 +21,5 @@ We need a model that turns a ticket note into forbidden allergens and a bin labe
 
 - No API keys, no per-call cost, and it works offline.
 - Laya answers questions; it doesn't write text. Free-text fields (such as the name of an allowed ingredient) come from the note itself or a one-tap question.
-- The checkpoint we use is English-only.
+- The checkpoint we use is English-only, and reads at most 512 tokens per note.
+- The base checkpoint is close to chance on our questions. It only becomes useful after fine-tuning, and its probabilities are only calibrated after the temperature refit that `laya.train` runs at the end.

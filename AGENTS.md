@@ -249,7 +249,7 @@ Everything here runs on its default until its owner decides otherwise.
 | OQ-2 | Only the nine major allergens, or child units? | **Settled:** nine majors; exceptions stored as free-text ingredient |
 | OQ-3 | Default severity per allergen unit | `allergy` (owner) |
 | OQ-4 | Pass threshold per severity (preference / intolerance / allergy / anaphylactic) | **Settled:** 0.80 / 0.90 / 0.95 / 0.99 |
-| OQ-5 | What backs Laya? | **Decided:** our fine-tuned copy of convaiinnovations/laya, trained on pina1 and run locally (decision 0012) |
+| OQ-5 | What backs Laya? | **Decided:** our fine-tuned copy of convaiinnovations/laya, trained on pina1, the lab's GPU server, and run locally (decision 0012) |
 | OQ-6 | Camera overlays drawn client-side or burned into the Pi stream? | Client-side (vision + outputs) |
 | OQ-7 | SpacetimeDB local or Maincloud? | Local standalone (owner + partner) |
 | OQ-8 | What does `trace_sensitive: false` change? | Every transfer edge counts (verdict, owner approves) |
@@ -291,7 +291,7 @@ gh pr list --label ready-to-merge                      # the owner's merge queue
 | Interaction / edge | A classified contact between two entities: `transfer.contact`, `transfer.scoop`, `transfer.wipe`, `clean.wash` or `unimportant` |
 | Pass / expo / plating spot | Where plates leave / the expediter's board / where a plate is bound to its ticket |
 | Verdict | PASS or HOLD for one plate against one ticket revision |
-| Laya | Our fine-tuned copy of the open Laya model. It doesn't write text: it answers typed questions with calibrated probabilities. As `LayaParser` it reads ticket notes and bin labels. It plays no part in the verdict |
+| Laya | Our fine-tuned copy of the open Laya model. It doesn't write text: it answers typed questions with probabilities (calibrated once fine-tuned). As `LayaParser` it reads ticket notes and bin labels. It plays no part in the verdict |
 | Zone rules / ConvLSTM | Hand-written classifier, always on / learned spatiotemporal classifier (partner) over clips, adopted only if it wins |
 | Change mask | Per-frame single channel, bright where pixels changed since the last frame (brighter = more movement). One shared function for live and sim |
 | Clip | One candidate pair over time: box A mask, box B mask, change mask, plus elapsed time per step. The ConvLSTM's only input |
