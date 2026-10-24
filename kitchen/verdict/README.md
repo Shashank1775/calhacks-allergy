@@ -26,8 +26,8 @@ The sum is the safe bound however the allergens depend on each other (one knife 
 
 | File | What it does |
 |---|---|
-| `policy.py` | `decide()`, `clean_confidence()` and `VerdictSettings` (thresholds, staleness window, timeouts). Pure |
-| `service.py` | Watches `StateClient`, triggers on plate-at-pass and amendments, records verdicts. Also `FakeVerdictFeed`, which outputs builds against |
+| `policy.py` | `decide()` and `clean_confidence()`. Pure; the pass threshold comes from the ticket |
+| `service.py` | `VerdictService`: watches `StateClient`, triggers on plate-at-pass and amendments, records verdicts (retrying while the database is down). `VerdictSettings` (staleness window). Also `FakeVerdictFeed`, which outputs builds against |
 
 ## In and out
 
@@ -58,7 +58,8 @@ Time running forward belongs to the partner's graph; we check it end to end by r
 - Tests live in `kitchen/verdict/tests/`. Run `uv run pytest kitchen/verdict`; the safety suite alone is `uv run pytest kitchen/verdict -m safety`.
 - They use `FakeProvenanceGraph` (answers from scenario ground truth), `FakeStateClient` and `FakeClock` (platform).
 - The golden runner is parametrized over `contracts/scenarios/*.json`, so a new scenario needs no code change.
-- We ship `FakeVerdictFeed` (replays scenario verdicts into `FakeStateClient` on a `Clock`).
+- We ship `FakeVerdictFeed`: `feed = FakeVerdictFeed(state, scenario_path); feed.play_until(clock.now_ms())` writes the scenario's expected verdicts into `state` as their times pass.
+- The golden runner (`test_golden.py`) replays every scenario through `VerdictService`; `VERDICT_GOLDEN_GRAPH=real` will run it on the partner's graph once that's importable.
 
 ## Watch out for
 
