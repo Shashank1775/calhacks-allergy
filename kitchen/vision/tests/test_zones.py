@@ -81,6 +81,10 @@ def test_sample_zones_do_not_overlap():
         (zone_entry(polygon=[[0.1, -0.01], [0.2, 0.1], [0.2, 0.2]]), "outside"),
         (zone_entry(polygon=[[0.1, 0.1], [0.2, 0.2]]), "at least 3"),
         (zone_entry(polygon=[[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]]), "no area"),
+        (zone_entry(polygon=[[0.1, 0.1], [0.5, 0.1], [0.1, 0.3], [0.6, 0.4]]), "edges cross"),
+        (zone_entry(polygon=[[0.1, 0.1], [0.3, 0.1], [0.1, 0.3], [0.3, 0.3]]), "edges cross"),
+        (zone_entry(polygon=[[0.1, 0.1], [0.3, 0.1], [0.2, 0.1], [0.2, 0.3]]), "edges cross"),
+        (zone_entry(polygon=[[0.1, 0.1], [0.2, 0.1], [0.2, 0.1], [0.2, 0.2]]), "twice"),
         (zone_entry(zone_id="bin-1"), "slot-<n>"),
         (zone_entry(zone_id="slot-01"), "slot-<n>"),
         (zone_entry(zone_id="slot-a"), "slot-<n>"),
@@ -125,12 +129,16 @@ def test_load_names_the_file_when_it_is_bad(tmp_path):
 
 
 @pytest.mark.safety
-@pytest.mark.parametrize("text", [None, "{not json"])
-def test_load_refuses_a_missing_or_broken_file(tmp_path, text):
+@pytest.mark.parametrize(
+    "content",
+    [None, b"{not json", b"\xff\xfe\x00garbage", '{"zones": []}'.encode("utf-16")],
+    ids=["missing", "not-json", "not-utf8", "utf16"],
+)
+def test_load_refuses_a_missing_or_broken_file(tmp_path, content):
     path = tmp_path / "zones.json"
-    if text is not None:
-        path.write_text(text)
-    with pytest.raises(ZoneFileError, match="can't read"):
+    if content is not None:
+        path.write_bytes(content)
+    with pytest.raises(ZoneFileError, match="zones.json: can't read"):
         load_zones(path)
 
 
@@ -292,6 +300,17 @@ def test_pixel_to_point_normalizes_to_the_image():
     assert pixel_to_point(320, 240, 640, 480) == (0.5, 0.5)
     assert pixel_to_point(0, 0, 640, 480) == (0.0, 0.0)
     assert pixel_to_point(700, -5, 640, 480) == (1.0, 0.0)
+
+
+@pytest.mark.safety
+def test_corners_clicked_out_of_order_are_refused_so_the_person_redoes_them():
+    # TL, TR, BL, BR on a skewed slot: a bow-tie that would leave most of the slot in no zone.
+    clicks = [(13, 10), (115, 10), (13, 86), (122, 91)]
+    polygon = [pixel_to_point(x, y, 640, 480) for x, y in clicks]
+    with pytest.raises(ZoneFileError, match="edges cross"):
+        add_zone([], Zone("slot-1", "bin_slot", polygon))
+    in_order = [polygon[0], polygon[1], polygon[3], polygon[2]]
+    assert add_zone([], Zone("slot-1", "bin_slot", in_order))[0].polygon == in_order
 
 
 def test_add_zone_appends_a_good_zone_and_refuses_a_bad_one():

@@ -10,8 +10,8 @@ Rules: fail closed: a point in no zone gets None, never the nearest zone; overla
 The zones file:
     {"zones": [{"zone_id": "slot-1", "kind": "bin_slot", "polygon": [[x, y], [x, y], [x, y]]}, ...]}
 kind is one of ZONE_KINDS (contracts/state-tables.md, zone table). Points are normalized to the original camera frame
-(0..1, like boxes), a polygon has at least 3 points and some area, zone_ids are unique, and a bin slot is named
-slot-<n> because identity maps slot-<n> to the entity bin-<n>.
+(0..1, like boxes), a polygon has 3+ distinct corners, some area and no crossing edges, zone_ids are unique, and a
+bin slot is named slot-<n> because identity maps slot-<n> to the entity bin-<n>.
 
 Usage:
   uv run python -m kitchen.vision.zones calibrate --image <still.jpg> --out zones.json
@@ -43,8 +43,9 @@ class ZoneFileError(ValueError):
 
 
 def check_zones(zones: list[Zone]) -> None:
-    """Raise ZoneFileError unless every zone follows the format: a known kind, 3+ points in 0..1 with nonzero area, a
-    unique zone_id, and slot-<n> for bin slots. Run on load, save, lookup and push, so bad zones never get used."""
+    """Raise ZoneFileError unless every zone follows the format: a known kind, 3+ distinct points in 0..1 forming a
+    simple polygon (no crossing edges) with nonzero area, a unique zone_id, and slot-<n> for bin slots. Run on load,
+    save, lookup and push, so bad zones never get used."""
     seen = set()
     for zone in zones:
         name = f"zone {zone.zone_id!r}"
@@ -62,6 +63,12 @@ def check_zones(zones: list[Zone]) -> None:
         for x, y in zone.polygon:
             if not (0 <= x <= 1 and 0 <= y <= 1):
                 raise ZoneFileError(f"{name}: point ({x}, {y}) is outside the normalized frame 0..1")
+        if len(set(zone.polygon)) != len(zone.polygon):
+            raise ZoneFileError(f"{name}: a corner is given twice (a double click?)")
+        if edges_cross(zone.polygon):
+            # A bow-tie leaves most of the intended area in no zone, so a bin parked there could be taken for a plate
+            # with a clean origin; its shoelace area is also wrong, which breaks the smallest-zone tie-break.
+            raise ZoneFileError(f"{name}: polygon edges cross (corners out of order?)")
         if polygon_area(zone.polygon) <= EDGE_TOLERANCE:
             raise ZoneFileError(f"{name}: the polygon has no area (its points are on one line)")
 
@@ -103,7 +110,8 @@ def load_zones(path: str | Path) -> list[Zone]:
     path = Path(path)
     try:
         data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
+        # ValueError covers both bad JSON and bytes that aren't UTF-8 text (a binary or UTF-16 file).
         raise ZoneFileError(f"{path}: can't read the zones file: {error}") from error
     try:
         return parse_zones(data)
@@ -145,6 +153,44 @@ def on_segment(point: tuple[float, float], a: tuple[float, float], b: tuple[floa
     within_x = min(ax, bx) - EDGE_TOLERANCE <= px <= max(ax, bx) + EDGE_TOLERANCE
     within_y = min(ay, by) - EDGE_TOLERANCE <= py <= max(ay, by) + EDGE_TOLERANCE
     return within_x and within_y
+
+
+def segments_touch(
+    a: tuple[float, float], b: tuple[float, float], c: tuple[float, float], d: tuple[float, float]
+) -> bool:
+    """True if segment a-b and segment c-d cross or touch (within EDGE_TOLERANCE)."""
+
+    def side(p, q, r):
+        """Which side of the line p-q the point r is on: +1, -1, or 0 when on the line."""
+        cross = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        if cross > EDGE_TOLERANCE:
+            return 1
+        if cross < -EDGE_TOLERANCE:
+            return -1
+        return 0
+
+    straddles_cd = side(c, d, a) * side(c, d, b) < 0
+    straddles_ab = side(a, b, c) * side(a, b, d) < 0
+    if straddles_cd and straddles_ab:
+        return True
+    return on_segment(a, c, d) or on_segment(b, c, d) or on_segment(c, a, b) or on_segment(d, a, b)
+
+
+def edges_cross(polygon: list[tuple[float, float]]) -> bool:
+    """True if any two edges of `polygon` that don't share a corner cross or touch, so it isn't a simple polygon.
+
+    Corners clicked out of order make a bow-tie, and ray casting then covers only its lobes. Touching counts too, since
+    a polygon that pinches at a point is just as likely a misclick. O(n^2), which is nothing for a hand-clicked zone.
+    """
+    edges = list(zip(polygon, polygon[1:] + polygon[:1], strict=True))
+    count = len(edges)
+    for i in range(count):
+        for j in range(i + 2, count):
+            if i == 0 and j == count - 1:
+                continue  # the first and last edges share the first corner
+            if segments_touch(*edges[i], *edges[j]):
+                return True
+    return False
 
 
 def point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
