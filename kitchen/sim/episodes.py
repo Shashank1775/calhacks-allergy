@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-GENERATOR_VERSION = "2.3.0"
+GENERATOR_VERSION = "2.4.0"
 STEPS = 16  # clip length T: about one second (AGENTS.md, Open questions: clip geometry)
 FRAMES = STEPS + 1  # one extra frame, so the first step has a change mask too
 STEP_MS = 1000 / STEPS
@@ -279,19 +279,21 @@ def drag_food(
 ) -> None:
     """Food near a moving tip gets pushed along and smeared, frame by frame (a real transfer the camera can see).
 
+    Each push adds to wherever the food already goes, so two movers in one bin (A and a stirring hand) both show.
     Pushed food stays inside its container, so it never ends up on the counter under someone else's tool.
     """
     for f in frames:
         step = movers[f] - movers[f - 1]
         for blob in food:
-            blob.position[f:] = blob.position[f - 1]
-            if np.linalg.norm(blob.position[f] - movers[f]) < radius + blob.radius:
-                # Smear it, but never longer than the container is wide, and keep the whole smear inside the rim.
-                longest = max((container.half_size.min() - RIM_WIDTH) / blob.radius, 1.0)
-                blob.stretch[f:] = min(blob.stretch[f - 1] + np.linalg.norm(step) * 25, 3.0, longest)
-                shifted = blob.position[f] + step * strength
-                blob.position[f:] = pull_inside(container, shifted, blob.radius * blob.stretch[f], f)
-                blob.angle[f:] = np.arctan2(step[1], step[0])
+            if np.linalg.norm(blob.position[f] - movers[f]) >= radius + blob.radius:
+                continue
+            # Smear it, but never longer than the container is wide, and keep the whole smear inside the rim.
+            longest = max((container.half_size.min() - RIM_WIDTH) / blob.radius, 1.0)
+            blob.stretch[f:] = min(blob.stretch[f - 1] + np.linalg.norm(step) * 25, 3.0, longest)
+            blob.angle[f:] = np.arctan2(step[1], step[0])
+            push = step * strength
+            for g in range(f, FRAMES):
+                blob.position[g] = pull_inside(container, blob.position[g] + push, blob.radius * blob.stretch[g], g)
 
 
 def nudge(b: Container, food: list[Food], frame: int, shift: np.ndarray) -> None:
@@ -304,10 +306,13 @@ def nudge(b: Container, food: list[Food], frame: int, shift: np.ndarray) -> None
 def pull_inside(container: Container, point: np.ndarray, margin: float, f: int) -> np.ndarray:
     """The point, moved toward the container's center if needed so a blob of radius `margin` sits inside its body."""
     offset = point - container.center[f]
-    room = np.maximum(container.half_size - RIM_WIDTH - margin, 1e-3)
+    body = container.half_size - RIM_WIDTH
     if container.is_round:
+        # A smaller ellipse of the same shape, so a disk of radius `margin` fits even in a long oval.
+        room = body * max(1.0 - margin / body.min(), 1e-3)
         reach = np.sqrt(((offset / room) ** 2).sum())
     else:
+        room = np.maximum(body - margin, 1e-3)
         reach = np.abs(offset / room).max()
     return container.center[f] + offset / max(reach, 1.0)
 
@@ -335,7 +340,10 @@ def wandering_hand(rng: np.random.Generator, b: Container) -> Actor | None:
         start, end = rng.uniform(0.05, 0.95, 2), rng.uniform(0.05, 0.95, 2)
         u = np.linspace(0, 1, 8)
         line = start + np.outer(u, end - start)
-        if (np.linalg.norm(line - b.center[0], axis=1) > 0.35).all():
+        # The forearm trails about 1.1 behind the palm, back along the path, so keep that clear of B too.
+        back = (start - end) / max(np.linalg.norm(start - end), 1e-6)
+        arm = start + np.outer(np.linspace(0, 1.1, 12), back)
+        if (np.linalg.norm(np.vstack([line, arm]) - b.center[0], axis=1) > 0.35).all():
             path = start + np.outer(np.linspace(0, 1, FRAMES), end - start)
             angle = np.arctan2(*(start - end)[::-1])
             return make_actor(rng, path, np.full(FRAMES, angle), is_tool=False)
@@ -445,6 +453,7 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
             # The smeared blob lands inside B, never on the counter.
             carried.position[drop:] = pull_inside(b, landing, radius * 1.4, drop)
             carried.stretch[drop:] = 1.4
+            carried.angle[drop:] = angle[drop]  # smeared along the tool, like real food sliding off it
             carried.on_actor[:drop] = True
             b_food.append(carried)
         elif kind == "wipe":
@@ -463,9 +472,12 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
         load.on_actor[:] = True
         carried_load.append(load)  # kept apart from B's food, so nothing below drags it off A
 
-    if kind == "motion_nearby":
+    # Someone else stirring B shows up in every kind (always in motion_nearby, sometimes elsewhere), so a second hand
+    # in B says nothing about whether A touched it. It works the far side of B and never moves food on A.
+    if kind == "motion_nearby" or rng.random() < 0.1:
         stirrer = stirring_hand(rng, b, u, approach)
-        drag_food(b, b_food, stirrer.tip, range(1, FRAMES), 0.04, rng.uniform(0.3, 0.6))
+        loose_food = [blob for blob in b_food if not blob.on_actor.any()]
+        drag_food(b, loose_food, stirrer.tip, range(1, FRAMES), 0.04, rng.uniform(0.3, 0.6))
         bystanders.append(stirrer)
     if rng.random() < 0.25:
         wanderer = wandering_hand(rng, b)
