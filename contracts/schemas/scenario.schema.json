@@ -52,7 +52,7 @@
       }
     },
     "late_entities": {
-      "description": "Entities first seen after shift start. origin clean_stack means it came from a designated clean-plate or clean-utensil zone and starts clean; anything else has unknown history (invariant 8).",
+      "description": "Entities first seen after shift start. origin clean_stack means it came from a designated clean-plate or clean-utensil zone and starts clean; anything else has unknown history (safety rule: known-clean source).",
       "type": "array",
       "items": {
         "type": "object",

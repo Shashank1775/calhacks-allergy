@@ -1,4 +1,4 @@
-# The one Python project in this repo: package `kitchen`, managed by uv (AGENTS.md §8).
+# The one Python project in this repo: package `kitchen`, managed by uv (AGENTS.md, Engineering conventions).
 # Owner: team platform. Add dependencies in your own PR and re-run `uv lock`; never hand-merge uv.lock.
 
 [project]
@@ -40,7 +40,7 @@ testpaths = ["kitchen", "tests"]
 # --strict-markers makes a misspelled marker an error, so a `safety` test can't silently lose its marker.
 addopts = ["--import-mode=importlib", "--strict-markers"]
 markers = [
-    "safety: guards one of the nine safety invariants (AGENTS.md §3)",
+    "safety: guards one of the nine safety rules (AGENTS.md, Safety rules)",
     "hardware: needs a real device; CI deselects it",
     "slow: runs nightly; CI deselects it on pull requests",
     "contract: a contract suite that every implementation, fake or real, must pass",

@@ -7,7 +7,6 @@ Emits: StateClient, EntityStore, ProvenanceGraph, InteractionClassifier, LayaPar
        Speaker, GateDriver, Clock; StateUnavailable, GraphUnavailable, LayaParserUnavailable
 Rules: signatures match contracts/apis.md exactly (a test checks method names); no implementations here;
        a missing method is a contracts PR, not a local addition
-Tasks: platform-03
 
 Not built yet.
 """

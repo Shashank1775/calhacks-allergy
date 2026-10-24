@@ -5,7 +5,7 @@
   "description": "What the orders parse step returns for one ticket note. Producer: orders. Consumers: orders apply step, outputs tablet screen.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["draft_id", "note", "source", "parser", "cached", "constraints", "exceptions", "questions", "question_threshold", "sendable"],
+  "required": ["draft_id", "note", "source", "parser", "constraints", "exceptions", "questions", "question_threshold", "sendable"],
   "properties": {
     "draft_id": { "type": "string" },
     "note": { "type": "string", "description": "Text as typed, or as transcribed by Cartesia Ink." },
@@ -16,7 +16,6 @@
       "required": ["name", "version"],
       "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
     },
-    "cached": { "type": "boolean", "description": "True when served from the normalized-note cache." },
     "constraints": {
       "type": "array",
       "items": {
@@ -56,7 +55,7 @@
       }
     },
     "questions": {
-      "description": "One-tap questions. The ticket cannot be sent while any is unanswered (invariant 3).",
+      "description": "One-tap questions. The ticket cannot be sent while any is unanswered (safety rule: no unanswered questions).",
       "type": "array",
       "items": {
         "type": "object",

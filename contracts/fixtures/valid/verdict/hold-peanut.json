@@ -10,7 +10,7 @@
   "pass_threshold": 0.99,
   "reasons": [
     {
-      "code": "exact_flag",
+      "code": "forbidden_allergen",
       "allergen_unit_id": "peanut"
     },
     {
@@ -48,7 +48,7 @@
   ],
   "versions": {
     "policy": "0.1.0",
-    "exact": "0.1.0",
+    "graph": "0.1.0",
     "classifier": "zone_rules-0.1.0"
   }
 }

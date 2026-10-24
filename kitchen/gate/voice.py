@@ -1,11 +1,11 @@
-"""Speaker implementations: ConsoleSpeaker now, Cartesia Sonic after the spike; non-blocking and drops stale lines.
+"""Voice: turn a verdict into a short line with numbers as words ("Hold seven"), and say it.
+Speaker implementations: FakeSpeaker now, Cartesia Sonic later. Non-blocking; stale lines are dropped.
 
 Owner: outputs (agents)
-Step:  pass gate and voice (outputs)
-Reads: spoken line from lines.py
+Step:  gate and screens
+Reads: Verdict, Ticket.number
 Emits: audio out (Speaker)
-Rules: none (voice is never on the critical path to HOLD)
-Tasks: outputs-04 (ConsoleSpeaker), outputs-11 (Sonic spike)
+Rules: voice is never on the critical path to HOLD
 
 Not built yet.
 """

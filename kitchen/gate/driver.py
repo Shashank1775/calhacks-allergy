@@ -1,11 +1,10 @@
-"""GateDriver implementations: ConsoleGate and MockGPIOGate now, the GPIO driver for servo, lights and buzzer in M2.
+"""GateDriver implementations: FakeGate (prints and records calls) now, the GPIO driver for servo, lights and buzzer later.
 
 Owner: outputs (agents)
-Step:  pass gate and voice (outputs)
+Step:  gate and screens
 Reads: gate state from service.py (idle | pass | hold | fault, ticket number)
-Emits: servo position, red/green light, buzzer (GateDriver)
-Rules: 1 any driver exception means fault
-Tasks: outputs-03; GPIO driver in M2 (hardware)
+Emits: servo position, red/green light, buzzer
+Rules: fail closed: any driver exception means fault
 
 Not built yet.
 """

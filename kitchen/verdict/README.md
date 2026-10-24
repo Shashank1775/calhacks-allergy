@@ -1,76 +1,67 @@
-# kitchen/verdict: Final analysis (pass or hold)
+# kitchen/verdict: Pass or hold
 
 **Owner:** team `verdict` (agents). This is the safety-critical agent team.
 
-**Pipeline step:** when a plate reaches the pass, or its ticket is amended, decide PASS or HOLD in plain code and explain the chain.
+When a plate reaches the pass, or its ticket is amended, decide PASS or HOLD in plain code and explain the chain.
 
 ## What happens here
 
-- A bound plate enters the `pass` zone, or its ticket's revision goes up. The service wakes up.
+- A bound plate enters the `pass` zone, or its ticket gets a new revision. The service wakes up.
 - It asks the partner's graph for exact reachability (`reach`) and the plate's unknown-history ancestors (`unknown_ancestors`).
-- `decide()` combines that with the ticket: **HOLD** if a forbidden allergen may have reached the plate, if an unknown ancestor exists, if clean-confidence is below `ticket.pass_threshold`, or if anything failed.
-- The verdict and its chain are written atomically (`record_verdict`), so the gate, voice and expo board can react.
-- Later (M4), held chains are grouped into Repeated Mistakes with a suggested fix.
+- `decide()` combines that with the ticket: **HOLD** if a forbidden allergen is flagged, if an unknown ancestor exists, if clean-confidence is below the pass threshold, or if anything failed.
+- The verdict and its chain are written in one call (`record_verdict`), so the gate, voice and expo board can react.
+
+**Clean-confidence** is how sure we are the plate carries none of the ticket's forbidden allergens:
+
+```
+confidence = max(0, 1 - sum(p[a] for a in forbidden))   # p[a] from reach; 0 if absent
+           = 0 if any input is unhealthy (error, missing input, stale plate, unknown history)
+flag a forbidden allergen when 1 - p[a] <= pass_threshold
+hold = not healthy or any flag or confidence < pass_threshold
+```
+
+The sum is the safe bound however the allergens depend on each other (one knife can carry peanut and soy together). The pass threshold is the larger of the ticket's `pass_threshold` and the default for its strictest severity, so a ticket can only make it stricter. Same inputs give byte-identical verdict JSON.
 
 ## Files
 
 | File | What it does |
 |---|---|
-| `policy.py` | `decide()`: the one plain-code function that returns PASS or HOLD with every reason. Pure. Also `VerdictSettings`, the single home for thresholds and timeouts |
-| `confidence.py` | Clean-confidence from reachability and input health, as defined by the ADR (verdict-02). Pure and monotone |
-| `service.py` | Watches `StateClient`, triggers on plate-at-pass and amendments, records verdict and chain. Also `ScriptedVerdictSource`, the fake that `outputs` builds against |
-| `mistakes.py` | Repeated Mistakes: groups held chains by source, tool kind and allergen, and writes `mistake_pattern` with a suggested fix |
+| `policy.py` | `decide()`, `clean_confidence()` and `VerdictSettings` (thresholds, staleness window, timeouts). Pure |
+| `service.py` | Watches `StateClient`, triggers on plate-at-pass and amendments, records verdicts. Also `FakeVerdictFeed`, which outputs builds against |
 
-## Inputs and outputs
+## In and out
 
 | Direction | What | Contract | From / to |
 |---|---|---|---|
-| In | Ticket revision: forbidden units, severity, trace sensitivity, `pass_threshold`, exceptions | `ticket` | orders, via `StateClient` |
+| In | Ticket revision: forbidden allergens, severity, `pass_threshold`, exceptions | `ticket` | orders, via `StateClient` |
 | In | Plate binding and plate zone (`pass` triggers a verdict) | `plate_binding`, `entity` | vision and the partner entity store, via `StateClient` |
 | In | Exact reachability with chains | `allergen_reach` via `ProvenanceGraph.reach` | partner graph |
 | In | Unknown-history ancestors | `ProvenanceGraph.unknown_ancestors` | partner graph |
-| Out | Verdict and chain (`verdict`, `verdict_step` tables) | `verdict`, `chain_step` | outputs (gate, voice, expo board) |
-| Out | Recurring contamination paths | `mistake_pattern` | outputs (Repeated Mistakes view) |
+| Out | Verdict and chain (`verdict` table) | `verdict`, `chain_step` | outputs (gate, voice, expo board) |
 
-## Safety rules that apply
+## Safety rules
 
-See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). Every test below is marked `safety`; properties use `hypothesis`.
+See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `safety`; properties use `hypothesis`.
 
-| Invariant | How we could break it | Guarding test |
+| Rule | How we could break it | Test |
 |---|---|---|
-| 1. Fail closed | An exception, timeout, `StateUnavailable`, `GraphUnavailable`, missing ticket or binding, or a stale plate reaches PASS | Fault injection at every `StateClient` and `ProvenanceGraph` call site: the result is always HOLD with `error`, `missing_input` or `stale_track` |
-| 4. Allergens, not contacts | Policy reads entity-level bans, or an exception suppresses a flag | Policy reads only allergen units. `ticket.exceptions` never suppress a flag (OQ-2 default) |
-| 8. Unknown history | An unknown ancestor is ignored | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` and `clean-plate-from-stack` |
-| 9. Late changes | An amendment reuses the previous verdict | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy` |
+| Fail closed | An exception, timeout, `StateUnavailable`, `GraphUnavailable`, missing ticket or binding, or a stale plate reaches PASS | Fault injection at every `StateClient` and `ProvenanceGraph` call: the result is always HOLD with `error`, `missing_input` or `stale_track`, and confidence 0 |
+| Plain-code verdict | Anything but `decide()` makes the call, or confidence rises with more evidence | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence |
+| Allergens, not contacts | The policy reads contacts, or an exception suppresses a flag | The policy reads only allergen units. `ticket.exceptions` never suppress a flag |
+| Known-clean source | An unknown ancestor is ignored | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` and `clean-plate-from-stack` |
+| Late changes recheck everything | An amendment reuses the previous verdict | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy` |
 
-Invariant 5 (time-forward) belongs to the partner's graph. We check it end to end by running the golden scenarios against the real graph (verdict-10, `needs-partner`). Until the OQ-8 ADR lands, `trace_sensitive: false` is treated as `true`. Same inputs must produce byte-identical verdict JSON.
-
-## Fakes
-
-- **We use:** `FakeProvenanceGraph` (answers from scenario ground truth), `InMemoryStateClient` and `FixedClock`, all from `kitchen/shared/fakes/` (platform).
-- **We ship:** `ScriptedVerdictSource` (replays fixture verdicts and mistake patterns into `InMemoryStateClient` on a `Clock`).
+Time running forward belongs to the partner's graph; we check it end to end by running the golden scenarios against the real graph once it lands (`needs-partner`). `trace_sensitive: false` is treated as `true` for now.
 
 ## Tests
 
-- Live in `kitchen/verdict/tests/`. Run `uv run pytest kitchen/verdict`; the safety suite alone is `uv run pytest kitchen/verdict -m safety`.
+- Tests live in `kitchen/verdict/tests/`. Run `uv run pytest kitchen/verdict`; the safety suite alone is `uv run pytest kitchen/verdict -m safety`.
+- They use `FakeProvenanceGraph` (answers from scenario ground truth), `FakeStateClient` and `FakeClock` (platform).
 - The golden runner is parametrized over `contracts/scenarios/*.json`, so a new scenario needs no code change.
-- Every PR touching `policy.py`, `confidence.py` or `service.py` is `safety-critical`. `policy.py` is held by one Worker at a time.
+- We ship `FakeVerdictFeed` (replays scenario verdicts into `FakeStateClient` on a `Clock`).
 
-## Milestones
+## Watch out for
 
-- **M0:** `decide()`; clean-confidence ADR; golden scenarios pass through the policy in CI; `ScriptedVerdictSource` for outputs.
-- **M1:** verdict service on `StateClient`; safety suite with fault injection signed off; sim corpus gate with zero false passes; runs against the partner's real graph and database once they land (`needs-partner`).
-- **M2:** live edges; staleness (plate updates, edge lag) → HOLD; rules-only latency ≤ 200 ms; deterministic replay of a recorded session. No hardware work.
-- **M3:** `trace_sensitive` ADR (OQ-8).
-- **M4:** Repeated Mistakes with suggested fixes; live late-change recheck; failure drills (database, graph, stale feed), each ending in HOLD.
-
-## Risks and open questions
-
-| Risk | Mitigation |
-|---|---|
-| Thresholds unknown (OQ-4) | Placeholder defaults in `VerdictSettings`, recorded on every verdict; the owner sets the real values |
-| Clean-confidence ill-defined | M0 ADR (verdict-02). It must be monotone: more evidence of a forbidden allergen never raises it |
-| `trace_sensitive: false` semantics (OQ-8) | Strict until the ADR lands |
-| Exceptions like "coconut is fine" (OQ-2) | Shown to the expo, never used to suppress a flag |
-| The partner's graph isn't ready | `FakeProvenanceGraph` tests the policy only; real-graph runs carry `needs-partner` |
-| A false wash erases real contamination | The graph caps wash efficacy (partner). We track wash-then-hold patterns in Repeated Mistakes |
+- The default pass thresholds are placeholders the owner can change. They live in `VerdictSettings` and are recorded on every verdict.
+- `FakeProvenanceGraph` tests the policy only; real-graph runs carry `needs-partner`.
+- A false wash erases real contamination. The partner's graph caps how much a wash can clean.

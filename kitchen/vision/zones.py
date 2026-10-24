@@ -1,11 +1,10 @@
-"""Zone calibration: file format, click-to-calibrate tool, point-in-polygon assignment, and writing zones to the database.
+"""Zones and plate binding: the zones file, a click-to-calibrate tool, zone assignment, and "start plate" binding.
 
 Owner: vision (agents)
-Step:  Vision (detection + tracking on the Pi)
-Reads: a still image (calibration), zones.json
-Emits: a zone (or null) for each detection; StateClient.set_zones -> zone table
-Rules: 1 no zone guessed; deterministic tie-break for overlapping zones
-Tasks: vision-03, vision-06 (set_zones at startup)
+Step:  vision
+Reads: a still image (calibration), zones.json, current plates, StateClient.get_plate_binding
+Emits: a zone (or none) for each detection; StateClient.set_zones; StateClient.bind_plate
+Rules: fail closed: no zone is guessed; binding refuses with 0 plates, 2+ plates or an already-bound plate
 
 Not built yet.
 """

@@ -1,11 +1,12 @@
-"""Detector interface; picks a backend with VISION_DETECTOR=onnx|hailo (default onnx, local).
+"""Detection: YOLOv8 detection and pose (wrists become hands), run locally with ONNX Runtime, plus the pre- and
+post-processing every backend shares (letterbox, decoding, NMS, keypoints, class map).
 
 Owner: vision (agents)
-Step:  Vision (detection + tracking)
-Reads: frames from camera.py; the deploy bundle in data/models/<name>/ (model.onnx now, model.hef later)
-Emits: detections (knife, spoon, fork, bowl, person keypoints) with normalized boxes and confidence
-Rules: 1 never invent or interpolate detections; backends only run the network, all pre/post-processing is postprocess.py
-Tasks: vision-01 (onnx backend), vision-11 (hailo backend)
+Step:  vision
+Reads: frames from camera.py; the model bundle in data/models/<name>/; VISION_DETECTOR=onnx|hailo (default onnx)
+Emits: detections (knife, spoon, fork, bowl, wrist) with normalized boxes, confidence, and person_id and wrist for hands
+Rules: fail closed: never invent or interpolate detections; backends only run the network, so local results predict
+       Hailo results
 
 Not built yet.
 """

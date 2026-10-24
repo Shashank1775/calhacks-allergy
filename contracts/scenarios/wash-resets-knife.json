@@ -13,8 +13,7 @@
           "peanut": 0.98
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     },
     {
@@ -23,8 +22,7 @@
       "allergen_profile": {
         "probabilities": {},
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     }
   ],

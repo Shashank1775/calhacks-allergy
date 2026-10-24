@@ -2,7 +2,7 @@
   "scenario_id": "late-amendment-adds-dairy",
   "description": "A hand touches butter, then the plate. Revision 1 forbids only peanut and passes. Revision 2 adds milk and must hold on recheck of the full history.",
   "tags": [
-    "invariant-9"
+    "late-changes-recheck"
   ],
   "bins": [
     {
@@ -13,8 +13,7 @@
           "peanut": 0.98
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     },
     {
@@ -25,8 +24,7 @@
           "milk": 0.99
         },
         "unknown": false,
-        "source": "chef",
-        "confirmed_by_chef": true
+        "source": "manual"
       }
     }
   ],
@@ -139,7 +137,7 @@
         "milk"
       ],
       "reason_codes": [
-        "exact_flag"
+        "forbidden_allergen"
       ],
       "chain_event_ids": [
         "e1",

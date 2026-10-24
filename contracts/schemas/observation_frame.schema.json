@@ -91,7 +91,7 @@
               "clean_stack",
               "unknown"
             ],
-            "description": "Set by vision's identity step when the entity is first seen; constant for the entity's life (invariant 8)."
+            "description": "Set by vision's identity step when the entity is first seen; constant for the entity's life (safety rule: known-clean source)."
           }
         }
       }

@@ -14,7 +14,7 @@
       "maximum": 1
     },
     "allergen_unit_id": {
-      "description": "ID from contracts/allergen_units.json (or a child unit once OQ-2 is settled).",
+      "description": "ID from contracts/allergen_units.json: one of the nine major allergens.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*$"
     },

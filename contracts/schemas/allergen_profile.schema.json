@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "allergen_profile.schema.json",
   "title": "AllergenProfile",
-  "description": "Probability that an entity carries each allergen unit. Bins: set by orders (profiling). Tools, hands, plates: clean at shift start, then updated by the partner graph.",
+  "description": "Probability that an entity carries each allergen unit. Bins: set by orders from the bin label (Laya), and a person can adjust it before saving. Tools, hands, plates: clean at shift start, then updated by the partner graph.",
   "type": "object",
   "additionalProperties": false,
   "required": ["probabilities", "unknown", "source"],
@@ -14,15 +14,12 @@
       "additionalProperties": { "$ref": "common.schema.json#/$defs/probability" }
     },
     "unknown": {
-      "description": "True when the entity's history is unknown (appeared mid-shift, re-acquired track). Treated as possibly carrying every allergen (invariant 8).",
+      "description": "True when the entity's history is unknown (appeared mid-shift, re-acquired track). Treated as possibly carrying every allergen (safety rule: known-clean source).",
       "type": "boolean"
     },
-    "source": { "enum": ["laya", "chef", "menu_seed", "shift_start_clean", "propagated", "wash_reset", "unknown_history"] },
-    "unclear_ingredients": {
-      "description": "Ingredients Laya could not place; each needs a one-time chef confirmation.",
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "confirmed_by_chef": { "type": "boolean" }
+    "source": {
+      "description": "laya: read from the bin label. manual: set or adjusted by a person. The rest are set by the partner graph.",
+      "enum": ["laya", "manual", "shift_start_clean", "propagated", "wash_reset", "unknown_history"]
+    }
   }
 }

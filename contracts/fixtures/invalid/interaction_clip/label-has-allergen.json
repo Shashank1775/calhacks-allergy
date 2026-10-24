@@ -68,5 +68,5 @@
     "label_source": "sim_truth",
     "allergen_unit_id": "egg"
   },
-  "$comment": "Must fail: labels carry no allergen information (invariant 6)."
+  "$comment": "Must fail: labels carry no allergen information (safety rule: blind classifier)."
 }

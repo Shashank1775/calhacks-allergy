@@ -10,11 +10,11 @@ A kitchen allergen tracker. A camera on a Raspberry Pi with a Hailo-8 watches fo
 |---|---|---|
 | [`AGENTS.md`](AGENTS.md) | **The one file agents read**: rules, roles, workflow, teams, roadmap, open questions | — |
 | [`kitchen/`](kitchen/README.md) | All Python code, one folder per pipeline step | agents + partner |
-| `kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/`, [`database/`](database/) | Entity store, interactions, LSTM, provenance graph, SpacetimeDB module | **partner** |
-| [`web/`](web/) | Tablet, chef and expo screens | agents (outputs) |
+| `kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/`, [`database/`](database/) | Entity store, interactions, ConvLSTM, provenance graph, SpacetimeDB module | **partner** |
+| [`web/`](web/) | Tablet and expo screens | agents (outputs) |
 | [`contracts/`](contracts/README.md) | Data shapes and interfaces shared between folders, plus golden test scenarios | agents (platform), Director reviews |
 | [`tools/`](tools/) | Contract validator | agents (platform) |
-| [`docs/decisions/`](docs/decisions/) | Architecture decision records | — |
+| [`docs/decisions/`](docs/decisions/) | One page per decision that's hard to reverse | — |
 
 ## For the partner
 
@@ -32,4 +32,4 @@ uv run python tools/validate_contracts.py
 uv run pytest -m 'not hardware and not slow'
 ```
 
-To run the agents, start the Director with `claude --agent director` and give it a Worker concurrency cap ([AGENTS.md §14](AGENTS.md#14-running-the-org-claude-code)).
+To run the agents, start the Director with `claude --agent director` and give it a Worker concurrency cap ([Running the org](AGENTS.md#14-running-the-org-claude-code) in AGENTS.md).

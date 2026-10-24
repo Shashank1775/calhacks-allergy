@@ -4,8 +4,7 @@ Owner: platform (agents)
 Step:  shared
 Reads: ClipStep sequences (t_ms, box_a, box_b, other boxes, change mask)
 Emits: interaction_clip metadata + tensor; PairWindow helpers
-Rules: 6 no object pixels, classes, kinds or allergen data; same builder live, in sim and in partner training
-Tasks: platform-12
+Rules: blind classifier: no object pixels, classes, kinds or allergen data; same builder live, in sim and in partner training
 
 Not built yet.
 """

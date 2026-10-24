@@ -1,11 +1,12 @@
-"""Camera, detection and tracking on the Pi: video frames in, ObservationFrames out.
+"""Vision: camera frames in, tracked and identified bins, tools, hands and plates (ObservationFrames) out.
 
 Owner: vision (agents)
-Step:  Vision (detection + tracking on the Pi)
-Reads: camera or video frames, zones calibration, Clock
-Emits: observation_frame (to the partner EntityStore and kitchen/interactions), zone, plate_binding, Vision HTTP API
-Rules: 1 fail closed, never guess a binding; 5 strictly increasing t_ms; 8 new ID on re-acquire
-Tasks: vision-01 .. vision-11
+Step:  vision
+Reads: camera or video frames, the zones file, Clock
+Emits: observation_frame and its change mask (to the partner's EntityStore and kitchen/interactions), zone, plate_binding,
+       the Vision HTTP API
+Rules: fail closed (never guess a plate binding); time runs forward (strictly increasing t_ms);
+       known-clean source (a re-acquired track gets a new ID)
 
 Not built yet.
 """

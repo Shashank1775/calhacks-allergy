@@ -1,82 +1,68 @@
-# kitchen/orders: Order intake
+# kitchen/orders: Tickets and bin labels
 
-**Owner:** team `orders` (agents). Also owns [`kitchen/profiling/`](../profiling/README.md).
+**Owner:** team `orders` (agents).
 
-**Pipeline step:** 1 of the pipeline. Turns what a server types or says into exact, typed allergen constraints, and never guesses. Anything we're unsure of becomes a one-tap question. See [AGENTS.md §2](../../AGENTS.md#2-pipeline-and-code-map).
+Turns what people type or say into exact allergen data, and never guesses. Two jobs, both through Laya and the same "ask when unsure" rule:
+
+- **Tickets:** a server's note ("severe nut allergy, coconut is fine") becomes forbidden allergens.
+- **Bins:** at shift start, each bin's label becomes an allergen profile.
 
 ## What happens here
 
 - The server types the note, or speaks it and Cartesia Ink transcribes it. The server confirms the transcript before it's parsed.
-- Laya reads the note and returns constraints (allergen unit, severity, trace sensitivity) and exceptions ("coconut is fine"), each with a confidence.
+- Laya reads the note and returns constraints (allergen, severity, trace sensitivity) and exceptions ("coconut is fine"), each with a confidence.
 - Every field below `question_threshold` becomes a one-tap question. The ticket can't be sent until every question is answered.
-- Results are cached by normalized note, so a repeated note parses instantly and works offline.
-- On send, the ticket is written through `StateClient`, with `pass_threshold` set from its strictest severity (OQ-4).
+- On send, the ticket is written through `StateClient`, with `pass_threshold` set from its strictest severity.
 - A late change ("also no dairy") opens a new draft at `revision + 1` that goes through the same question flow.
+- At shift start, a person types or pastes each bin's label. Laya reads it into allergen probabilities, the person checks or adjusts them on the tablet, and the profile is saved. Laya is calibrated, so an unsure answer is a middle probability that the graph carries forward, never a zero.
 
 ## Files
 
 | File | What it does |
 |---|---|
 | `laya_parser.py` | `LayaParser` adapters: `FakeLayaParser` (keyword parser, for tests) and the fine-tuned Laya adapter |
-| `parse.py` | Normalize the note, check the cache, call Laya, and build the `ParseResult` draft |
-| `questions.py` | Turn low-confidence fields into questions, fill answers, and decide `sendable` |
-| `cache.py` | Normalized-note cache keyed by parser name and version |
-| `apply.py` | Write a sent draft as a `Ticket` through `StateClient.put_ticket` |
-| `amend.py` | Late changes: `revision + 1` with the full constraint set |
-| `transcribe.py` | `Transcriber` adapters: `TextFileTranscriber` now, Cartesia Ink batch (`ink-whisper`) later, per [ADR 0013](../../docs/decisions/0013-cartesia-ink-and-apify-menu-import.md) |
+| `tickets.py` | Note → draft with questions; answers; send; amend at `revision + 1` |
+| `bins.py` | Bin label → `AllergenProfile`; save the checked profile through `StateClient.put_bin_profile` |
+| `transcribe.py` | `Transcriber` adapters: `FakeTranscriber` now, Cartesia Ink batch later ([decision](../../docs/decisions/cartesia-speech.md)) |
 | `api.py` | The [Orders HTTP API](../../contracts/apis.md#orders-http-api) |
 
-Planned data (not files yet): `eval/notes.jsonl`, the ticket-note eval set (orders-02), and `fakes/http/`, example responses for every endpoint and error code that outputs uses as its mock server.
+Planned data: `eval/notes.jsonl`, the ticket-note eval set, and `fakes/http/`, example responses for every endpoint that outputs uses as its mock server.
 
-## Inputs and outputs
+## In and out
 
 | Direction | What | Contract | From / to |
 |---|---|---|---|
-| In | Note text or audio, answers, send, amend | [Orders HTTP API](../../contracts/apis.md#orders-http-api) | outputs tablet screen |
+| In | Note text or audio, answers, send, amend, bin labels | [Orders HTTP API](../../contracts/apis.md#orders-http-api) | outputs tablet screen |
 | Out | Draft with questions | [`parse_result`](../../contracts/schemas/parse_result.schema.json) | outputs tablet screen |
-| Out | Sent ticket (tables `ticket`, `ticket_constraint`, `ticket_exception`) | [`ticket`](../../contracts/schemas/ticket.schema.json) via [`StateClient`](../../contracts/apis.md#stateclient) | verdict, partner graph, outputs |
-| Uses | Laya | [`LayaParser`](../../contracts/apis.md#layaparser) | fine-tuned Laya |
+| Out | Sent ticket (`ticket` table) | [`ticket`](../../contracts/schemas/ticket.schema.json) via [`StateClient`](../../contracts/apis.md#stateclient) | verdict, partner graph, outputs |
+| Out | Bin profile (`bin_profile` table) | [`allergen_profile`](../../contracts/schemas/allergen_profile.schema.json) via `StateClient.put_bin_profile` | partner graph, verdict, outputs |
+| Uses | Laya | [`LayaParser`](../../contracts/apis.md#layaparser) | fine-tuned Laya ([decision](../../docs/decisions/laya-for-notes-and-labels.md)) |
 | Uses | Cartesia Ink | [`Transcriber`](../../contracts/apis.md#transcriber-and-speaker) | external |
-| Uses | Allergen units | [`allergen_units.json`](../../contracts/allergen_units.json) | contracts |
 
-We are the single writer of `ticket`, `ticket_constraint`, `ticket_exception`, `bin_profile` and `chef_confirmation` ([state-tables.md](../../contracts/state-tables.md#writers)).
+Bin entity IDs come from vision: `bin-4` is whatever sits in `slot-4`.
 
-## Safety rules that apply
+## Safety rules
 
-See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). Every test below is marked `safety`.
+See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `safety`.
 
 | Rule | How we could break it | Test |
 |---|---|---|
-| 3. No unanswered questions | `/send` accepts a draft with an open question, or a low-confidence field gets no question | `/send` returns `409 unanswered_questions` while any question is open. A property test (`hypothesis`) checks that for any Laya output, every field below `question_threshold` gets a question, and the pipeline adds one if Laya didn't |
-| 1. Fail closed | Laya down with no cache hit produces an empty "no constraints" ticket | A `LayaParserUnavailable` cache miss returns `laya_unavailable` and writes nothing. `StateUnavailable` on send leaves the draft unsent |
-| 4. Allergens, not contacts | Anything but allergen units in constraints | Every emitted ticket validates against `ticket.schema.json` (`additionalProperties: false`) |
-| 9. Late changes recheck everything | Editing a ticket in place, or dropping a constraint on amend | Amend writes `revision + 1` with the full set, and old rows are untouched. A constraint is removed only by an explicitly answered question |
+| No unanswered questions | `/send` accepts a draft with an open question, or a low-confidence field gets no question | `/send` returns `409 unanswered_questions` while any question is open. A property test checks that for any Laya output, every field below `question_threshold` gets a question |
+| Fail closed | Laya down produces an empty "no constraints" ticket or an empty bin profile | `LayaParserUnavailable` returns `laya_unavailable` and writes nothing; the tablet falls back to manual entry. `StateUnavailable` on send leaves the draft unsent |
+| Allergens, not contacts | Anything but allergen units in constraints or profiles | Every emitted ticket and profile validates against its schema (`additionalProperties: false`) |
+| Late changes recheck everything | Editing a ticket in place, or dropping a constraint on amend | Amend writes `revision + 1` with the full set, and old revisions are untouched |
 
 Team rules on top: **never drop a mention.** An allergen mentioned at any confidence becomes a constraint or a question. **Exceptions narrow only on explicit words**, and an exception below threshold becomes a question.
 
-## Fakes
-
-- **We use:** `InMemoryStateClient` (platform) for every `StateClient` call. No test reaches a vendor; network calls are blocked in tests.
-- **We ship:** `FakeLayaParser` (covers the eval set), `TextFileTranscriber`, and `fakes/http/` example responses. Every endpoint change updates `fakes/http/` in the same PR.
-
 ## Tests
 
-Tests live in `kitchen/orders/tests/`. Run `uv run pytest kitchen/orders`. The eval scorer (orders-02) prints per-field accuracy and `wrong_without_question`, and fails if that is above 0. Any PR that changes parsing posts the scorer output.
+- Tests live in `kitchen/orders/tests/`. Run `uv run pytest kitchen/orders`.
+- They use `FakeStateClient` (platform) for every database call. No test reaches a vendor.
+- We ship `FakeLayaParser`, `FakeTranscriber`, and `fakes/http/` example responses.
+- The eval scorer prints per-field accuracy and `wrong_without_question`, and fails if that is above 0.
 
-## Milestones
+## Watch out for
 
-- **M0:** `FakeLayaParser`, parse pipeline and API skeleton (orders-01). Eval set with hard cases. Parse cache. Spikes for Cartesia Ink and Apify.
-- **M1:** question answers and send gate. Apply through `StateClient`. Amendments. `/v1/transcribe` on the fake. Runs in the e2e harness, and against the partner's real database (needs partner).
-- **M2:** runs on the demo LAN against live SpacetimeDB. Latency budgets: parse ≤ 3 s online, ≤ 50 ms cached.
-- **M3:** fine-tuned Laya scores the eval set with **zero** wrong constraints above threshold. Cartesia Ink live.
-- **M4:** offline mode (warm cache, manual-entry fallback). Failure drill: Laya down means questions or manual entry, never a guess.
-
-## Risks and open questions
-
-| Risk | Mitigation |
-|---|---|
-| Laya is English-only and sometimes wrong | Low-confidence answers become one-tap questions; `FakeLayaParser` keeps tests independent of the model |
-| Ambiguous notes ("no nuts": peanuts too?) | Ask, don't guess. Hard cases are in the eval set; the metric that matters is wrong-without-question = 0 |
-| Exceptions under coarse units ("coconut is fine" under `tree_nut`, OQ-2) | Stored as a free-text ingredient on the parent unit until OQ-2 is answered |
-| Speech-to-text errors ("says me" for sesame) | The server confirms the transcript; voice cases are in the eval set |
-| Thresholds unset (OQ-4), cost and offline (OQ-15, OQ-7) | OQ-4 defaults in one logged config object. Parse on request, not on every keystroke |
+- Laya is English-only, reads at most 512 tokens, and is near chance until fine-tuned. Low-confidence answers become questions, and `FakeLayaParser` keeps tests independent of the model.
+- Ambiguous notes ("no nuts": peanuts too?): ask, don't guess. The metric that matters is wrong-without-question = 0.
+- Speech-to-text errors ("says me" for sesame): the server confirms the transcript.

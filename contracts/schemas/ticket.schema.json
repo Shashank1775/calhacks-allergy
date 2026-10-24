@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ticket.schema.json",
   "title": "Ticket",
-  "description": "A sent ticket and its constraints, as stored in SpacetimeDB (logical view of the ticket + ticket_constraint tables). Producer: orders. Consumers: verdict, partner graph, outputs.",
+  "description": "A sent ticket and its constraints, as stored in SpacetimeDB (the ticket table). Producer: orders. Consumers: verdict, partner graph, outputs.",
   "type": "object",
   "additionalProperties": false,
   "required": ["ticket_id", "number", "revision", "status", "created_t_ms", "source", "note", "pass_threshold", "constraints", "exceptions"],
@@ -15,11 +15,11 @@
     "source": { "enum": ["typed", "voice"] },
     "note": { "type": "string" },
     "pass_threshold": {
-      "description": "Minimum clean-confidence required to pass. Defaults by the strictest severity on the ticket (OQ-4).",
+      "description": "Minimum clean-confidence required to pass. Set from the strictest severity on the ticket (AGENTS.md, Open questions: pass thresholds).",
       "$ref": "common.schema.json#/$defs/probability"
     },
     "constraints": {
-      "description": "Forbidden allergens. Never forbidden contacts (invariant 4).",
+      "description": "Forbidden allergens. Never forbidden contacts (safety rule: allergens, not contacts).",
       "type": "array",
       "items": {
         "type": "object",
