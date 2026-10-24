@@ -6,7 +6,7 @@
 
 ## Context
 
-The real pipeline needs hardware (Pi, Hailo, camera, servo), paid APIs (Cartesia, Jev, Laya) and a running database. Agents can't touch hardware, and waiting on other teams serializes the whole org.
+The real pipeline needs hardware (Pi, Hailo, camera, servo), paid APIs (Cartesia), a fine-tuned model (Laya) and a running database. Agents can't touch hardware, and waiting on other teams serializes the whole org.
 
 ## Decision
 

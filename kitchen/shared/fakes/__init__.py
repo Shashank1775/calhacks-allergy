@@ -22,7 +22,7 @@ Fakes that live here (platform):
   FixedClock           re-exported from kitchen.shared.clock
 
 Fakes other teams ship (with the code they stand in for):
-  FakeJev              kitchen/orders (orders)
+  FakeLayaParser       kitchen/orders (orders)
   TextFileTranscriber  kitchen/orders (orders)
   ExactLaya            kitchen/verdict (verdict): answers with ProvenanceGraph.reach
   AdversarialLaya      kitchen/verdict (verdict): random, late, empty or malformed answers

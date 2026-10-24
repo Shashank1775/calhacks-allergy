@@ -6,7 +6,7 @@
 
 ## Context
 
-A wrong PASS can send an allergen to a guest who reacts to it. A wrong HOLD costs a remake. Several parts of the pipeline are learned models (Jev, Laya, the LSTM) that can be wrong, slow or unavailable.
+A wrong PASS can send an allergen to a guest who reacts to it. A wrong HOLD costs a remake. Several parts of the pipeline are learned models (Laya, the LSTM) that can be wrong, slow or unavailable.
 
 ## Decision
 

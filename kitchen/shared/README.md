@@ -18,7 +18,7 @@ Everything the other folders import to talk to each other. Every Python folder i
 | File | What it does |
 |---|---|
 | `models.py` | **Generated** Pydantic v2 models for every schema (`extra="forbid"`). Rebuild with `uv run python tools/gen_models.py`; CI fails if it is stale |
-| `interfaces.py` | Protocols `StateClient`, `EntityStore`, `ProvenanceGraph`, `InteractionClassifier`, `JevClient`, `LayaClient`, `Transcriber`, `Speaker`, `GateDriver`, `Clock`, and their exceptions |
+| `interfaces.py` | Protocols `StateClient`, `EntityStore`, `ProvenanceGraph`, `InteractionClassifier`, `LayaParser`, `LayaClient`, `Transcriber`, `Speaker`, `GateDriver`, `Clock`, and their exceptions |
 | `clock.py` | `SystemClock` (live) and `FixedClock` (tests and replay) |
 | `config.py` | Settings base class: per-folder env prefix, secrets from env only, safety constants logged at startup |
 | `fakes/` | `InMemoryStateClient` + scenario loader, `FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier` |

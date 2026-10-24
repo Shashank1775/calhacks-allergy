@@ -17,9 +17,9 @@
       "description": "True when the entity's history is unknown (appeared mid-shift, re-acquired track). Treated as possibly carrying every allergen (invariant 8).",
       "type": "boolean"
     },
-    "source": { "enum": ["jev", "chef", "menu_seed", "shift_start_clean", "propagated", "wash_reset", "unknown_history"] },
+    "source": { "enum": ["laya", "chef", "menu_seed", "shift_start_clean", "propagated", "wash_reset", "unknown_history"] },
     "unclear_ingredients": {
-      "description": "Ingredients Jev could not place; each needs a one-time chef confirmation.",
+      "description": "Ingredients Laya could not place; each needs a one-time chef confirmation.",
       "type": "array",
       "items": { "type": "string" }
     },

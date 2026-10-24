@@ -9,7 +9,7 @@ Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`
 | [`ProvenanceGraph`](#provenancegraph) | **partner** (`kitchen/graph/`) | `FakeProvenanceGraph` | platform |
 | [`InteractionClassifier`](#interactionclassifier) | **partner** (zone rules in `kitchen/interactions/`, ConvLSTM / ConvGRU in `kitchen/lstm/`) | `ScriptedClassifier` | platform |
 | [Change mask and clip builder](#change-mask-and-clips) | platform (`kitchen/shared/change_mask.py`, `kitchen/shared/clips.py`) | none needed: pure functions | platform |
-| [`JevClient`](#jevclient) | orders | `FakeJev` | orders |
+| [`LayaParser`](#layaparser) | orders | `FakeLayaParser` | orders |
 | [`LayaClient`](#layaclient) | verdict (adapter), sim (the model) | `ExactLaya`, `AdversarialLaya` | verdict |
 | Verdict feed (`verdict`, `verdict_step`, `entity_risk`, `mistake_pattern` rows) | verdict, partner graph | `ScriptedVerdictSource` (replays scenario verdicts into `InMemoryStateClient`) | verdict |
 | [`Transcriber`](#transcriber-and-speaker) | orders | `TextFileTranscriber` | orders |
@@ -157,19 +157,19 @@ def build_clip(a_id: str, b_id: str, steps: Sequence[ClipStep], *, H: int = 128,
 - `box_a` and `box_b` channels are 1 inside each entity's box (normalized boxes drawn at H x W). `change` is the change mask. `dt_ms` carries elapsed time per step.
 - No object class, kind or appearance goes in.
 
-## JevClient
+## LayaParser
 
-Owner: **orders**.
+Owner: **orders**. Backed by our fine-tuned Laya model: the adapter asks it typed questions (does the note forbid each allergen, how severe, do traces matter) and turns the answers into these results.
 
 ```python
-class JevClient(Protocol):
+class LayaParser(Protocol):
     def parse_note(self, note: str, *, source: Literal["typed", "voice"]) -> ParseResult: ...
     def profile_bin(self, *, label_text: str | None = None, image_jpeg: bytes | None = None,
                     prep_sheet_text: str | None = None) -> AllergenProfile: ...
 ```
 
-- Raises `JevUnavailable`. With no cached result, the tablet falls back to manual entry. It never guesses.
-- **Fake:** `FakeJev`, a deterministic keyword parser covering the notes in the orders eval set.
+- Raises `LayaParserUnavailable`. With no cached result, the tablet falls back to manual entry. It never guesses.
+- **Fake:** `FakeLayaParser`, a deterministic keyword parser covering the notes in the orders eval set.
 
 ## LayaClient
 
