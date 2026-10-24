@@ -19,7 +19,7 @@ The only things teams may depend on across team lines. If it is not in this fold
 1. **Change contracts in their own PR.** It touches only `contracts/` and names the teams it affects. The Director reviews it and the owner merges it; a partner interface also needs the partner's OK. See [How work flows](../AGENTS.md#6-how-work-flows) in AGENTS.md.
 2. **Single writer per table.** Each SpacetimeDB table has exactly one team that writes it ([state-tables.md](state-tables.md#writers)). Everyone else reads.
 3. **Every interface has a fake.** The producing team ships it. For the partner's components, the platform team writes the fake, and the partner's real code must pass the same contract tests (`kitchen/shared/contract_tests/`).
-4. **Generated types are generated.** Python models (`kitchen/shared/models.py`) and TypeScript types (`web/src/generated/`) are generated from `schemas/` by the platform team's tooling. Never hand-edit generated files; change the schema instead.
+4. **Schemas are the types.** Python passes records as plain dicts and checks them against `schemas/` with `kitchen.shared.models.validate`; nothing is generated for Python. TypeScript types (`web/src/generated/`) are generated from `schemas/` by the platform team's tooling. Never hand-edit generated files; change the schema instead.
 5. **Fixtures are part of the contract.** A schema change that breaks an existing valid fixture breaks its consumers, whatever the diff looks like.
 6. **New safety rule, new invalid fixture.** When a safety rule can be expressed in JSON Schema, add a fixture under `fixtures/invalid/` that breaks it.
 

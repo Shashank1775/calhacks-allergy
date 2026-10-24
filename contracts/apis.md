@@ -1,6 +1,6 @@
 # APIs and interfaces
 
-Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`, ...) are the models generated from [`schemas/`](schemas/) into `kitchen/shared/models.py`. Every interface has a **fake**, named `Fake<Thing>`, so any part can be tested without the real thing.
+Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`, ...) are plain dicts that validate against that schema in [`schemas/`](schemas/) (check one with `kitchen.shared.models.validate`). Every interface has a **fake**, named `Fake<Thing>`, so any part can be tested without the real thing.
 
 | Interface | Real implementation | Fake | Fake owner |
 |---|---|---|---|

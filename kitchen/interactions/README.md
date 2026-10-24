@@ -25,7 +25,7 @@ It turns tracked entity pairs into time-stamped, classified interactions: the ed
 ## What the agents give you
 
 - **Frames and change masks (vision team).** An `ObservationFrame` for every frame, plus its change mask from the shared function, in-process on the Pi and in recordings (`frames.jsonl` + `change.npz`). Tasks: vision-01, vision-05, vision-13.
-- **The shared builders (platform team).** `kitchen/shared/change_mask.py` and `kitchen/shared/clips.py` (platform-12): use them for live clips, so live input matches the sim-trained model. `ScriptedClassifier` and the classifier contract tests (platform-06).
+- **The shared builders (platform team).** `kitchen/shared/change_mask.py` and `kitchen/shared/clips.py` (platform-12): use them for live clips, so live input matches the sim-trained model. `FakeClassifier` and the classifier contract tests (platform-06).
 - **Training clips (sim team).** Rendered, labeled clips with hard negatives (sim-12 to sim-15), and scenario event streams for testing (sim-05).
 
 ## Suggested task list
