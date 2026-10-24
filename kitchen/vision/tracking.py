@@ -6,11 +6,11 @@ Step:  vision
 Reads: list[Detection] and list[Person] from detect.py, a ZoneLookup from zones.py, the frame's t_ms and size
 Emits: observation_frame detection items (track_id, entity_id, kind, class_name, box, confidence, zone, origin, and
        person_id and wrist for hands), in track order
-Rules: fail closed: a lost track emits nothing (no box is predicted or interpolated) and no hand is made from an
-       unsure wrist; known-clean source: a track that ends is never revived, and track IDs are never reused, so an
-       object seen again is a new entity (identity.py)
+Rules: fail closed: a lost track emits nothing (no box is predicted or interpolated; a predicted box is only ever used
+       to match) and no hand is made from an unsure wrist; known-clean source: a track that ends is never revived, and
+       track IDs are never reused, so an object seen again is a new entity (identity.py)
 
-Association, per class group (each object class, and pose people), ByteTrack style but with no motion model:
+Association, per class group (each object class, and pose people), ByteTrack style:
     1. a track last matched more than track_lost_ms ago ends for good, even if frames stopped coming meanwhile;
     2. detections scoring >= track_high_score match tracks by IoU, greedily, best pair first, IoU >= track_match_iou;
     3. detections scoring >= track_low_score match the tracks still unmatched, the same way;
@@ -18,6 +18,18 @@ Association, per class group (each object class, and pose people), ByteTrack sty
 
 The tracks a frame leaves unmatched are handed to identity.py with every new track that frame: a new track then may be
 one of those objects under a new ID (an ID switch), so it can't claim a clean origin.
+
+VISION_TRACKER picks one of two trackers. "iou" (the default) matches each detection to a track's last box, as above.
+"motion" is experimental, off until real overhead footage shows it helps (compare_trackers.py). It adds to the above:
+    - a recently seen track is matched at its predicted box (last box moved by its velocity), not its last box, so a
+      utensil moving faster than its own width per frame still overlaps itself;
+    - after both IoU passes, a recently seen track that is still unmatched and moving may take the one free detection
+      within motion_gate_diagonals of its predicted centre, but only if no other recent track could take that
+      detection and no other free detection is in its reach. A still object the detector missed for a frame is still
+      where it was, so it never reaches for a neighbour. Anything ambiguous stays unmatched: the newcomer starts a new
+      track with unknown history rather than inheriting a guessed identity;
+    - stricter identity guards: one ID-switch guard and one clean-stack loss count for all tool classes together (a
+      knife the detector relabels "spoon" can't start clean), and a pose left/right wrist swap re-acquires both hands.
 """
 
 import itertools
@@ -32,6 +44,10 @@ from kitchen.vision.common import Box, Detection, Keypoint, Person, VisionSettin
 from kitchen.vision.identity import BOWL, TOOL_CLASSES, Identity, IdentityBook
 
 OBJECT_CLASSES = (*TOOL_CLASSES, BOWL)
+TRACKERS = ("iou", "motion")
+
+# Motion mode: how much each new measured velocity moves a track's velocity (an exponential moving average).
+VELOCITY_SMOOTHING = 0.5
 
 
 def iou_matrix(boxes_a: list[Box], boxes_b: list[Box]) -> np.ndarray:
@@ -72,11 +88,14 @@ def greedy_match(iou: np.ndarray, min_iou: float) -> list[tuple[int, int]]:
 
 @dataclass
 class Track:
-    """One live track: its ID, the box it was last matched to, and the t_ms of that match."""
+    """One live track: its ID, the box it was last matched to, and the t_ms of that match. Motion mode also keeps its
+    velocity (normalized units per ms) and how many updates in a row it has gone unmatched."""
 
     track_id: int
     box: Box
     last_seen_ms: int
+    velocity: tuple[float, float] = (0.0, 0.0)
+    misses: int = 0
 
 
 class TrackSet:
@@ -87,13 +106,17 @@ class TrackSet:
         self.settings = settings
         self.new_track_id = new_track_id
         self.tracks: list[Track] = []
+        self.motion = settings.tracker == "motion"
 
-    def update(self, boxes: list[Box], scores: list[float], t_ms: int) -> tuple[dict[int, int], list[int], list[int]]:
+    def update(
+        self, boxes: list[Box], scores: list[float], t_ms: int, frame_size: tuple[int, int] = (1, 1)
+    ) -> tuple[dict[int, int], list[int], list[int]]:
         """Associate one frame's detections, seen at `t_ms`, with the tracks.
 
         Returns which track each matched or new detection belongs to ({detection index: track_id}), the IDs of tracks
         that ended this frame, and the IDs of every track left unmatched this frame (the ended ones too). Detections
-        not in the first dict are dropped.
+        not in the first dict are dropped. `frame_size` (width, height) in pixels is used by motion mode, so its reach
+        is measured in pixels and stays round on a wide frame.
         """
         high = [index for index, score in enumerate(scores) if score >= self.settings.track_high_score]
         low = [
@@ -107,6 +130,10 @@ class TrackSet:
         owners: dict[int, int] = {}
         unmatched_tracks = self._match(self.tracks, high, boxes, owners, t_ms)
         unmatched_tracks = self._match(unmatched_tracks, low, boxes, owners, t_ms)
+        if self.motion:
+            unmatched_tracks = self._second_chance(unmatched_tracks, high + low, boxes, owners, t_ms, frame_size)
+        for track in unmatched_tracks:
+            track.misses += 1
         missing = ended + [track.track_id for track in unmatched_tracks]
 
         # Only a confident detection starts a track: a weak one alone is too likely a false positive.
@@ -122,16 +149,109 @@ class TrackSet:
         self, tracks: list[Track], indexes: list[int], boxes: list[Box], owners: dict[int, int], t_ms: int
     ) -> list[Track]:
         """Match `tracks` to the detections at `indexes`, record the matches in `owners`, and return the tracks left
-        unmatched."""
-        iou = iou_matrix([track.box for track in tracks], [boxes[index] for index in indexes])
+        unmatched. Motion mode compares each recently seen track's predicted box, not its last box."""
+        iou = iou_matrix([self._match_box(track, t_ms) for track in tracks], [boxes[index] for index in indexes])
         matched = set()
         for row, column in greedy_match(iou, self.settings.track_match_iou):
-            track = tracks[row]
-            track.box = boxes[indexes[column]]
-            track.last_seen_ms = t_ms
-            owners[indexes[column]] = track.track_id
+            self._take(tracks[row], boxes[indexes[column]], t_ms)
+            owners[indexes[column]] = tracks[row].track_id
             matched.add(row)
         return [track for row, track in enumerate(tracks) if row not in matched]
+
+    def _take(self, track: Track, box: Box, t_ms: int) -> None:
+        """Move a track to its matched detection's box. Motion mode also updates its velocity, from this move if the
+        track was recently seen, or from rest if it had been missing longer (its old motion says nothing now)."""
+        if self.motion:
+            if self._is_recent(track, t_ms):
+                elapsed_ms = max(1, t_ms - track.last_seen_ms)
+                (old_x, old_y), (new_x, new_y) = box_centre(track.box), box_centre(box)
+                measured = ((new_x - old_x) / elapsed_ms, (new_y - old_y) / elapsed_ms)
+                track.velocity = (
+                    VELOCITY_SMOOTHING * measured[0] + (1 - VELOCITY_SMOOTHING) * track.velocity[0],
+                    VELOCITY_SMOOTHING * measured[1] + (1 - VELOCITY_SMOOTHING) * track.velocity[1],
+                )
+            else:
+                track.velocity = (0.0, 0.0)
+        track.box = box
+        track.last_seen_ms = t_ms
+        track.misses = 0
+
+    def _is_recent(self, track: Track, t_ms: int) -> bool:
+        """Whether a track was matched in the last update or the one before, at most motion_recent_ms ago: only then is
+        its motion current enough to predict from."""
+        return track.misses <= 1 and t_ms - track.last_seen_ms <= self.settings.motion_recent_ms
+
+    def _match_box(self, track: Track, t_ms: int) -> Box:
+        """The box a track is matched at: in motion mode a recently seen track's last box moved by its velocity, and
+        otherwise its last box. Used only to match: an emitted box is always the detection's own."""
+        if not (self.motion and self._is_recent(track, t_ms)):
+            return track.box
+        elapsed_ms = t_ms - track.last_seen_ms
+        shift_x, shift_y = track.velocity[0] * elapsed_ms, track.velocity[1] * elapsed_ms
+        x1, y1, x2, y2 = track.box
+        return (x1 + shift_x, y1 + shift_y, x2 + shift_x, y2 + shift_y)
+
+    def _second_chance(
+        self,
+        tracks: list[Track],
+        indexes: list[int],
+        boxes: list[Box],
+        owners: dict[int, int],
+        t_ms: int,
+        frame_size: tuple[int, int],
+    ) -> list[Track]:
+        """Motion mode: let each moving, recently seen, still unmatched track take the one free detection within its
+        reach, when the pairing is unambiguous both ways. Returns the tracks still unmatched.
+
+        Only a moving track may take one: a still object the detector missed for a frame hasn't gone anywhere, so a
+        detection near it is another object (say a knife just put down beside it in the rack). Unambiguous means
+        exactly one free detection is within the track's reach and no other recent unmatched track, moving or still,
+        reaches that detection. Two utensils crossing reach each other's detections, so neither takes one here: a wrong
+        pairing would hand one object the other's history (possibly a clean one), while no pairing makes the newcomer
+        a new track with unknown history (fail closed).
+        """
+        free = [index for index in indexes if index not in owners]
+        recent = [track for track in tracks if self._is_recent(track, t_ms)]
+        reach = {
+            track.track_id: [index for index in free if self._within_reach(track, boxes[index], t_ms, frame_size)]
+            for track in recent
+        }
+        claimants: dict[int, int] = {}
+        for track in recent:
+            for index in reach[track.track_id]:
+                claimants[index] = claimants.get(index, 0) + 1
+
+        taken = set()
+        for track in recent:
+            if not self._is_moving(track, t_ms, frame_size):
+                continue
+            candidates = reach[track.track_id]
+            if len(candidates) == 1 and claimants[candidates[0]] == 1:
+                self._take(track, boxes[candidates[0]], t_ms)
+                owners[candidates[0]] = track.track_id
+                taken.add(track.track_id)
+        return [track for track in tracks if track.track_id not in taken]
+
+    def _is_moving(self, track: Track, t_ms: int, frame_size: tuple[int, int]) -> bool:
+        """Whether a track's predicted move since its last match is at least half its box's narrow side, in pixels:
+        only then can its object have left its old box (box jitter on a still object moves it far less)."""
+        width, height = frame_size
+        elapsed_ms = t_ms - track.last_seen_ms
+        shift = math.hypot(track.velocity[0] * elapsed_ms * width, track.velocity[1] * elapsed_ms * height)
+        x1, y1, x2, y2 = track.box
+        return shift >= min((x2 - x1) * width, (y2 - y1) * height) / 2
+
+    def _within_reach(self, track: Track, box: Box, t_ms: int, frame_size: tuple[int, int]) -> bool:
+        """Whether a detection's centre is within motion_gate_diagonals of the track's predicted centre, the distance
+        measured in pixels as a multiple of the track box's diagonal (a small, thin knife reaches less far than a
+        plate)."""
+        width, height = frame_size
+        predicted_x, predicted_y = box_centre(self._match_box(track, t_ms))
+        centre_x, centre_y = box_centre(box)
+        distance = math.hypot((centre_x - predicted_x) * width, (centre_y - predicted_y) * height)
+        x1, y1, x2, y2 = track.box
+        diagonal = math.hypot((x2 - x1) * width, (y2 - y1) * height)
+        return distance <= self.settings.motion_gate_diagonals * diagonal
 
     def _end_stale_tracks(self, t_ms: int) -> list[int]:
         """End the tracks last matched more than track_lost_ms before `t_ms`, before they can match. Returns their IDs.
@@ -187,11 +307,16 @@ class Tracker:
     """Tracks every class group across frames and builds each frame's observation detections."""
 
     def __init__(self, settings: VisionSettings):
+        if settings.tracker not in TRACKERS:
+            raise ValueError(f"unknown VISION_TRACKER {settings.tracker!r}; expected one of {TRACKERS}")
         self.settings = settings
+        self.strict = settings.tracker == "motion"
         track_ids = itertools.count(1)
         self.object_tracks = {name: TrackSet(settings, lambda: next(track_ids)) for name in OBJECT_CLASSES}
         self.person_tracks = TrackSet(settings, lambda: next(track_ids))
-        self.identities = IdentityBook(settings.shift_start_ms, settings.track_lost_ms)
+        self.identities = IdentityBook(settings.shift_start_ms, settings.track_lost_ms, strict=self.strict)
+        # Motion mode: each pose track's last sighting with both wrists, (t_ms, left (x, y), right (x, y)).
+        self._both_wrists: dict[int, tuple[int, tuple[float, float], tuple[float, float]]] = {}
 
     def update(
         self, objects: list[Detection], people: list[Person], t_ms: int, zone_of: ZoneLookup, width: int, height: int
@@ -206,43 +331,64 @@ class Tracker:
         if unknown:
             raise ValueError(f"no entity kind for detector classes {unknown}")
 
-        items = []
-        for class_name in OBJECT_CLASSES:
-            detections = [detection for detection in objects if detection.class_name == class_name]
-            items += self._track_objects(class_name, detections, t_ms, zone_of)
+        items = self._track_objects(objects, t_ms, zone_of, (width, height))
         items += self._track_people(people, t_ms, zone_of, width, height)
 
         items.sort(key=lambda item: (item["track_id"], item["entity_id"]))
         return items
 
-    def _track_objects(self, class_name: str, detections: list[Detection], t_ms: int, zone_of: ZoneLookup) -> list:
-        """Track one object class and return its detection items."""
-        owners, ended, missing = self.object_tracks[class_name].update(
-            [detection.box for detection in detections], [detection.confidence for detection in detections], t_ms
-        )
-        # Ended tracks go first, so a bin slot freed this frame can go to a bowl first seen in it this frame.
-        for track_id in ended:
-            self.identities.end_track(track_id)
+    def _track_objects(
+        self, objects: list[Detection], t_ms: int, zone_of: ZoneLookup, frame_size: tuple[int, int]
+    ) -> list:
+        """Track every object class and return their detection items.
+
+        All classes are associated before any identity is made, so the identities can see which tracks of every
+        class went unmatched this frame (motion mode's one switch guard for all tools needs that).
+        """
+        results = {}
+        for class_name in OBJECT_CLASSES:
+            detections = [detection for detection in objects if detection.class_name == class_name]
+            owners, ended, missing = self.object_tracks[class_name].update(
+                [detection.box for detection in detections],
+                [detection.confidence for detection in detections],
+                t_ms,
+                frame_size,
+            )
+            results[class_name] = (detections, owners, missing)
+            # Ended tracks go first, so a bin slot freed this frame can go to a bowl first seen in it this frame.
+            for track_id in ended:
+                self.identities.end_track(track_id)
+
+        # A detector can call one utensil a knife in one frame and a spoon in the next. Motion mode treats a missing
+        # track of any tool class as a possible switch for a new tool of any class, so the relabel can't start clean.
+        any_tool_missing = any(results[class_name][2] for class_name in TOOL_CLASSES)
 
         items = []
-        for index, track_id in owners.items():
-            detection = detections[index]
-            zone = zone_of(box_centre(detection.box))
-            identity = self.identities.object_identity(track_id, class_name, t_ms, zone, maybe_switched=bool(missing))
-            items.append(detection_item(track_id, identity, class_name, detection.box, detection.confidence, zone))
+        for class_name, (detections, owners, missing) in results.items():
+            maybe_switched = bool(missing) or (self.strict and class_name in TOOL_CLASSES and any_tool_missing)
+            for index, track_id in owners.items():
+                detection = detections[index]
+                zone = zone_of(box_centre(detection.box))
+                identity = self.identities.object_identity(track_id, class_name, t_ms, zone, maybe_switched)
+                items.append(detection_item(track_id, identity, class_name, detection.box, detection.confidence, zone))
         return items
 
     def _track_people(self, people: list[Person], t_ms: int, zone_of: ZoneLookup, width: int, height: int) -> list:
         """Track pose people and return a hand item for each confident wrist."""
         owners, ended, missing = self.person_tracks.update(
-            [person.box for person in people], [person.confidence for person in people], t_ms
+            [person.box for person in people], [person.confidence for person in people], t_ms, (width, height)
         )
         for track_id in ended:
             self.identities.end_track(track_id)
+            self._both_wrists.pop(track_id, None)
 
         items = []
         for index, track_id in owners.items():
             person = people[index]
+            if self.strict and self._wrists_swapped(track_id, person, t_ms, width, height):
+                # Pose put "left" on the hand that was right and vice versa: each hand would take the other's history,
+                # so both start over as new hands with unknown history.
+                self.identities.reacquire_hands(track_id)
             hands = (("left", person.left_wrist, person.left_elbow), ("right", person.right_wrist, person.right_elbow))
             for side, wrist, elbow in hands:
                 # An unsure wrist isn't a hand: no hand is invented from a guess (fail closed).
@@ -256,6 +402,32 @@ class Tracker:
                 item["wrist"] = [float(wrist[0]), float(wrist[1]), float(wrist[2])]
                 items.append(item)
         return items
+
+    def _wrists_swapped(self, track_id: int, person: Person, t_ms: int, width: int, height: int) -> bool:
+        """Motion mode: whether pose seems to have swapped this person's left and right wrists since the last frame
+        that showed both, and remember this frame's wrists for the next check.
+
+        Swapped means pairing each wrist with the other side's last position explains the move better than pairing it
+        with its own, by more than one hand box. Hands farther apart than that can't trade places between two recent
+        frames, so a pose label flip is the likelier story. Only checked when both wrists are confident now and were in
+        a frame at most motion_recent_ms ago.
+        """
+        confident = min(person.left_wrist[2], person.right_wrist[2]) >= self.settings.wrist_min_confidence
+        if not confident:
+            return False
+        left, right = (person.left_wrist[0], person.left_wrist[1]), (person.right_wrist[0], person.right_wrist[1])
+        last = self._both_wrists.get(track_id)
+        self._both_wrists[track_id] = (t_ms, left, right)
+        if last is None or t_ms - last[0] > self.settings.motion_recent_ms:
+            return False
+
+        def pixels(a: tuple[float, float], b: tuple[float, float]) -> float:
+            return math.hypot((a[0] - b[0]) * width, (a[1] - b[1]) * height)
+
+        _, last_left, last_right = last
+        straight = pixels(left, last_left) + pixels(right, last_right)
+        crossed = pixels(left, last_right) + pixels(right, last_left)
+        return straight - crossed > self.settings.hand_box_size * max(width, height)
 
 
 def detection_item(

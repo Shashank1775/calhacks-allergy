@@ -21,6 +21,10 @@ back as a new hand, hand-p<k>-<side>-<n>, with unknown history. Every judgment c
 clean item caught by one of these holds once, an annoyance, not a risk. What no tracker can catch is an object hidden
 for longer than the lost buffer while it is carried into a clean stack (see README.md, Watch out for).
 
+Strict mode (VISION_TRACKER=motion, experimental) adds two guards. The clean-stack loss count is shared by all tool
+classes, since the detector may call the same utensil a knife and later a spoon. And reacquire_hands() lets the tracker
+start a person's hands over when pose swaps left and right.
+
 The one exception is bins. Orders keys bin profiles by bin-<n>, so a bowl first seen in the bin slot zone slot-<n> is
 bin-<n>, and a bowl re-acquired in slot-<n> is bin-<n> again, keeping the origin bin-<n> was first given. Bins are
 identified by slot, so swapping bins between slots mid-shift is unsupported. While a track holds bin-<n>, another new
@@ -78,9 +82,10 @@ class IdentityBook:
     only go up, so no tool, plate or person number is ever handed out twice in a shift.
     """
 
-    def __init__(self, shift_start_ms: int, lost_ms: int):
+    def __init__(self, shift_start_ms: int, lost_ms: int, strict: bool = False):
         self.shift_start_ms = shift_start_ms
         self.lost_ms = lost_ms
+        self.strict = strict
         self._by_track: dict[int, Identity] = {}
         self._tool_counts = dict.fromkeys(TOOL_CLASSES, 0)
         self._plate_count = 0
@@ -91,8 +96,9 @@ class IdentityBook:
         self._hand_sightings: dict[tuple[int, str], int] = {}
         self._bin_holders: dict[str, int] = {}
         self._bin_origins: dict[str, str] = {}
-        # Per detector class: tracks that ended inside a clean stack and may still be hiding there.
-        self._lost_in_clean_stack = dict.fromkeys((*TOOL_CLASSES, BOWL), 0)
+        # Per detector class (strict: all tools share one count): tracks that ended inside a clean stack and may still
+        # be hiding there.
+        self._lost_in_clean_stack: dict[str, int] = {}
         self._class_by_track: dict[int, str] = {}
         self._zone_by_track: dict[int, Zone | None] = {}
 
@@ -172,7 +178,8 @@ class IdentityBook:
         if identity is not None and identity.kind == "bin":
             del self._bin_holders[identity.entity_id]
         elif identity is not None and last_zone is not None and last_zone.kind == "clean_stack":
-            self._lost_in_clean_stack[class_name] += 1
+            key = self._loss_key(class_name)
+            self._lost_in_clean_stack[key] = self._lost_in_clean_stack.get(key, 0) + 1
 
         if track_id in self._person_by_track:
             del self._person_by_track[track_id]
@@ -190,10 +197,26 @@ class IdentityBook:
             return origin
         if maybe_switched:
             return "unknown"
-        if origin == "clean_stack" and self._lost_in_clean_stack[class_name] > 0:
-            self._lost_in_clean_stack[class_name] -= 1
+        key = self._loss_key(class_name)
+        if origin == "clean_stack" and self._lost_in_clean_stack.get(key, 0) > 0:
+            self._lost_in_clean_stack[key] -= 1
             return "unknown"
         return origin
+
+    def _loss_key(self, class_name: str) -> str:
+        """Which clean-stack loss count a class uses: its own, or in strict mode one count for all tool classes."""
+        if self.strict and class_name in TOOL_CLASSES:
+            return "tool"
+        return class_name
+
+    def reacquire_hands(self, person_track_id: int) -> None:
+        """Forget both hands of a pose track, so the next sighting of each is a new hand with unknown history.
+
+        The tracker calls this when pose seems to have swapped the person's left and right wrists: carrying on would
+        give each hand the other's history (possibly a clean one).
+        """
+        for side in HAND_SIDES:
+            self._hands.pop((person_track_id, side), None)
 
     def _new_tool(self, class_name: str, t_ms: int, zone: Zone | None, maybe_switched: bool) -> Identity:
         """A new tool entity: the next number for its class."""
