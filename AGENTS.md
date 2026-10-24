@@ -2,7 +2,7 @@
 
 **This is the only file you need to read.** It covers what we're building, where everything lives, the safety rules, your role, and how work flows. Before you edit a folder, also read that folder's `README.md`. Data shapes and interfaces live in [`contracts/`](contracts/README.md).
 
-> **Status: hackathon MVP, build approved (2026-10-23).** The Hailo-8 isn't connected yet: build locally and stay ready to upload. Keep everything as simple as it can be. CI is the check; there are no extra review layers.
+> **Status: hackathon MVP, build approved (2026-10-23).** The Hailo-8 isn't connected yet: build locally and stay ready to upload. Keep everything as simple as it can be. CI is the check, a Manager reviews once, and the owner merges.
 
 ---
 
@@ -34,7 +34,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step. 
 | 8 | **Gate and screens** | Pass gate (servo, red/green light, buzzer), Cartesia Sonic voice ("Hold seven"), and the tablet, chef and expo screens with camera overlays | [`kitchen/gate/`](kitchen/gate/), [`web/`](web/) | team `outputs` |
 | — | **Simulator** | One simulated world, two outputs: event-level scenarios (graph, verdict, Laya) and **rendered training clips** for the ConvLSTM (abstract shapes, boxes, change masks, labels from world truth) | [`kitchen/sim/`](kitchen/sim/) | team `sim` |
 | — | **Shared** | Models generated from contracts, interfaces, clock, config, the one change-mask function and clip builder (used live, in sim and in training), fakes (including fakes for partner parts), contract tests | [`kitchen/shared/`](kitchen/shared/) | team `platform` |
-| — | **Contracts** | Schemas, interfaces, table spec, fixtures, golden scenarios: the only things folders may depend on across teams | [`contracts/`](contracts/) | platform (Director merges) |
+| — | **Contracts** | Schemas, interfaces, table spec, fixtures, golden scenarios: the only things folders may depend on across teams | [`contracts/`](contracts/) | platform (Director reviews) |
 | — | **Repo** | `tools/`, `tests/e2e/`, `.github/`, `.claude/`, `pyproject.toml` | — | team `platform` |
 | — | **Decisions** | ADRs | [`docs/decisions/`](docs/decisions/) | whoever made the decision |
 
@@ -85,19 +85,19 @@ All agents share one GitHub account, so **sign** every issue comment and PR body
 
 | Role | Signature | Job |
 |---|---|---|
-| **Owner** (human) | — | Product decisions, keys, money, hardware tests, milestone sign-off |
-| **Director** (one) | `— [director]` | Keeps the teams pointed at one working demo. Owns this file, merges `contracts/` changes, keeps the roadmap and the Program board, talks to the partner. Writes no product code |
-| **Manager** (one per team) | `— [manager/<team>]` | Writes issues, dispatches Workers, reviews and merges the team's PRs |
-| **Worker** | `— [worker/<team>/w<N>]` | One issue, one worktree, one PR. Never merges |
+| **Owner** (human) | — | Merges every PR. Product decisions, keys, money, hardware tests, milestone sign-off |
+| **Director** (one) | `— [director]` | Keeps the teams pointed at one working demo. Owns this file, reviews `contracts/` changes, keeps the roadmap and the Program board, talks to the partner. Writes no product code |
+| **Manager** (one per team) | `— [manager/<team>]` | Writes issues, dispatches Workers, reviews the team's PRs |
+| **Worker** | `— [worker/<team>/w<N>]` | One issue, one worktree, one PR |
 
 ### Director: each cycle
-1. If `main` is red, nothing else merges until it's fixed.
-2. Merge PRs that change `contracts/` or this file.
+1. If `main` is red, get the fix reviewed first and tell the owner nothing else should merge until it's green.
+2. Review PRs that change `contracts/` or this file.
 3. Unblock cross-team issues; settle disputes in one sentence on the issue. Move Worker capacity to the critical path, within the owner's cap.
 4. Rewrite the **Program board** issue body: milestone status, blockers, what needs the owner, what waits on the partner.
 
 ### Manager: each cycle
-1. Review and merge the team's open PRs (below).
+1. Review the team's open PRs (below).
 2. Answer Worker questions.
 3. Keep a few issues `status:ready` (§6).
 4. Dispatch Workers on ready issues, never two on the same files.
@@ -115,7 +115,7 @@ Done means: a PR that closes #<n> with CI green.
 
 Use a stronger model for `safety-critical` issues and anything with tricky concurrency or math.
 
-**Review: one pass, by the Manager.** CI is the proof: read the diff and the CI result, and don't re-run what CI already ran. Merge with `gh pr merge <n> --squash --delete-branch` when:
+**Review: one pass, by the Manager.** CI is the proof: read the diff and the CI result, and don't re-run what CI already ran. When all of these hold, post a signed `APPROVED` comment and add the `ready-to-merge` label; the owner merges:
 - CI is green and the acceptance criteria are met;
 - the tests would fail if the feature broke;
 - it touches only this team's folders and no partner folder, and is no bigger than the issue;
@@ -142,6 +142,7 @@ Otherwise post one numbered list of fixes.
 | Status | `status:backlog` → `status:ready` → `status:in-progress` → `status:review` → closed, plus `status:blocked` and `status:needs-human` |
 | Priority | `prio:p0` (blocks this milestone's demo) · `prio:p1` (needed this milestone) · `prio:p2` (nice to have) |
 | Flags | `safety-critical` (verdict, fail-closed or gate path) · `hardware` (needs a real device; only a human verifies) · `needs-partner` · `bug` |
+| PRs | `ready-to-merge` (reviewed and green; the owner's merge queue) |
 
 An issue is **ready** when it has a goal, acceptance criteria with the command that proves each, an out-of-scope line, and any `Blocked by #N`. It should fit one PR of about 400 changed lines. Milestones (M0–M4) group issues; there are no epic issues.
 
@@ -149,13 +150,13 @@ An issue is **ready** when it has a goal, acceptance criteria with the command t
 
 **Branches and commits.** Branches are `<team>/<issue>-<slug>` (the partner uses `partner/<slug>`). One agent, one worktree, one branch. Never push to `main`. Commit messages are `<team>: <imperative summary> (#<issue>)`, plus whatever co-author trailer your harness requires.
 
-**Pull requests.** `Closes #N`, what changed, and anything checked by hand that CI doesn't cover. Squash merge only. The team's Manager merges; the Director merges `contracts/` and `AGENTS.md`; the partner merges partner folders.
+**Pull requests.** `Closes #N`, what changed, and anything checked by hand that CI doesn't cover. **Agents never run `gh pr merge`:** the team's Manager reviews (the Director, for `contracts/` and `AGENTS.md`) and adds `ready-to-merge`, then the owner squash-merges. The partner merges their own PRs.
 
 **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) validates the contracts, keeps agent branches out of partner folders, and runs ruff and pytest. That's the whole gate.
 
 **Keeping main green.** Whoever breaks `main` reverts first and fixes second; nothing else merges until it's green.
 
-**Contracts.** To change one, open a PR touching only `contracts/` that names the teams it affects. The Director merges it; a partner interface also needs the partner's OK. Each affected team updates its code in its own PR.
+**Contracts.** To change one, open a PR touching only `contracts/` that names the teams it affects. The Director reviews it; a partner interface also needs the partner's OK. Each affected team updates its code in its own PR.
 
 **Other teams.** Need something from another team? Open an issue with their `team:` label and link it from your blocked issue. Never copy their code into your folder.
 
@@ -223,7 +224,7 @@ Stop, comment on your issue, and wait if:
 - you're about to delete or rewrite more than you were asked to;
 - three tries on the same task haven't passed.
 
-**Never:** commit secrets, `.env`, weights or video; push to `main` or force-push someone else's branch; write `@claude` in GitHub text (it can trigger automation); skip or weaken a test to get green; merge as a Worker; make the verdict depend on a model being right.
+**Never:** commit secrets, `.env`, weights or video; push to `main` or force-push someone else's branch; write `@claude` in GitHub text (it can trigger automation); skip or weaken a test to get green; run `gh pr merge` (the owner merges); make the verdict depend on a model being right.
 
 ## 10. Roadmap
 
@@ -274,6 +275,7 @@ uv run pytest -m 'not hardware and not slow'           # every test CI runs
 uv run pytest kitchen/<step>                           # one step's tests
 gh issue list -l team:<team> -l status:ready           # your team's ready queue
 gh issue view <n> --comments                           # an issue and its history
+gh pr list --label ready-to-merge                      # the owner's merge queue
 ```
 
 ## 13. Glossary
@@ -298,7 +300,7 @@ gh issue view <n> --comments                           # an issue and its histor
 
 ## 14. Running the org (Claude Code)
 
-**One-time setup (owner):** install `gh`, `uv` and Node ≥ 24.15; copy `.env.example` to `.env`; optionally copy `tools/claude-settings.recommended.json` to `.claude/settings.json` (fewer permission prompts; Managers need `gh pr merge` allowed to merge).
+**One-time setup (owner):** install `gh`, `uv` and Node ≥ 24.15; copy `.env.example` to `.env`; optionally copy `tools/claude-settings.recommended.json` to `.claude/settings.json` (fewer permission prompts).
 
 | Role | How it runs |
 |---|---|
