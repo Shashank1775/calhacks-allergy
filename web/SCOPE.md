@@ -18,7 +18,7 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 
 - **Scaffold** per the [web framework decision](../docs/decisions/web-framework.md): Vite 8, React 19, TypeScript, plain CSS, no router. Node 24 pinned in `.nvmrc` and `engines`.
 - **State.** `StateSource` interface; `FakeStateSource` replays any golden scenario; `state_source_for()` returns no source for anything but an exact known value (fail closed); `useTableRows()` and `useFeedStatus()`.
-- **Local runner source.** `WEB_STATE_SOURCE=local` with an `http(s)` `WEB_STATE_URL`: `LocalStateSource` polls `tools/run_local.py`'s `GET /state` every 500 ms (one poll at a time, 2 s timeout) and shows REPLAY. Any failed poll (network error, timeout, error status, a body that isn't JSON or is missing a table) means FEED LOST, keeping the last rows, until a good poll comes back.
+- **Local runner source.** `WEB_STATE_SOURCE=local` with an `http(s)` `WEB_STATE_URL`: `LocalStateSource` polls `tools/run_local.py`'s `GET /state` every 500 ms (one poll at a time, 2 s timeout) and shows REPLAY unless the snapshot says `mode: "live"` (a missing or unknown mode is a replay). Any failed poll (network error, timeout, error status, a body that isn't JSON or is missing a table) means FEED LOST, keeping the last rows, until a good poll comes back.
 - **One badge function.** `plate_badge()` is the only path to PASS: live feed, latest verdict, latest ticket revision. Otherwise HOLD, RECHECKING, FEED LOST or NO VERDICT YET.
 - **Banner.** FEED LOST with no source or a dropped feed, CONNECTING, and REPLAY whenever the data is a scenario.
 - **API clients** for orders and vision that never throw: every failure comes back as a code the screen shows.

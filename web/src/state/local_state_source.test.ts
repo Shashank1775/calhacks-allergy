@@ -74,7 +74,7 @@ function runner_answers(respond: () => Response) {
 }
 
 /** A source after one good poll of `body`. */
-async function live_source(body = snapshot()): Promise<LocalStateSource> {
+async function live_source(body: Record<string, unknown> = snapshot()): Promise<LocalStateSource> {
   runner_answers(() => HttpResponse.json(body));
   const source = new LocalStateSource(RUNNER_URL);
   await source.poll_once();
@@ -101,6 +101,16 @@ describe("LocalStateSource", () => {
     expect(source.feed_status()).toBe("live");
     expect(source.label).toBe("local runner · knife-carries-peanut-to-plate");
     for (const table of WEB_TABLES) expect(source.rows(table)).toEqual(body.tables[table]);
+  });
+
+  it("is live only when the runner says mode live", async () => {
+    expect((await live_source({ ...snapshot(), mode: "live" })).is_replay).toBe(false);
+    expect((await live_source({ ...snapshot(), mode: "replay" })).is_replay).toBe(true);
+  });
+
+  it("safety: a missing or unknown mode counts as a replay", async () => {
+    expect((await live_source(snapshot())).is_replay).toBe(true);
+    expect((await live_source({ ...snapshot(), mode: "LIVE" })).is_replay).toBe(true);
   });
 
   it("keeps a table's array when a poll brings the same rows, and replaces it when they change", async () => {

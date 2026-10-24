@@ -75,6 +75,12 @@ npm --prefix web run dev
 
 The screens poll the runner's `GET /state` twice a second and show REPLAY, since it's a scenario, not the kitchen. If the runner stops or answers badly, every screen shows FEED LOST until it's back. `WEB_STATE_URL` must be an `http://` or `https://` address, or there's no source.
 
+**Live, from the camera**: run the runner with `--live` (it serves the Vision API on :8002 too) and add `WEB_VISION_URL=http://localhost:8002`. The banner drops REPLAY only when the runner says `mode: "live"`. Until the partner's interactions step is in, every plate holds.
+
+```bash
+uv run python tools/run_local.py --live --webcam 0 --zones zones.json
+```
+
 **With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop.
 
 With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION_URL`. Each service must list the web origin in its CORS setting (`ORDERS_CORS_ORIGINS`, `VISION_CORS_ORIGINS`), for example `http://localhost:5173`, or `http://<laptop-ip>:5173` for the iPad.

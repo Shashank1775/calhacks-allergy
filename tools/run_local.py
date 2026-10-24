@@ -1,12 +1,13 @@
-"""Local runner: the whole kitchen on one laptop, with no camera and no partner database.
+"""Local runner: the whole kitchen on one laptop, on in-memory state (no partner database): a golden scenario
+replayed, or the camera live (--live).
 
 Owner: platform (agents)
 Step:  end-to-end harness (the same shift as tests/e2e, served over HTTP on a live clock)
 Reads: one golden scenario (contracts/scenarios/<name>.json); Kitchen from tests/e2e/conftest.py (the wiring);
        Orders HTTP API requests from the tablet; ORDERS_CORS_ORIGINS; LAYA_MODEL_DIR and LAYA_PLATE_MODEL_DIR (the
-       fine-tuned Laya checkpoints, optional)
-Emits: the Orders HTTP API, plus GET /state: a read-only snapshot of every table in contracts/state-tables.md;
-       gate states and spoken holds on stdout (FakeGate, FakeSpeaker)
+       fine-tuned Laya checkpoints, optional); live: camera or video frames, a zones file, VISION_ settings
+Emits: the Orders HTTP API, plus GET /state: a read-only snapshot of every table in contracts/state-tables.md, with
+       mode "replay" or "live"; gate states and spoken holds on stdout (FakeGate, FakeSpeaker); live: the Vision API
 Rules: fail closed: every verdict comes from kitchen.verdict, and the gate ticks every TICK_MS even after a failed
        scenario step, so it never freezes on its last state; no unanswered questions: the scenario's tickets are
        typed through the Orders API and its questions, like any tablet ticket; late changes recheck everything:
@@ -23,6 +24,19 @@ clock itself.
     uv run python tools/run_local.py knife-carries-peanut-to-plate      # then point web/ at http://localhost:8001
     LAYA_MODEL_DIR=data/models/laya-v1 LAYA_PLATE_MODEL_DIR=data/models/laya-plate-v2 \\
         uv run --with laya==0.4.14 python tools/run_local.py knife-carries-peanut-to-plate   # the real models
+
+Live mode (--live) drives the same services from a camera instead of a scenario: vision's frame loop feeds the
+partner's EntityStore and the interactions step, the partner's ProvenanceGraph reads what they write, the verdict
+service judges each plate that reaches the pass, and the gate watches vision's health. It serves the Vision API
+(stream, health, start plate) on VISION_PORT next to the Orders API and GET /state:
+
+    uv run python tools/run_local.py --live --webcam 0 --zones zones.json          # web/: WEB_VISION_URL=:8002 too
+    uv run python tools/run_local.py --live --video data/recordings/prep.mp4 --zones zones.json
+
+The interactions step plugs in by name (--interactions, default kitchen.interactions.events:live_consumer): a
+factory called with (state, clock) that returns a frame consumer writing edges with StateClient.record_interaction.
+Until it exists, or whenever it fails or falls behind, the graph refuses to answer, so every plate holds (fail
+closed): without edges the graph would see no touches and could clear a plate that touched an allergen.
 """
 
 import argparse
@@ -49,6 +63,7 @@ from kitchen.shared.fakes import (
     scenario_timeline,
 )
 from kitchen.shared.fakes.state_client import TABLES
+from kitchen.shared.interfaces import GraphUnavailable
 from kitchen.shared.models import CONTRACTS_DIR
 from kitchen.verdict.laya_check import FakeLayaCheck, LocalLayaCheck
 
@@ -242,9 +257,306 @@ class LocalRunner:
         """GET /state: every table, plus the scenario being replayed and the shift's t_ms."""
         return {
             "scenario_id": self.scenario["scenario_id"],
+            "mode": "replay",
             "t_ms": self.shift.clock.now_ms(),
             "tables": self.mirror.snapshot(),
         }
+
+
+# ---------- live mode: the camera drives the same services ----------
+
+# The interactions step's factory, called as factory(state, clock), returning a vision frame consumer.
+INTERACTIONS_STEP = "kitchen.interactions.events:live_consumer"
+
+# The interactions step must have handled a frame this recently, or the graph can't be trusted. The same 1 s the gate
+# allows vision's frames (GateSettings.health_limit_ms).
+INTERACTIONS_STALE_MS = 1000
+
+
+def load_factory(spec: str):
+    """The callable named "module:attribute", e.g. "kitchen.interactions.events:live_consumer"."""
+    module_name, _, attribute = spec.partition(":")
+    if not attribute:
+        raise ValueError(f"{spec!r} isn't module:attribute")
+    return getattr(importlib.import_module(module_name), attribute)
+
+
+class InteractionsSlot:
+    """The interactions step as a vision frame consumer, with a health check the graph reads before it answers.
+
+    The step comes from the factory named by `spec`. If it can't be imported or built, every frame is skipped and
+    problem() says why, forever. Once it runs, problem() is None only while its last call succeeded and came within
+    INTERACTIONS_STALE_MS.
+    """
+
+    def __init__(self, state, clock, spec=INTERACTIONS_STEP) -> None:
+        """`spec` names the factory ("module:attribute"), or is the factory itself (tests)."""
+        self.clock = clock
+        self.spec = spec
+        self.consumer = None
+        self.missing: str | None = None
+        self._lock = threading.Lock()
+        self._last_ok_ms: int | None = None
+        self._last_error_ms: int | None = None
+        try:
+            factory = spec if callable(spec) else load_factory(spec)
+            self.consumer = factory(state, clock)
+        except Exception as error:
+            self.missing = f"the interactions step {spec} isn't available ({type(error).__name__}: {error})"
+            logger.warning("%s: every plate will hold until it is", self.missing)
+
+    def __call__(self, output) -> None:
+        """Hand one frame to the step. An error is recorded, then raised again for the frame loop to log."""
+        if self.consumer is None:
+            return
+        try:
+            self.consumer(output)
+        except Exception:
+            with self._lock:
+                self._last_error_ms = self.clock.now_ms()
+            raise
+        with self._lock:
+            self._last_ok_ms = self.clock.now_ms()
+
+    def problem(self) -> str | None:
+        """Why the graph can't be trusted right now, or None when the step is healthy."""
+        if self.missing:
+            return self.missing
+        with self._lock:
+            last_ok, last_error = self._last_ok_ms, self._last_error_ms
+        if last_error is not None and (last_ok is None or last_error >= last_ok):
+            return "the interactions step failed on the latest frame"
+        if last_ok is None:
+            return "the interactions step hasn't handled a frame yet"
+        if self.clock.now_ms() - last_ok > INTERACTIONS_STALE_MS:
+            return f"the interactions step hasn't handled a frame in {INTERACTIONS_STALE_MS} ms"
+        return None
+
+
+class GuardedGraph:
+    """The partner's ProvenanceGraph, refusing to answer while the interactions step isn't healthy.
+
+    Rule: fail closed. The graph only knows the touches the interactions step wrote. Without them it would report a
+    plate untouched and the verdict could pass it, so it raises GraphUnavailable instead, which the verdict service
+    turns into a HOLD with the reason.
+    """
+
+    def __init__(self, graph, slot: InteractionsSlot) -> None:
+        self.graph = graph
+        self.slot = slot
+
+    def _check(self) -> None:
+        problem = self.slot.problem()
+        if problem:
+            raise GraphUnavailable(f"can't see touches: {problem}")
+
+    def reach(self, plate_id: str, as_of_t_ms: int):
+        self._check()
+        return self.graph.reach(plate_id, as_of_t_ms)
+
+    def unknown_ancestors(self, plate_id: str, as_of_t_ms: int):
+        self._check()
+        return self.graph.unknown_ancestors(plate_id, as_of_t_ms)
+
+    def subgraph(self, plate_id: str, as_of_t_ms: int):
+        self._check()
+        return self.graph.subgraph(plate_id, as_of_t_ms)
+
+    def version(self) -> str:
+        return self.graph.version()
+
+
+class LiveRunner:
+    """The kitchen driven by a camera: vision, the entity store, interactions, the graph, verdict and the gate on one
+    FakeStateClient, with the Orders API and GET /state in `app` and the Vision API in `vision_app`.
+
+    Feed frames with run_frames() (a source until it ends) or step_frame() (one frame; tests). Call sync() to write the
+    entity store to the database (start() does it at 5 Hz) and tick() a few times a second for the gate.
+    """
+
+    def __init__(
+        self,
+        clock,
+        zones: list,
+        vision_settings=None,
+        detector=None,
+        parser=None,
+        plate_check=None,
+        interactions=INTERACTIONS_STEP,
+        cors_origins: list[str] | None = None,
+        vision_cors_origins: list[str] | None = None,
+    ) -> None:
+        from kitchen.entities.store import EntityStore
+        from kitchen.gate.driver import FakeGate
+        from kitchen.gate.service import GateService
+        from kitchen.gate.voice import FakeSpeaker
+        from kitchen.graph import ProvenanceGraph
+        from kitchen.orders.api import create_app
+        from kitchen.orders.bins import save_bins
+        from kitchen.orders.tickets import TicketDesk
+        from kitchen.orders.transcribe import FakeTranscriber
+        from kitchen.verdict.service import VerdictService
+        from kitchen.vision import server as vision_server
+        from kitchen.vision.common import VisionSettings
+        from kitchen.vision.run import build_frame_loop, entity_store_consumer
+        from kitchen.vision.zones import push_zones
+
+        self.clock = clock
+        self.zones = zones
+        self.settings = vision_settings or VisionSettings()
+        self.state = FakeStateClient()
+        self.mirror = StateMirror(self.state)  # subscribed before anything is written
+        push_zones(self.state, zones)
+        save_bins(self.state)  # the hard-coded demo bins, as the Orders API writes them at startup
+
+        self.interactions = InteractionsSlot(self.state, clock, interactions)
+        self.graph = GuardedGraph(ProvenanceGraph(self.state), self.interactions)
+        self.verdict_service = VerdictService(self.state, self.graph, plate_check or FakeLayaCheck(), clock)
+        self.verdict_service.start()
+
+        self.store = EntityStore(clock)
+        self.status = None
+        self.loop = build_frame_loop(
+            self.settings, zones, [entity_store_consumer(self.store), self.interactions], detector=detector
+        )
+        self.status = vision_server.VisionStatus(self.loop.detector.backend, self.settings.track_lost_ms)
+        self.loop.status = self.status
+
+        self.gate = FakeGate(quiet=True)
+        self.speaker = FakeSpeaker(quiet=True)
+        self.gate_loop = GateService(self.state, self.gate, self.speaker, clock, read_health=self.last_frame_t_ms)
+
+        desk = TicketDesk(parser or FakeLayaParser(), self.state, clock)
+        self.app = create_app(desk, FakeTranscriber(), cors_origins=cors_origins or [])
+        self.app.add_api_route("/state", self.state_snapshot, methods=["GET"])
+        self.vision_app = vision_server.create_app(self.status, self.bind, vision_cors_origins or [])
+
+    def last_frame_t_ms(self) -> int | None:
+        """Vision's /health last_frame_t_ms, read in-process for the gate."""
+        return self.status.health()["last_frame_t_ms"]
+
+    def bind(self, ticket_id: str) -> str:
+        """POST /plates/start: bind the one plate at the plating spot to the ticket, or refuse (vision's rules)."""
+        from kitchen.vision.plates import start_plate
+
+        return start_plate(
+            self.state,
+            self.status.recent_observations(),
+            self.zones,
+            ticket_id,
+            self.clock.now_ms(),
+            self.settings.plate_bind_max_age_ms,
+            self.settings.track_lost_ms,
+        )
+
+    def start(self) -> None:
+        """Sync the entity store to the database at 5 Hz, in the background."""
+        self.store.start_sync(self.state, hz=5.0)
+
+    def step_frame(self, frame):
+        """Run one frame through vision and its consumers."""
+        return self.loop.step(frame)
+
+    def run_frames(self, source) -> int:
+        """Run frames until the source ends; returns how many. A detector error propagates, and frames stop."""
+        return self.loop.run(source)
+
+    def sync(self) -> None:
+        """Write the entity store to the database once (what start() does at 5 Hz)."""
+        self.store.sync_once(self.state)
+
+    def tick(self) -> str:
+        """One gate loop tick; returns the state shown."""
+        return self.gate_loop.tick()
+
+    def state_snapshot(self) -> dict:
+        """GET /state: every table, marked live so the screens don't show REPLAY."""
+        return {"scenario_id": "live", "mode": "live", "t_ms": self.clock.now_ms(), "tables": self.mirror.snapshot()}
+
+
+def live_source(args, clock):
+    """The camera or video the live runner reads, played like a live camera."""
+    from kitchen.vision.camera import VideoSource, WebcamSource
+    from kitchen.vision.run import as_live
+
+    if args.video:
+        return as_live(VideoSource(args.video, clock), clock)
+    return WebcamSource(args.webcam, clock)
+
+
+def run_live_frames(runner: LiveRunner, source) -> None:
+    """The frame loop's thread. When it stops, frames stop, /health goes stale and the gate shows fault."""
+    try:
+        count = runner.run_frames(source)
+        logger.warning("the camera source ended after %d frames: the gate will show fault", count)
+    except Exception:
+        logger.exception("the frame loop stopped on an error: the gate will show fault")
+
+
+def run_live_gate(runner: LiveRunner) -> None:
+    """Tick the gate every TICK_MS, forever, printing each gate change, each spoken line and interactions problems."""
+    shown = None
+    spoken = 0
+    problem = None
+    while True:
+        try:
+            runner.tick()
+        except Exception:
+            logger.exception("a gate tick failed")
+        calls = runner.gate.calls
+        if calls and calls[-1] != shown:
+            shown = calls[-1]
+            print(f"[gate] {shown[0]}" + (f" #{shown[1]}" if shown[1] is not None else ""), flush=True)
+        for line in runner.speaker.lines[spoken:]:
+            print(f"[voice] {line}", flush=True)
+        spoken = len(runner.speaker.lines)
+        if runner.interactions.problem() != problem:
+            problem = runner.interactions.problem()
+            print(f"[interactions] {problem or 'ok'}", flush=True)
+        time.sleep(TICK_MS / 1000)
+
+
+def main_live(args, origins: list[str], parser, plate_check) -> int:
+    """Live mode's CLI: the camera, the Vision API on VISION_PORT, and the Orders API plus GET /state on --port."""
+    import uvicorn
+
+    from kitchen.shared.config import load_settings, log_settings
+    from kitchen.vision.common import VisionSettings
+    from kitchen.vision.detect import open_detector
+    from kitchen.vision.run import serve_in_background
+    from kitchen.vision.server import parse_cors_origins
+    from kitchen.vision.zones import load_zones
+
+    settings = load_settings(VisionSettings, "VISION_")
+    log_settings(settings)
+    zones = load_zones(args.zones)
+    # The clock starts once the detector has loaded (seconds, for ONNX), as in vision's own CLI: otherwise the load
+    # would use up shift_start_ms and every object on the counter would start with unknown history.
+    detector = open_detector(settings)
+    clock = SystemClock()
+    runner = LiveRunner(
+        clock,
+        zones,
+        vision_settings=settings,
+        detector=detector,
+        parser=parser,
+        plate_check=plate_check,
+        interactions=args.interactions,
+        cors_origins=origins,
+        vision_cors_origins=parse_cors_origins(settings.cors_origins),
+    )
+    runner.start()
+    serve_in_background(runner.vision_app, settings.port)
+    source = live_source(args, clock)
+    threading.Thread(target=run_live_frames, args=(runner, source), daemon=True, name="frames").start()
+    threading.Thread(target=run_live_gate, args=(runner,), daemon=True, name="gate").start()
+    print(
+        f"run_local: LIVE from {args.video or f'webcam {args.webcam}'}, Orders API and GET /state on "
+        f"http://localhost:{args.port}, Vision API on http://localhost:{settings.port}",
+        flush=True,
+    )
+    uvicorn.run(runner.app, host="0.0.0.0", port=args.port, log_level="warning")
+    return 0
 
 
 def run_kitchen(runner: LocalRunner) -> None:
@@ -271,10 +583,18 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     names = [path.stem for path in GOLDEN_SCENARIO_PATHS]
-    cli = argparse.ArgumentParser(description="Run the whole kitchen locally, replaying a golden scenario.")
+    cli = argparse.ArgumentParser(description="Run the whole kitchen locally: replay a golden scenario, or --live.")
     cli.add_argument("scenario", nargs="?", default="knife-carries-peanut-to-plate", choices=names)
     cli.add_argument("--port", type=int, default=DEFAULT_PORT)
+    cli.add_argument("--live", action="store_true", help="drive the kitchen from a camera instead of a scenario")
+    source = cli.add_mutually_exclusive_group()
+    source.add_argument("--webcam", type=int, help="live: a webcam index, e.g. 0")
+    source.add_argument("--video", type=Path, help="live: a video file, played like a live camera")
+    cli.add_argument("--zones", type=Path, help="live: zones.json (kitchen/vision/zones.py)")
+    cli.add_argument("--interactions", default=INTERACTIONS_STEP, help="live: the interactions step's factory")
     args = cli.parse_args(argv)
+    if args.live and (args.zones is None or (args.webcam is None and args.video is None)):
+        cli.error("--live needs --zones and one of --webcam or --video")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # the scenario's own Orders API calls, one line each
@@ -286,6 +606,8 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
     parser, plate_check = laya_models(note_dir, plate_dir)
+    if args.live:
+        return main_live(args, origins, parser, plate_check)
     runner = LocalRunner(path, SystemClock(), cors_origins=origins, parser=parser, plate_check=plate_check)
     print(f"run_local: {args.scenario} on http://localhost:{args.port} (GET /state), CORS for {origins}", flush=True)
     runner.start()

@@ -22,6 +22,7 @@ verdict ──▶ GateService ──▶ FakeGate + FakeSpeaker
 | `test_golden_scenarios.py` | Every golden scenario end to end, judged from what the system wrote: the verdict row (decision, flagged allergens, Laya's flags, reasons, chain), the gate state when it landed, and the spoken holds. Also determinism across processes and hash seeds |
 | `test_typed_note.py` | A typed note through orders (refused while questions are open), the plate at the pass, then a late amendment through orders that rechecks the plate and closes the gate. Also: an amendment Laya misreads still keeps the allergen, and the gate holds on a new revision before its recheck lands |
 | `test_local_runner.py` | The local runner: every golden scenario played on its own clock with its tickets typed through the Orders API, `GET /state` (every table in `contracts/state-tables.md`, read-only, CORS for the web origin only), a tablet ticket showing up beside the scenario's, the gate still ticking after a failed step, and the Laya parts it's given (the fakes unless `LAYA_MODEL_DIR` and `LAYA_PLATE_MODEL_DIR` are set). A `slow` run replays every golden scenario on the real Laya models |
+| `test_live_runner.py` | The runner's live mode on a scripted detector: frames through vision, the partner's `EntityStore` and `ProvenanceGraph`, the verdict service and the gate. A clean plate passes; a knife that scooped satay holds the peanut plate; with the interactions step missing, failing or behind, every plate holds; the gate faults when frames stop; `GET /state` says `mode: "live"` |
 
 ## Commands
 
@@ -30,6 +31,7 @@ uv run pytest tests/e2e                                  # every golden scenario
 uv run pytest tests/e2e --state real                     # partner's StateClient against a local SpacetimeDB (fails until wired in)
 uv run pytest tests/e2e --graph real                     # partner's ProvenanceGraph instead of the fake (fails until wired in)
 uv run python tools/run_local.py late-amendment-adds-dairy   # the same shift, live: Orders API + GET /state on :8001
+uv run python tools/run_local.py --live --webcam 0 --zones zones.json   # the camera instead: + Vision API on :8002
 uv run --env-file .env --with laya==0.4.14 python -m pytest tests/e2e -m slow   # the runner on laya-v1 and laya-plate-v2 (both dirs set)
 ```
 
