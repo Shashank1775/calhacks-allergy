@@ -112,8 +112,11 @@ class VisionSettings:
     port: int = 8002
     cors_origins: str = "http://localhost:5173"
 
-    # Detector thresholds, shared by both backends (the Hailo NMS floor sits below these: hailo.py).
-    object_min_score: float = 0.35
+    # Detector thresholds, shared by both backends (the Hailo NMS floor sits below these: hailo.py). object_min_score
+    # is the floor for a tracked class's own score (detect.py, decode_objects). 0.25 is what the owner tested on real
+    # overhead clips: it keeps a flat plate scored bowl 0.32 at the cost of a few extra bowls and forks, which only add
+    # holds. VISION_OBJECT_MIN_SCORE=0.35 sets it back.
+    object_min_score: float = 0.25
     person_min_score: float = 0.35
     nms_iou: float = 0.45
     # A wrist below this confidence isn't a hand: no hand is invented from a guess (fail closed).

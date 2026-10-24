@@ -8,14 +8,17 @@ Reads: SourceFrame from camera.py; the deploy bundle in settings.bundle_dir (man
 Emits: Detector.detect(frame) -> (list[Detection], list[Person]), boxes and keypoints normalized to the original frame
 Rules: fail closed: a missing or broken bundle or bad class names raise at startup and a wrong-shaped output or one with
        NaN or inf values raises per frame, so there is never a detector that silently returns nothing; detections and
-       keypoints are only ever decoded, never invented or interpolated, and a class with no entity kind is dropped,
-       never relabeled; backends only run the network and one post-processing path serves both, so local results
-       predict Hailo results; onnxruntime and hailo_platform are imported only when a detector is opened
+       keypoints are only ever decoded, never invented or interpolated, and a class with no entity kind never
+       competes for an anchor, so it is never relabeled as one we track; backends only run the network and one
+       post-processing path serves both, so local results predict Hailo results; onnxruntime and hailo_platform are
+       imported only when a detector is opened
 
 The class map comes from the bundle manifest's networks.det. A stock bundle has no class_names: its detector is
 Ultralytics' 80 COCO classes, of which vision tracks fork, knife, spoon and bowl (common.COCO_OBJECTS). A custom
 bundle lists its detector's classes in output order in class_names (bundle.py --class-names), and vision tracks those
-with an entity kind (identity.OBJECT_CLASSES: plate, bowl, knife, spoon, fork).
+with an entity kind (identity.OBJECT_CLASSES: plate, bowl, knife, spoon, fork). Either way only the tracked classes
+compete in decode_objects, on the ONNX output and on the Hailo's, which hailo.py rebuilds in the same layout with
+one column per box HailoRT kept for each class.
 
 The letterbox geometry is kitchen/shared/clips.py's (letterbox_layout at settings.input_size, gray 114), so the
 detector, the change mask and the clip builder all place a frame inside its square the same way. The detector resizes
@@ -200,15 +203,21 @@ def decode_objects(
     """Turn the detection network's [1, 4 + classes, anchors] output ([1, 84, anchors] for COCO) into the tracked
     objects in one frame: knives, spoons, forks and bowls, and plates for a detector that has them.
 
-    Each anchor takes its best class over all the detector's classes (as Ultralytics does), so an anchor that is
-    mostly a person or a cup is dropped rather than relabeled as a tool. Then the score floor, per-class NMS, and the
-    boxes mapped back through the letterbox to the original frame (frame_size is its (width, height)). Best
-    confidence first.
+    Only the classes vision tracks compete: each anchor takes the best of those, on that class's own score, and every
+    other class's score is never read. So a flat plate COCO calls pizza is still a bowl on its bowl score, and a
+    person, a cup or a fine-tune's hand never wins an anchor or lends one its score. Then the score floor, per-class
+    NMS, and the boxes mapped back through the letterbox to the original frame (frame_size is its (width, height)).
+    Best confidence first.
     """
     columns = _columns(output, 4 + classes.count, "detection")
-    scores = columns[:, 4:].max(axis=1)
-    class_ids = columns[:, 4:].argmax(axis=1)
-    wanted = np.isin(class_ids, list(classes.tracked)) & (scores >= settings.object_min_score)
+    # Leaning toward seeing too much: a sieve or a jar lid taken for a bowl or a fork only adds an entity and edges,
+    # which can only add holds, while a bin the detector misses is an allergen source with no edges (the PASS
+    # direction). Untracked classes competing hid real bins: a flat plate COCO calls pizza had a bowl score of 0.32.
+    tracked_ids = np.array(sorted(classes.tracked))
+    tracked_scores = columns[:, 4 + tracked_ids]
+    scores = tracked_scores.max(axis=1)
+    class_ids = tracked_ids[tracked_scores.argmax(axis=1)]
+    wanted = scores >= settings.object_min_score
     boxes, scores, class_ids = _corner_boxes(columns[wanted]), scores[wanted], class_ids[wanted]
 
     layout = letterbox_for(*frame_size, settings.input_size)

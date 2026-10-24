@@ -6,9 +6,9 @@ Step:  vision
 Reads: kitchen.vision.detect
 Emits: nothing
 Rules: fail closed: a missing bundle, bad class names, a wrong-shaped or non-finite output or a session error raises,
-       never an empty result, and a class vision doesn't track is dropped, never relabeled (safety tests); a stock
-       bundle decodes exactly as before custom detectors; no test needs onnxruntime, hailo_platform or model files
-       except the slow one, which skips without VISION_TEST_BUNDLE
+       never an empty result, and a class vision doesn't track never competes and is never relabeled (safety tests);
+       a stock bundle decodes as the old decode would with only fork, knife, spoon and bowl scored; no test needs
+       onnxruntime, hailo_platform or model files except the slow one, which skips without VISION_TEST_BUNDLE
 """
 
 import json
@@ -23,6 +23,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
+from kitchen.shared.config import load_settings
 from kitchen.vision import detect
 from kitchen.vision.common import COCO_OBJECTS, Detection, SourceFrame, VisionSettings
 from kitchen.vision.detect import (
@@ -47,7 +48,7 @@ FRAME = (1280, 720)
 CONTENT_W, CONTENT_H, LEFT, TOP = 640, 360, 0, 140
 
 KNIFE, SPOON, BOWL, PERSON, CUP = 43, 44, 45, 0, 41
-FORK = 42
+FORK, PIZZA, DINING_TABLE = 42, 53, 60
 
 # The fine-tuned detector's classes, in its output order.
 CUSTOM_NAMES = ["plate", "bowl", "knife", "spoon", "fork"]
@@ -108,12 +109,53 @@ def test_only_tracked_classes_are_kept():
         [
             ((0.1, 0.1, 0.2, 0.2), {PERSON: 0.95}),
             ((0.3, 0.3, 0.4, 0.4), {CUP: 0.9}),
-            # Mostly a person: dropped, not relabeled as the bowl it scores lower for.
-            ((0.5, 0.5, 0.6, 0.6), {PERSON: 0.9, BOWL: 0.6}),
             ((0.7, 0.7, 0.8, 0.8), {SPOON: 0.7}),
         ]
     )
     assert [d.class_name for d in decode_objects(output, FRAME, SETTINGS)] == ["spoon"]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("best_overall", [PIZZA, DINING_TABLE])
+def test_a_flat_plate_coco_calls_pizza_or_a_table_is_still_a_bowl(best_overall):
+    """Only fork, knife, spoon and bowl compete, so a plate whose best COCO class is pizza or dining table is kept on
+    its own bowl score: a missed bin would be an allergen source with no edges (the PASS direction)."""
+    output = det_output([((0.3, 0.3, 0.6, 0.6), {best_overall: 0.8, BOWL: 0.32})])
+
+    (bowl,) = decode_objects(output, FRAME, SETTINGS)
+
+    assert bowl.class_name == "bowl"
+    assert bowl.confidence == pytest.approx(0.32)
+    assert bowl.box == pytest.approx((0.3, 0.3, 0.6, 0.6), abs=1e-6)
+
+
+def test_a_person_anchor_with_a_knife_score_below_the_floor_is_dropped():
+    floor = SETTINGS.object_min_score
+    output = det_output([((0.2, 0.2, 0.5, 0.5), {PERSON: 0.95, KNIFE: floor - 0.01})])
+
+    assert decode_objects(output, FRAME, SETTINGS) == []
+
+
+def test_among_the_tracked_classes_the_highest_score_wins():
+    output = det_output([((0.2, 0.2, 0.5, 0.5), {PERSON: 0.9, FORK: 0.3, KNIFE: 0.5, SPOON: 0.4, BOWL: 0.45})])
+
+    (knife,) = decode_objects(output, FRAME, SETTINGS)
+
+    assert knife.class_name == "knife"
+    assert knife.confidence == pytest.approx(0.5)
+
+
+def test_the_score_floor_follows_vision_object_min_score(monkeypatch):
+    """The floor is 0.25 by default (what the owner tested on real overhead clips) and VISION_OBJECT_MIN_SCORE sets it."""
+    output = det_output([((0.1, 0.1, 0.2, 0.2), {BOWL: 0.3}), ((0.5, 0.5, 0.6, 0.6), {BOWL: 0.45})])
+    assert VisionSettings().object_min_score == 0.25
+    assert len(decode_objects(output, FRAME, VisionSettings())) == 2
+
+    monkeypatch.setenv("VISION_OBJECT_MIN_SCORE", "0.4")
+    settings = load_settings(VisionSettings, "VISION_")
+
+    assert settings.object_min_score == 0.4
+    assert [d.confidence for d in decode_objects(output, FRAME, settings)] == [pytest.approx(0.45)]
 
 
 def test_score_floor():
@@ -441,18 +483,21 @@ def test_a_custom_class_vision_does_not_track_is_dropped_never_relabeled():
         [
             ((0.1, 0.1, 0.2, 0.2), {0: 0.95}),  # a cup
             ((0.3, 0.3, 0.4, 0.4), {2: 0.9}),  # a ladle: no entity kind, so never a tool
-            ((0.5, 0.5, 0.6, 0.6), {0: 0.9, 1: 0.6}),  # mostly a cup: dropped, not the knife it scores lower for
+            # A cup's score doesn't compete: the anchor is a knife on the knife's own score.
+            ((0.5, 0.5, 0.6, 0.6), {0: 0.9, 1: 0.6}),
             ((0.7, 0.7, 0.8, 0.8), {3: 0.7}),
         ],
         4 + 4,
     )
 
     assert classes.tracked == {1: "knife", 3: "plate"}
-    assert [d.class_name for d in decode_objects(output, FRAME, SETTINGS, classes)] == ["plate"]
+    found = [(d.class_name, round(d.confidence, 2)) for d in decode_objects(output, FRAME, SETTINGS, classes)]
+    assert found == [("plate", 0.7), ("knife", 0.6)]
 
 
 def decode_objects_before_custom_classes(output, frame_size, settings):
-    """decode_objects as it was before bundles could name their classes: the reference for stock bundles."""
+    """decode_objects as it was before bundles could name their classes, when all 80 COCO classes competed: the
+    reference for stock bundles, run on outputs with only our four classes scored."""
     columns = detect._columns(output, DET_CHANNELS, "detection")
     scores = columns[:, 4:].max(axis=1)
     classes = columns[:, 4:].argmax(axis=1)
@@ -476,10 +521,33 @@ def test_the_fine_tunes_hand_class_is_dropped_and_hands_still_come_from_pose():
     (tracking.py), so a detector hand box is dropped, never turned into a tool or a second hand."""
     names = [*CUSTOM_NAMES, "hand"]
     classes = detector_classes({"classes": 6, "class_names": names})
-    output = det_output([((0.1, 0.1, 0.2, 0.2), {5: 0.95}), ((0.5, 0.5, 0.6, 0.6), {2: 0.8})], 4 + len(names))
+    floor = SETTINGS.object_min_score
+    output = det_output(
+        [
+            ((0.1, 0.1, 0.2, 0.2), {5: 0.95}),
+            ((0.5, 0.5, 0.6, 0.6), {2: 0.8}),
+            ((0.1, 0.5, 0.2, 0.6), {5: 0.9, 2: floor - 0.01}),  # a hand, its knife score below the floor: dropped
+            ((0.5, 0.1, 0.6, 0.2), {5: 0.9, 4: 0.4}),  # a hand holding a fork: the fork, on its own score
+        ],
+        4 + len(names),
+    )
 
     assert classes.tracked == dict(enumerate(CUSTOM_NAMES))
-    assert [d.class_name for d in decode_objects(output, FRAME, SETTINGS, classes)] == ["knife"]
+    found = [(d.class_name, round(d.confidence, 2)) for d in decode_objects(output, FRAME, SETTINGS, classes)]
+    assert found == [("knife", 0.8), ("fork", 0.4)]
+
+
+@pytest.mark.safety
+@given(arrays(np.float32, (8, ANCHORS), elements=st.floats(0, 1, width=32)), st.floats(0.05, 0.9))
+def test_a_custom_bundle_never_yields_a_hand_or_an_unknown_name(scores, floor):
+    names = ["hand", "plate", "ladle", "bowl", "knife", "cup", "spoon", "fork"]
+    classes = detector_classes({"classes": len(names), "class_names": names})
+    output = det_output([((0.1, 0.1, 0.4, 0.4), {})] * ANCHORS, 4 + len(names))
+    output[0, 4:] = scores
+
+    found = decode_objects(output, FRAME, VisionSettings(object_min_score=floor), classes)
+
+    assert {d.class_name for d in found} <= set(CUSTOM_NAMES)
 
 
 def test_a_stock_manifest_is_the_coco_detector():
@@ -519,12 +587,19 @@ def random_coco_output(seed, anchors=2000):
 @pytest.mark.safety
 @pytest.mark.parametrize("seed", range(10))
 @pytest.mark.parametrize("frame_size", [(1280, 720), (640, 640), (720, 1280)])
-def test_a_stock_84_channel_decode_is_bit_for_bit_what_it_was_before(seed, frame_size):
+def test_a_stock_84_channel_decode_is_the_old_decode_with_only_our_four_classes_scored(seed, frame_size):
+    """Stock decoding changed on purpose: the other 76 COCO classes no longer compete. So it is bit for bit the old
+    decode run on the same output with every class but fork, knife, spoon and bowl scored zero."""
     output = random_coco_output(seed)
+    only_ours = np.zeros_like(output)
+    only_ours[0, :4] = output[0, :4]
+    for class_id in COCO_OBJECTS:
+        only_ours[0, 4 + class_id] = output[0, 4 + class_id]
+
     stock = decode_objects(output, frame_size, SETTINGS, detector_classes({"classes": 80}))
 
     assert len(stock) > 10
-    assert stock == decode_objects_before_custom_classes(output, frame_size, SETTINGS)
+    assert stock == decode_objects_before_custom_classes(only_ours, frame_size, SETTINGS)
 
 
 @pytest.mark.safety
