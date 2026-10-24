@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 
 from kitchen.shared.fakes.scenarios import read_scenario
+from kitchen.shared.interfaces import StateUnavailable
 from kitchen.verdict.policy import decide
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,9 @@ def error_reason(error: Exception) -> dict:
 class VerdictService:
     """Judges plates as they reach the pass, and again when their ticket is amended.
 
-    Call start() to subscribe. Verdicts the database refused (StateUnavailable) wait in `pending` and are written by
-    the next flush(), which every trigger also runs, so a HOLD made while the database was down still lands.
+    Call start() to subscribe. Verdicts the database refused (StateUnavailable) wait in `pending`, and amended tickets
+    whose plates couldn't be listed wait in `amended`; retry() handles both, and every trigger runs it, so a HOLD made
+    while the database was down still lands. A service loop should also call retry() now and then.
     """
 
     def __init__(self, state, graph, clock, settings: VerdictSettings | None = None):
@@ -53,6 +55,7 @@ class VerdictService:
         self.clock = clock
         self.settings = settings or VerdictSettings()
         self.pending: list[dict] = []
+        self.amended: set[str] = set()
         self._at_pass: set[str] = set()
         self._unsubscribe = []
 
@@ -83,23 +86,39 @@ class VerdictService:
                 self._at_pass.discard(row.entity_id)
         except Exception:
             logger.exception("verdict trigger failed on entity_state %s", change.row)
+        self.retry()
 
     def on_ticket(self, change) -> None:
         """When a ticket is amended, rejudge every plate already judged for it, from scratch."""
         try:
-            ticket = change.row
-            if change.kind != "update":
-                return
-            judged = {verdict["plate_id"] for verdict in self.state.list_verdicts(ticket["ticket_id"])}
-            for plate_id in sorted(judged):
-                self.judge(plate_id, "ticket_amended")
+            if change.kind == "update":
+                self.amended.add(change.row["ticket_id"])
         except Exception:
             logger.exception("verdict trigger failed on ticket %s", change.row)
+        self.retry()
+
+    def retry(self) -> None:
+        """Recheck amended tickets not yet rechecked, then write pending verdicts. Never raises."""
+        for ticket_id in sorted(self.amended):
+            try:
+                judged = {verdict["plate_id"] for verdict in self.state.list_verdicts(ticket_id)}
+            except Exception:  # late changes recheck everything: keep it queued rather than drop the amendment
+                logger.exception("couldn't list the plates of amended ticket %s, will retry", ticket_id)
+                continue
+            self.amended.discard(ticket_id)
+            for plate_id in sorted(judged):
+                self.judge(plate_id, "ticket_amended")
+        self.flush()
 
     def judge(self, plate_id: str, trigger: str) -> dict:
         """Read everything decide() needs, decide, and record the verdict. Returns the verdict."""
         now = self.clock.now_ms()
-        inputs = self.read_inputs(plate_id, now)
+        try:
+            inputs = self.read_inputs(plate_id, now)
+        except Exception as error:  # fail closed: read_inputs guards its own reads; this catches anything it missed
+            logger.exception("reading verdict inputs for %s failed, holding", plate_id)
+            inputs = self.blank_inputs()
+            inputs["problems"].append(error_reason(error))
         verdict = decide(
             verdict_id=f"v-{plate_id}-r{inputs['revision']}-{now}",
             plate_id=plate_id,
@@ -118,12 +137,9 @@ class VerdictService:
         self.flush()
         return verdict
 
-    def read_inputs(self, plate_id: str, now: int) -> dict:
-        """The binding, ticket, plate health and the graph's answers for one plate, as decide()'s inputs.
-
-        Fail closed: anything that can't be read stays None or adds a problem, and any exception adds an error.
-        """
-        inputs = {
+    def blank_inputs(self) -> dict:
+        """decide()'s inputs before anything is read: every one missing, so on its own it can only hold."""
+        return {
             "ticket_id": UNBOUND_TICKET_ID,
             "ticket": None,
             "revision": 0,
@@ -132,6 +148,13 @@ class VerdictService:
             "problems": [],
             "graph": None,
         }
+
+    def read_inputs(self, plate_id: str, now: int) -> dict:
+        """The binding, ticket, plate health and the graph's answers for one plate, as decide()'s inputs.
+
+        Fail closed: anything that can't be read stays None or adds a problem, and any exception adds an error.
+        """
+        inputs = self.blank_inputs()
         try:
             binding = self.state.get_plate_binding(plate_id)
             if binding is None:
@@ -161,13 +184,20 @@ class VerdictService:
         return inputs
 
     def flush(self) -> None:
-        """Write pending verdicts in order. If the database is still down, they stay pending for the next flush()."""
+        """Write pending verdicts in order. While the database is down they stay pending for the next flush().
+
+        Any other failure can't be cured by retrying, so that verdict is logged and dropped: left at the head of the
+        queue it would block every later verdict, HOLDs included. Without its row the gate stays closed for that plate.
+        """
         while self.pending:
+            verdict_id = self.pending[0]["verdict_id"]
             try:
                 self.state.record_verdict(self.pending[0])
-            except Exception:
-                logger.exception("recording verdict %s failed, will retry", self.pending[0]["verdict_id"])
+            except StateUnavailable:
+                logger.exception("database unavailable, verdict %s will be retried", verdict_id)
                 return
+            except Exception:
+                logger.exception("verdict %s can't be recorded, dropping it so later verdicts still land", verdict_id)
             self.pending.pop(0)
 
 
