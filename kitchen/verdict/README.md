@@ -74,7 +74,7 @@ Invariant 5 (time-forward) belongs to the partner's graph. We check it end to en
 | Risk | Mitigation |
 |---|---|
 | Thresholds unknown (OQ-4) | OQ-4 defaults in `VerdictSettings` as per-severity floors a ticket can tighten but never loosen, recorded on every verdict ([ADR 0010](../../docs/decisions/0010-clean-confidence-and-flag-thresholds.md)); the owner sets the real values |
-| Clean-confidence ill-defined | [ADR 0010](../../docs/decisions/0010-clean-confidence-and-flag-thresholds.md): `max(0, 1 - sum of forbidden p)`, zero on any input-health failure, flag line `1 - pass_threshold`. Monotone: more evidence of a forbidden allergen never raises it |
+| Clean-confidence ill-defined | [ADR 0010](../../docs/decisions/0010-clean-confidence-and-flag-thresholds.md): `max(0, 1 - sum of forbidden p)`, zero on any input-health failure (an unknown unit ID included), and a unit flags when `1 - p_u <= effective_threshold`. Monotone: more evidence of a forbidden allergen never raises it |
 | `trace_sensitive: false` semantics (OQ-8) | Strict until the ADR lands |
 | Exceptions like "coconut is fine" (OQ-2) | Shown to the expo, never used to suppress a flag |
 | The partner's graph isn't ready | `FakeProvenanceGraph` tests the policy only; real-graph runs carry `needs-partner` |

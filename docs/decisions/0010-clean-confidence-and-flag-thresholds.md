@@ -40,13 +40,17 @@ Let `F` be the set of forbidden units on the ticket revision being judged. For e
 - If one source lists a unit more than once, that source's value is the sum of those entries, capped at 1. A duplicate can only lower confidence.
 - `p_u = max(exact_u, laya_u)`. Laya can raise a unit's probability, but never lower it (invariant 2).
 
+**Unknown unit IDs.** Every unit ID the verdict sees, in `reach`, in Laya's answer or on the ticket, must be in the allergen unit table (seeded from `contracts/allergen_units.json`). At runtime the schemas check only the ID's pattern, so a typo such as `tree_nuts` for `tree_nut` gets through. An unknown ID is an `error` (section 2), never "a unit that isn't forbidden". Dropping it would let a plate pass with a misspelled forbidden allergen on it.
+
+**Child units.** Every `parent_id` is null today (OQ-2: the nine majors only). If child units are added later, a `reach` entry for a child must count against a forbidden parent. The ADR that adds child units has to say how.
+
 ### 2. Input health
 
 The inputs are **healthy** only when none of these reason codes apply:
 
 | Code | When |
 |---|---|
-| `error` | Any exception on the verdict path; `reach` returns nothing (`None`, which is not the same as an empty list); a probability that isn't a number in [0, 1] |
+| `error` | Any exception on the verdict path; `reach` returns nothing (`None`, which is not the same as an empty list); a probability that isn't a number in [0, 1]; a unit ID in `reach`, in Laya's answer or on the ticket that isn't in the allergen unit table (section 1) |
 | `missing_input` | No ticket, no plate binding, or no usable `pass_threshold` |
 | `stale_track` | The plate's entity row is older than the staleness window |
 | `model_unavailable` | `full` mode and Laya failed, timed out or answered malformed |
@@ -82,13 +86,13 @@ effective_threshold = max(ticket.pass_threshold, settings floor for the strictes
 A forbidden unit `u` is **flagged** when its probability alone uses up the plate's whole doubt budget:
 
 ```
-flag_line = 1 - effective_threshold
-exact flag on u:  exact_u >= flag_line
-model flag on u:  laya_u  >= flag_line
+exact flag on u:  1 - exact_u <= effective_threshold
+model flag on u:  1 - laya_u  <= effective_threshold
 ```
 
+- **Why this form, and not `exact_u >= 1 - effective_threshold`.** A float can't hold 0.95 or 0.99 exactly [6]. In Python, `1 - 0.95` is `0.050000000000000044` and `1 - 0.99` is `0.010000000000000009`. With the other form, peanut at exactly 0.05 on a 0.95 ticket misses the flag. Its confidence, `1 - 0.05`, comes out at exactly 0.95, which isn't below 0.95, so the plate passes at a tie. The same happens at 0.01 on a 0.99 ticket. The form above does the same subtraction confidence does, so a single unit at a tie always flags. At 0.80 and 0.90 the rounding happens to land on the safe side, but the code must not rely on that.
 - Each flagged unit gets one `flagged` entry with `probability = p_u` and `flagged_by` set to `exact`, `laya` or both.
-- **How flags relate to confidence.** A flag means `sum(p) >= flag_line`, so `confidence <= effective_threshold`. Flags never disagree with confidence. They name the unit to blame, and at an exact tie (`confidence == effective_threshold`) the flag holds the plate, so the tie leans HOLD. Several units can each sit under the line and still add up past the budget. That plate holds with `low_confidence`.
+- **How flags relate to confidence.** The sum of forbidden probabilities is at least `p_u`, so a flagged unit means `confidence <= 1 - p_u <= effective_threshold`. This holds in floats too. IEEE 754 rounds each addition and subtraction from its exact result [7], and rounding never swaps the order of two numbers, so adding a term of at least 0 never makes the sum smaller. Flags never disagree with confidence. They name the unit to blame, and at an exact tie (`confidence == effective_threshold`) the flag holds the plate, so the tie leans HOLD. Several units can each sit under the line and still add up past the budget. That plate holds with `low_confidence`.
 - **Why the line comes from the ticket, not from each unit's severity.** The contract has one threshold per ticket, set by the strictest severity on it. A separate, lower line per unit could never change a decision, because confidence already holds those plates. It would only change the labels. One number per severity is simpler.
 
 ### 6. Decision and reasons
@@ -101,18 +105,18 @@ The verdict lists every reason (AGENTS.md §8: every HOLD logs all its reasons):
 
 - each health code that applies;
 - `exact_flag` or `model_flag` for each flagged unit, with its `allergen_unit_id`;
-- `low_confidence` whenever `confidence < effective_threshold`, even when there are flags too, with a `detail` such as `"0.92 < 0.95"`.
+- `low_confidence` whenever `confidence < effective_threshold`, even when there are flags too, with a `detail` such as `"0.92 < 0.95"`. This includes every health hold, because confidence is 0 there. That is on purpose: the recorded confidence and the reasons always agree, and the health code says what actually went wrong.
 
 ### 7. What never loosens a verdict
 
 - `constraint.confidence` (the parse confidence) is ignored. Every constraint on a sent ticket counts in full, and a shaky parse never shrinks a probability.
 - `ticket.exceptions` never suppress a flag or raise confidence (OQ-2 default).
 - `trace_sensitive: false` is treated as `true` until the OQ-8 ADR lands.
-- Units that aren't forbidden don't enter confidence at all (invariant 4).
+- Known units that aren't forbidden don't enter confidence at all (invariant 4). An unknown unit ID is an `error`, not a unit that isn't forbidden (section 1).
 
 ### 8. VerdictSettings values (placeholders, owner sign-off needed)
 
-| Field | Env var | Default | Flag line it gives |
+| Field | Env var | Default | One unit flags at p ≥ |
 |---|---|---|---|
 | `pass_threshold_preference` | `VERDICT_PASS_THRESHOLD_PREFERENCE` | 0.80 | 0.20 |
 | `pass_threshold_intolerance` | `VERDICT_PASS_THRESHOLD_INTOLERANCE` | 0.90 | 0.10 |
@@ -122,11 +126,12 @@ The verdict lists every reason (AGENTS.md §8: every HOLD logs all its reasons):
 
 - These are the OQ-4 defaults. The owner accepted them as defaults, not as final values. **The owner should sign off on the four numbers, the flag lines they imply, and the union-bound rule.**
 - They are logged at startup and recorded on every verdict. `versions` allows only strings, so they go into `versions.policy`, for example `"0.1.0;confidence=union_bound/1;thresholds=0.80,0.90,0.95,0.99"`.
+- **Bad settings fail closed.** `VerdictSettings` refuses to load if any of the four is outside (0, 1], or if any of them is lower than the one before it (preference, intolerance, allergy, anaphylactic). A mistyped env var must not quietly lower a floor. A verdict service that can't load its settings sends no verdicts, and the gate opens only on a PASS (`kitchen/gate/README.md`), so the plate stays held.
 
 ### 9. Monotonicity: more evidence never raises confidence
 
 - **Raising any `exact_u` or `laya_u`** can only raise `p_u` (it is a max) and the sum. So confidence can only fall, and a flag can only appear, because the line is fixed for the ticket.
-- **Adding a forbidden unit** (an amendment) adds a term of at least 0, and it can only raise `effective_threshold`. The result is more holds, never fewer.
+- **Adding a forbidden unit** (an amendment) adds a term of at least 0. With the ticket's `pass_threshold` held fixed, it can only raise `effective_threshold`, because the severity floor can only go up. The result is more holds, never fewer. If a later revision lowers `ticket.pass_threshold`, for example a tightened 0.999 reset to the 0.95 default, the floor still covers the severity part but the tightening is lost. orders is responsible for carrying a tightened `pass_threshold` into later revisions.
 - **Any health failure** sets confidence to 0, its minimum.
 - **Laya** always gives `p_u >= exact_u`. So `confidence(full) <= confidence(rules_only)`, and the flags in `full` mode include every exact flag (invariant 2).
 - **Duplicate entries** are summed, so splitting one unit's entry into several can't lower its total.
@@ -156,20 +161,36 @@ Proposed in RFC #130, not merged: `hand-carries-sesame-via-tongs` holds for k �
 
 Any rule that looks only at `p` and `T`, and never holds less as `p` grows, gets one of them wrong. The only way to meet "any k" is for exact reachability to drop every path a wash has crossed, *and* for the verdict to flag any nonzero unit. That would treat a wash of any probability as a full reset, which is the README risk "a false wash erases real contamination". It would also leave the OQ-4 thresholds with nothing to do.
 
-We choose the probabilistic reading. So the golden holds are guaranteed for `k ≥ 0.25` on every action, and the washes pass for every `k ≤ 1`. Two texts say "any k in (0, 1]": the wording in `kitchen/graph/README.md` and the RFC #130 descriptions. Both need narrowing. The verdict Manager should raise this on RFC #130 and with the partner.
+A hybrid keeps both readings: structural flags from the graph, and probabilistic confidence. It meets "any k". Its flags still carry the false-wash risk, though confidence keeps counting what a wash leaves behind. Contracts 0.1.0 has no field that tells a structural reach from a probabilistic one, so the hybrid would need an RFC first.
+
+We choose the probabilistic reading. So the golden holds are guaranteed for `k ≥ 0.25` on every action, and the washes pass for every `k ≤ 1`. Two texts say "any k in (0, 1]":
+
+- `kitchen/graph/README.md` promises the expected `allergens_reached` and chains for any k. It says nothing about decisions.
+- RFC #130 says each new scenario's decision holds for any k. Its point 1 is the sharper conflict. There, `allergens_reached` is structural: a unit counts only if no carrier on its path was washed in between, which is why `wash-resets-knife` lists `[]`. But `reach` lists every unit with nonzero probability (`ProvenanceGraph.reach` in `contracts/apis.md`).
+
+The RFC #130 wording needs narrowing. The verdict Manager should raise this on RFC #130 and with the partner. The owner chooses between the probabilistic reading and the hybrid when signing off on this ADR.
 
 ### 11. Edge tie order (OQ-17): the partner decides
 
 Edge ordering lives in the partner's graph (OQ-17), not in the verdict. Here is what the verdict assumes:
 
 - **The verdict's own tests don't depend on tie order.** `FakeProvenanceGraph` answers from scenario ground truth, and none of the six merged golden scenarios has a tie: events on a shared entity never overlap.
-- **On the real graph** (verdict-10, #65), and for any golden scenario tagged `tie-order`, the verdict expects the OQ-17 default order: `t_start_ms`, then `t_end_ms`, then `event_id`. Ties that involve a wash are resolved **strictly: a wash tied with a transfer never lowers what that transfer carries.** That means the wash goes before transfers *into* the washed entity and after transfers *out of* it.
-- **Please pass this to the partner** (through the Manager or Director). The literal default, "a tied wash is applied before the transfer" (`kitchen/graph/README.md`), is strict for transfers into the washed entity, as in `tied-wash-does-not-erase-scoop`. It is loose for transfers out of it: a knife washed and touching a plate in the same camera window would hand the plate the washed residual.
-- **Tied steps inside a chain** would fail the "strictly increasing `t_ms`" check in verdict-03 (#26) and hold the plate. That fails closed, so it's safe but noisy. Revisit it when the partner's OQ-17 ADR lands.
+- **On the real graph** (verdict-10, #65), and for any golden scenario tagged `tie-order`, the verdict expects the OQ-17 default order: `t_start_ms`, then `t_end_ms`, then `event_id`. Ties are resolved **strictly: the order of tied events never lowers what a transfer carries.** Pair by pair, that means:
+  - A wash goes before transfers *into* the washed entity and after transfers *out of* it.
+  - A `direction: both` contact tied with a wash counts in each direction separately. Its inbound part lands after the wash, and its outbound part carries the value from before the wash.
+  - A transfer *into* an entity goes before a transfer *out of* it.
+
+  When all of these tie on one entity, no single sort order satisfies every pair. The partner decides how to compute that case.
+- **Please pass this to the partner** (through the Manager or Director). There are two cases where the literal default is loose:
+  - "A tied wash is applied before the transfer" (`kitchen/graph/README.md`) is strict for transfers into the washed entity, as in `tied-wash-does-not-erase-scoop`. It is loose for transfers out of it: a knife washed and touching a plate in the same camera window would hand the plate the washed residual.
+  - Two tied transfers on a shared entity, such as `bin-1 → knife` and `knife → plate` in the same camera window, can be applied out before in. The plate then never gets the peanut, `reach` reports nothing, and the plate passes.
+
+  Both are graph math, so they go to the partner as an escalation. The verdict rule doesn't change.
+- **Tied steps inside a chain** may fail the "strictly increasing `t_ms`" check, `test_chain_time_ordered` in verdict-03 (#26). That is a test on ExactLaya's output, and nothing at runtime holds a plate for it. Revisit it when the partner's OQ-17 ADR lands.
 
 ### 12. Property tests that guard this definition
 
-verdict-01 (#24) adopts these. Each one is marked `@pytest.mark.safety` and uses `hypothesis` [5]. Run them with `uv run pytest kitchen/verdict -m safety -k "confidence or flag"`.
+verdict-01 (#24) adopts these. Each one is marked `@pytest.mark.safety` and uses `hypothesis` [5]. They live in `kitchen/verdict/tests/test_confidence.py`. Run them with `uv run pytest kitchen/verdict/tests/test_confidence.py -m safety`.
 
 | Test | Property |
 |---|---|
@@ -179,13 +200,14 @@ verdict-01 (#24) adopts these. Each one is marked `@pytest.mark.safety` and uses
 | `test_confidence_zero_when_unhealthy` | Any health failure gives confidence 0 and a hold with that reason code |
 | `test_laya_never_raises_confidence` | For any Laya response, `confidence(full) <= confidence(rules_only)`, and the full-mode flags include every exact flag |
 | `test_flag_implies_hold` | Any flagged unit gives a hold, and `confidence <= effective_threshold` |
-| `test_pass_needs_margin` | A pass means healthy, no flags, `confidence >= effective_threshold`, and every forbidden `p_u < 1 - effective_threshold` |
+| `test_pass_needs_margin` | A pass means healthy, no flags, `confidence >= effective_threshold`, and `1 - p_u > effective_threshold` for every forbidden unit (the same float form as the flag in section 5) |
 | `test_effective_threshold_never_looser` | The effective threshold is at least `ticket.pass_threshold` and at least the floor for the strictest severity |
 | `test_parse_confidence_ignored` | Changing `constraint.confidence` never changes confidence or the decision |
-| `test_non_forbidden_units_ignored` | Reach entries for units that aren't on the ticket never change confidence |
+| `test_non_forbidden_units_ignored` | Reach entries for known units that aren't on the ticket never change confidence |
+| `test_unknown_unit_holds` | Any unit ID outside the allergen unit table, in `reach`, in Laya's answer or on the ticket, gives confidence 0 and a hold with `error`, whatever its probability |
 | `test_duplicate_entries_never_raise_confidence` | Splitting one unit's probability across duplicate entries never raises confidence |
 | `test_confidence_order_independent` | Shuffling the reach and Laya lists gives byte-identical confidence |
-| `test_confidence_examples` | Table cases, including peanut 0.04 plus sesame 0.04 on a 0.95 ticket: confidence 0.92, hold (the placeholder passes it) |
+| `test_confidence_examples` | Table cases, including: peanut 0.04 plus sesame 0.04 on a 0.95 ticket gives confidence 0.92 and a hold (the placeholder passes it); peanut at exactly 0.05 on a 0.95 ticket, and at exactly 0.01 on a 0.99 ticket, each hold with `exact_flag` (the float ties in section 5) |
 
 They sit beside verdict-01's own `models_only_tighten`, `fail_closed`, `test_exceptions_do_not_loosen` and `test_trace_default_strict`.
 
@@ -195,6 +217,7 @@ They sit beside verdict-01's own `models_only_tighten`, `fail_closed`, `test_exc
 - **Harder.** There will be more holds than under the placeholder:
   - Tickets with several forbidden units hold more often (a sum instead of a max).
   - A mixed ticket is judged at its strictest severity. For example, "prefer no dairy" on an anaphylactic-peanut ticket is held to 0.99. The contract has one threshold per ticket, and this leans HOLD.
+  - A misspelled unit ID anywhere holds every plate it touches until someone fixes the source. That is loud on purpose.
 - **Watch.**
   - Whether a golden hold really holds depends on the partner's efficiencies `k` (section 10).
   - The thresholds are policy, not clinical values, and the owner needs to sign off on them.
@@ -202,7 +225,7 @@ They sit beside verdict-01's own `models_only_tighten`, `fail_closed`, `test_exc
 - **Golden checks** (verdict-05, #28):
   - Read `reason_codes` as "must include", because every HOLD lists all its reasons. For example, `knife-carries-peanut-to-plate` also carries `low_confidence`.
   - The flagged units should equal `allergens_reached` minus any unit the revision doesn't forbid. This rule also matches `late-amendment-adds-dairy` rev 1, which lists milk without forbidding it.
-  - `FakeProvenanceGraph` should report each reached unit at probability 1.0, or at least 0.20 (the highest flag line), so that flags fire. That choice is platform's.
+  - `FakeProvenanceGraph` should report each reached unit at probability 1.0, or at least 0.20 (the highest value in the section 8 table), so that flags fire. That choice is platform's.
 - **Enforced by** the property tests in section 12, the golden runner, and the safety reviewer's checklist (AGENTS.md §5).
 
 ## Sources
@@ -212,5 +235,7 @@ They sit beside verdict-01's own `models_only_tighten`, `fail_closed`, `test_exc
 3. FAO and WHO, *Risk assessment of food allergens, part 2: review and establish threshold levels in foods for the priority allergens*, Food Safety and Quality Series 15, 24 January 2023. ED05-based reference doses in mg of total protein. https://www.who.int/publications/i/item/9789240065420
 4. "Allergen Bureau transitions to VITAL 4.0 standard for precautionary allergen labeling", Food Safety Magazine, 28 August 2024. VITAL 4.0 moves to ED05 reference doses. https://food-safety.com/articles/9703-allergen-bureau-transitions-to-vital-40-standard-for-precautionary-allergen-labeling
 5. Hypothesis, the property-based testing library for Python. https://hypothesis.readthedocs.io/en/latest/
+6. "Floating-Point Arithmetic: Issues and Limitations", the Python tutorial. Most decimal fractions can't be stored exactly as binary floats. https://docs.python.org/3/tutorial/floatingpoint.html
+7. IEEE 754. Wikipedia. An operation's result is its exact result, rounded. https://en.wikipedia.org/wiki/IEEE_754
 
-The golden-scenario numbers in section 10 are hand calculations with the AGENTS.md §3 formulas, not runs of the partner's graph. They are **unverified against the real graph** until verdict-10.
+The golden-scenario numbers in section 10 are hand calculations with the AGENTS.md §3 formulas, not runs of the partner's graph. They are **unverified against the real graph** until verdict-10. The float values in section 5 were checked in Python 3 (`1 - 0.95`, `1 - 0.99`, and a 200,000-case random check that a flag always means `confidence <= effective_threshold` and a pass always means `1 - p_u > effective_threshold`).
