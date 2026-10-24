@@ -28,7 +28,7 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 ## What happens here
 
 - Read frames from a video file, a webcam or the Pi camera (picamera2, since OpenCV can't open it on a Pi 5). Each frame gets `t_ms` from the injected `Clock`.
-- Detect knives, spoons, forks and bowls with YOLOv8s, and wrists with YOLOv8s-pose. Today this runs with ONNX Runtime; later the same model runs on the Hailo-8L, sharing the same pre- and post-processing code.
+- Detect knives, spoons, forks and bowls (and plates, with a fine-tuned detector) with YOLOv8s, and wrists with YOLOv8s-pose. Today this runs with ONNX Runtime; later the same model runs on the Hailo-8L, sharing the same pre- and post-processing code.
 - Track with ByteTrack, then map each track to a stable entity ID (`bin-<slot>`, `tool-<class>-<n>`, `hand-p<k>-left|right`, `plate-<n>`) with an `origin`: `shift_start`, `clean_stack` or `unknown`.
 - Give every detection a zone from the zones file: bin slots, plating spot, wash, clean stack, pass.
 - When the cook taps "start plate", bind the plate at the plating spot to that ticket.
@@ -54,6 +54,21 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 | `record.py` | Records `frames.jsonl`, `change.npz` and a manifest; deterministic replay; the record CLI |
 | `server.py` | Vision HTTP API (`/plates/start`, `/stream.mjpg`, `/health`) and `FakeVisionAPI` for outputs |
 | `run.py` | Main loop: source → detect → track → zones → `ObservationFrame` + change mask → consumers and the API's status. Also the run CLI and `build_frame_loop()` for running in-process |
+
+## Detector classes
+
+Which classes the detector has, and in what order, comes from the bundle's `manifest.json`, `networks.det`:
+
+- **No `class_names`** (every stock bundle, `stock-yolov8s` and `stock-yolov8s-hailo8l` included): Ultralytics' 80 COCO classes, of which vision tracks fork, knife, spoon and bowl. COCO has no plate, so a bowl in a bin slot is a bin and any other bowl is a plate.
+- **`class_names`** (a fine-tuned detector): its classes in output order, one per score row, written by `bundle.py --weights custom --class-names plate,bowl,knife,spoon,fork`. The order is the training data's `names:` order, which Ultralytics also writes into the ONNX metadata; the bundle refuses names that disagree with it. Vision tracks the names in `plate, bowl, knife, spoon, fork` and drops any other, never turning it into a tool: a detector `hand` box is dropped too, since hands come from pose wrists. A `plate` detection is always a plate, even in a bin slot; a `bowl` keeps the stock rule, so bins must still be detected as bowls (label them `bowl` in the training data), or no bin entity, and none of its allergens, exists.
+
+`open_detector` checks the class names at startup, before any network opens. It raises for names that aren't a non-empty list of strings, disagree with `classes`, or name nothing vision tracks, and for a class count other than 80 with no names. On the Pi, `open_sessions` also refuses a detection HEF whose class count isn't the manifest's.
+
+```bash
+uv run python -m kitchen.vision.bundle --name kitchen-v2 --weights custom --class-names plate,bowl,knife,spoon,fork \
+    --det-onnx best.onnx --pose-onnx yolov8s-pose.onnx --video data/recordings/<prep>.mp4
+VISION_BUNDLE_DIR=data/models/kitchen-v2 uv run python -m kitchen.vision.run --video data/recordings/prep.mp4 --zones zones.json --out frames.jsonl
+```
 
 ## The experimental motion tracker
 
@@ -112,10 +127,12 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
   - `origin: clean_stack` only for a tool or plate first seen in a `clean_stack` zone. A hand never comes out of a stack, so a hand first seen after shift start is `unknown` wherever it is.
   - An ID switch never starts clean. A new track that starts in a frame where a track of its class went unmatched may be that object under a new ID (a dirty knife carried fast into the rack, or covered there and uncovered to one side), so it is `unknown`, not `clean_stack`, and not `shift_start` either. The same goes for the hands of a new pose track while another is lost.
   - A clean stack can't vouch for something that vanished inside it. When a tool or plate track ends in a `clean_stack` zone, the next new track of that class first seen there is `unknown`, once per loss.
-  - The one ID exception: a bowl first seen in bin slot `slot-<n>` is `bin-<n>`, and is `bin-<n>` again if re-acquired there, because orders keys bin profiles by `bin-<n>`. Swapping bins between slots mid-shift is unsupported.
+  - The one ID exception: a bowl first seen in bin slot `slot-<n>` is `bin-<n>`, and is `bin-<n>` again if re-acquired there, because orders keys bin profiles by `bin-<n>`. Swapping bins between slots mid-shift is unsupported. Only a bowl can be a bin: a `plate` detection is a plate wherever it is.
+  - Plates and bowls are one group for the ID-switch guard and the clean-stack loss count, in both trackers: a detector with a plate class may call one plate a plate in one frame and a bowl in the next, and the relabeled plate must not start clean.
 - **Fail closed.**
   - `/plates/start` refuses when the spot has 0 plates or 2+ plates, when the plate is already bound to another ticket, or when the latest frame is more than `plate_bind_max_age_ms` (500 ms) old, so a frozen camera can't bind a stale plate. A plate last seen at the spot within the last `track_lost_ms` counts as still there, so a second plate the detector missed for a frame still refuses the bind.
   - Open `/stream.mjpg` clients wait for frames on their own few threads (`STREAM_THREADS`), so any number of them can't stall `/health` (the gate's staleness check) or `/plates/start`.
+  - Bad detector class names, or a detection HEF whose class count isn't the manifest's, stop startup. A detector class with no entity kind is dropped, never relabeled.
   - Detections are never interpolated or invented: a lost track emits nothing, a wrist below `wrist_min_confidence` is no hand, a point in no zone has zone `null`, and NaN or inf in a network's output raises instead of decoding to an empty kitchen.
   - A detector error stops the frame loop, so `/health.last_frame_t_ms` stops advancing and the gate goes to `fault`. A consumer's error is logged and never starves the other consumers or the API.
 - **Time runs forward.** Frame `t_ms` comes from the injected `Clock` and is strictly increasing, including across source restarts; the frame loop refuses a frame that doesn't follow the last. Replay keeps the recorded `t_ms`.
@@ -194,7 +211,7 @@ Unverified until the device is connected: `PiCameraSource` (tested against a sta
 - What no tracker catches: an object hidden for longer than `track_lost_ms` (a knife covered by a hand the whole way) while it is carried into a clean stack comes back `clean_stack`. So can an object swapped for another at the same spot while hidden, which then takes over the hidden one's track. Keep the clean stack where hands don't linger.
 - A wrist is not the contact point. The hand box is a square (`VISION_HAND_BOX_SIZE`) placed beyond the wrist, away from the elbow, and shifted back inside the frame at the edges.
 - COCO pose is trained on people seen from the front. From straight overhead it may find few wrists: measure it on the first real recording before the demo, and tune `VISION_WRIST_MIN_CONFIDENCE` only upward if it invents hands.
-- Bowls are both bins and plates (COCO has no plate class): the bin slots decide which is which, so the zones file has to be right.
+- With a stock detector, bowls are both bins and plates (COCO has no plate class): the bin slots decide which is which, so the zones file has to be right. A fine-tuned detector with a plate class keeps plates out of bin slots, but its bins are still bowls.
 - COCO `knife`, `spoon` and `fork` are weak from overhead. Fix the camera angle first; fine-tune only if needed.
 - Bins are identified by slot. Swapping bins between slots mid-shift is unsupported.
 - If det + pose can't hold 30 FPS on the Pi: run pose every Nth frame (flagged), then fall back to `yolov8n` for detection.

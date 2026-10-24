@@ -28,8 +28,9 @@ Box = tuple[float, float, float, float]
 # A keypoint: normalized x, y and the pose model's confidence that it is visible.
 Keypoint = tuple[float, float, float]
 
-# The COCO classes we track, by the detector's class index (Ultralytics' 80-class order). Bowls are both bins and
-# plates: a bowl first seen in a bin slot is a bin, any other bowl is a plate (tracking.py).
+# The COCO classes we track with a stock detector, by its class index (Ultralytics' 80-class order). COCO has no plate,
+# so bowls are both bins and plates: a bowl first seen in a bin slot is a bin, any other bowl is a plate (identity.py).
+# A custom detector names its own classes in the bundle manifest instead (detect.py, detector_classes).
 COCO_OBJECTS = {42: "fork", 43: "knife", 44: "spoon", 45: "bowl"}
 
 # COCO pose keypoint indices the hands need.
@@ -51,7 +52,7 @@ class BindRefused(Exception):  # noqa: N818  (the name says what happened, like 
 
 @dataclass(frozen=True)
 class Detection:
-    """One object the detector found in one frame, before tracking: a knife, spoon, fork or bowl."""
+    """One object the detector found in one frame, before tracking: a knife, spoon, fork, bowl or plate."""
 
     class_name: str
     box: Box

@@ -6,10 +6,16 @@ Step:  vision
 Reads: SourceFrame from camera.py; the deploy bundle in settings.bundle_dir (manifest.json, det.onnx and pose.onnx, or
        the HEFs through hailo.py); VISION_DETECTOR=onnx|hailo (default onnx)
 Emits: Detector.detect(frame) -> (list[Detection], list[Person]), boxes and keypoints normalized to the original frame
-Rules: fail closed: a missing or broken bundle raises at startup and a wrong-shaped output or one with NaN or inf values
-       raises per frame, so there is never a detector that silently returns nothing; detections and keypoints are only ever decoded, never invented
-       or interpolated; backends only run the network and one post-processing path serves both, so local results
+Rules: fail closed: a missing or broken bundle or bad class names raise at startup and a wrong-shaped output or one with
+       NaN or inf values raises per frame, so there is never a detector that silently returns nothing; detections and
+       keypoints are only ever decoded, never invented or interpolated, and a class with no entity kind is dropped,
+       never relabeled; backends only run the network and one post-processing path serves both, so local results
        predict Hailo results; onnxruntime and hailo_platform are imported only when a detector is opened
+
+The class map comes from the bundle manifest's networks.det. A stock bundle has no class_names: its detector is
+Ultralytics' 80 COCO classes, of which vision tracks fork, knife, spoon and bowl (common.COCO_OBJECTS). A custom
+bundle lists its detector's classes in output order in class_names (bundle.py --class-names), and vision tracks those
+with an entity kind (identity.OBJECT_CLASSES: plate, bowl, knife, spoon, fork).
 
 The letterbox geometry is kitchen/shared/clips.py's (letterbox_layout at settings.input_size, gray 114), so the
 detector, the change mask and the clip builder all place a frame inside its square the same way. The detector resizes
@@ -17,6 +23,7 @@ pixels with OpenCV's bilinear filter (what Ultralytics trains with); the change 
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +31,9 @@ import numpy as np
 
 from kitchen.shared.clips import LETTERBOX_PAD, letterbox_layout
 from kitchen.vision.common import COCO_OBJECTS, KEYPOINTS, Box, Detection, Keypoint, Person, SourceFrame, VisionSettings
+from kitchen.vision.identity import OBJECT_CLASSES
+
+logger = logging.getLogger(__name__)
 
 # Ultralytics output rows: box (center x, center y, width, height in input pixels), then 80 COCO class scores for
 # detection, or one person score and 17 keypoints of (x, y, visibility) for pose.
@@ -33,6 +43,50 @@ DET_CHANNELS = 4 + COCO_CLASSES
 POSE_CHANNELS = 4 + 1 + 3 * POSE_KEYPOINTS
 
 BACKENDS = ("onnx", "hailo")
+
+
+@dataclass(frozen=True)
+class DetectorClasses:
+    """The detection network's classes: how many it scores (one output row each, after the four box rows) and
+    {class index: name} for the ones vision tracks."""
+
+    count: int
+    tracked: dict[int, str]
+
+
+# Every stock bundle's detector: the 80 COCO classes, of which vision tracks fork, knife, spoon and bowl.
+COCO_DETECTOR = DetectorClasses(COCO_CLASSES, COCO_OBJECTS)
+
+
+def detector_classes(det_network: dict) -> DetectorClasses:
+    """The detector's classes, from the bundle manifest's networks.det. Checked once at startup (fail closed).
+
+    No class_names (every stock bundle) is the COCO detector, exactly as before custom detectors. class_names lists a
+    custom detector's classes in output order, and only those with an entity kind are tracked: any other class is
+    dropped, never turned into a tool. Raises ValueError for class_names that aren't a non-empty list of strings,
+    disagree with `classes` or name nothing vision tracks, and for a class count other than COCO's with no names,
+    whose class indices would otherwise be read as COCO's.
+    """
+    names = det_network.get("class_names")
+    classes = det_network.get("classes")
+    if names is None:
+        if classes not in (None, COCO_CLASSES):
+            raise ValueError(
+                f"the bundle's det network has {classes} classes but no class_names; rebuild the bundle with "
+                "--class-names in the detector's output order"
+            )
+        return COCO_DETECTOR
+
+    if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
+        raise ValueError(f"the bundle's det class_names must be a non-empty list of strings, got {names!r}")
+    if classes is not None and classes != len(names):
+        raise ValueError(f"the bundle's det network has {len(names)} class_names but {classes} classes")
+    tracked = {index: name for index, name in enumerate(names) if name in OBJECT_CLASSES}
+    if not tracked:
+        raise ValueError(
+            f"the bundle's det class_names {names} name none of {list(OBJECT_CLASSES)}, so it sees nothing"
+        )
+    return DetectorClasses(len(names), tracked)
 
 
 @dataclass(frozen=True)
@@ -140,27 +194,31 @@ def _has_area(box: np.ndarray) -> bool:
     return bool(box[2] > box[0] and box[3] > box[1])
 
 
-def decode_objects(output: np.ndarray, frame_size: tuple[int, int], settings: VisionSettings) -> list[Detection]:
-    """Turn the detection network's [1, 84, anchors] output into the knives, spoons, forks and bowls in one frame.
+def decode_objects(
+    output: np.ndarray, frame_size: tuple[int, int], settings: VisionSettings, classes: DetectorClasses = COCO_DETECTOR
+) -> list[Detection]:
+    """Turn the detection network's [1, 4 + classes, anchors] output ([1, 84, anchors] for COCO) into the tracked
+    objects in one frame: knives, spoons, forks and bowls, and plates for a detector that has them.
 
-    Each anchor takes its best class over all 80 (as Ultralytics does), so an anchor that is mostly a person or a cup
-    is dropped rather than relabeled as a tool. Then the score floor, per-class NMS, and the boxes mapped back through
-    the letterbox to the original frame (frame_size is its (width, height)). Best confidence first.
+    Each anchor takes its best class over all the detector's classes (as Ultralytics does), so an anchor that is
+    mostly a person or a cup is dropped rather than relabeled as a tool. Then the score floor, per-class NMS, and the
+    boxes mapped back through the letterbox to the original frame (frame_size is its (width, height)). Best
+    confidence first.
     """
-    columns = _columns(output, DET_CHANNELS, "detection")
+    columns = _columns(output, 4 + classes.count, "detection")
     scores = columns[:, 4:].max(axis=1)
-    classes = columns[:, 4:].argmax(axis=1)
-    wanted = np.isin(classes, list(COCO_OBJECTS)) & (scores >= settings.object_min_score)
-    boxes, scores, classes = _corner_boxes(columns[wanted]), scores[wanted], classes[wanted]
+    class_ids = columns[:, 4:].argmax(axis=1)
+    wanted = np.isin(class_ids, list(classes.tracked)) & (scores >= settings.object_min_score)
+    boxes, scores, class_ids = _corner_boxes(columns[wanted]), scores[wanted], class_ids[wanted]
 
     layout = letterbox_for(*frame_size, settings.input_size)
     found = []
-    for class_id in sorted(set(classes.tolist())):
-        same = np.flatnonzero(classes == class_id)
+    for class_id in sorted(set(class_ids.tolist())):
+        same = np.flatnonzero(class_ids == class_id)
         for i in same[nms(boxes[same], scores[same], settings.nms_iou)]:
             box = _to_frame_boxes(boxes[i : i + 1], layout)[0]
             if _has_area(box):
-                found.append(Detection(COCO_OBJECTS[class_id], _box(box), float(scores[i])))
+                found.append(Detection(classes.tracked[class_id], _box(box), float(scores[i])))
     return sorted(found, key=lambda detection: -detection.confidence)
 
 
@@ -204,10 +262,12 @@ class Detector:
 
     `sessions` is {"det": session, "pose": session}, where a session is anything with onnxruntime's get_inputs() and
     run(None, {name: tensor}): an onnxruntime.InferenceSession, a hailo.HailoSession or a fake in tests. `backend`
-    ("onnx" or "hailo") is what /health reports.
+    ("onnx" or "hailo") is what /health reports. `classes` is the detection network's classes (detector_classes()).
     """
 
-    def __init__(self, sessions: dict, settings: VisionSettings, backend: str):
+    def __init__(
+        self, sessions: dict, settings: VisionSettings, backend: str, classes: DetectorClasses = COCO_DETECTOR
+    ):
         if set(sessions) != {"det", "pose"}:
             raise ValueError(f"a detector needs exactly the det and pose sessions, got {sorted(sessions)}")
         if backend not in BACKENDS:
@@ -220,12 +280,13 @@ class Detector:
         self.sessions = sessions
         self.settings = settings
         self.backend = backend
+        self.classes = classes
 
     def detect(self, frame: SourceFrame) -> tuple[list[Detection], list[Person]]:
         """Detect the objects and people in one frame. Any session error propagates: no frame, not an empty one."""
         height, width = frame.rgb.shape[:2]
         tensor = to_input_tensor(frame.rgb, self.settings.input_size)
-        objects = decode_objects(self._run("det", tensor), (width, height), self.settings)
+        objects = decode_objects(self._run("det", tensor), (width, height), self.settings, self.classes)
         people = decode_people(self._run("pose", tensor), (width, height), self.settings)
         return objects, people
 
@@ -276,17 +337,20 @@ def open_onnx_sessions(bundle_dir: Path, networks: dict, wanted_providers: str =
 def open_detector(settings: VisionSettings) -> Detector:
     """Open the detector settings.detector names, on the bundle in settings.bundle_dir. Called once at startup.
 
-    Fail closed: an unknown backend, a missing bundle, a missing network file or a model of the wrong input size raises
-    here, so the vision service never starts with a detector that can't see.
+    Fail closed: an unknown backend, a missing bundle, bad class names, a missing network file or a model of the wrong
+    input size raises here, so the vision service never starts with a detector that can't see.
     """
     if settings.detector not in BACKENDS:
         raise ValueError(f"VISION_DETECTOR must be one of {BACKENDS}, got {settings.detector!r}")
     bundle_dir = Path(settings.bundle_dir)
     networks = read_bundle_manifest(bundle_dir)["networks"]
+    # Before any network opens, so bad class names stop startup on either backend.
+    classes = detector_classes(networks["det"])
+    logger.info("detector %s scores %d classes, tracks %s", settings.detector, classes.count, classes.tracked)
     if settings.detector == "hailo":
         from kitchen.vision.hailo import open_sessions
 
         sessions = open_sessions(bundle_dir)
     else:
         sessions = open_onnx_sessions(bundle_dir, networks, settings.onnx_providers)
-    return Detector(sessions, settings, settings.detector)
+    return Detector(sessions, settings, settings.detector, classes)

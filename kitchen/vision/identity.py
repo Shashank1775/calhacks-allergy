@@ -7,15 +7,17 @@ Reads: track IDs and classes from tracking.py, the zone each track is first seen
        went unmatched that frame, the shift start time and the lost buffer (track_lost_ms)
 Emits: Identity (entity_id, kind, origin) for every tracked object and hand
 Rules: known-clean source: a new track is a new entity, so a re-acquired object, person or hand gets a new ID; origin
-       is shift_start only up to shift start, clean_stack only for a tool or bowl first seen in a clean_stack zone (a
+       is shift_start only up to shift start, clean_stack only for a tool or plate first seen in a clean_stack zone (a
        hand never comes out of a stack), otherwise unknown; numbers are never reused
 
 A new track can only start clean when it can't be an object already seen. Two cases say it might be:
     - an ID switch: a track of the same group went unmatched in the frame the new track started (a knife carried fast
       into the rack, or covered by a hand there and uncovered a little to one side, comes back as a new track while its
-      old one is still lost). The newcomer is then unknown, not shift_start or clean_stack;
+      old one is still lost). The newcomer is then unknown, not shift_start or clean_stack. Bowls and plates are one
+      group (tracking.py), since a detector may call one plate a plate in one frame and a bowl in the next;
     - a loss inside a clean stack: when a tool or plate track ends while in a clean_stack zone, the object may still be
       there, hidden. So the next new track of that class first seen in a clean stack is unknown, once for each loss.
+      Plates share one loss count, whether seen as plates or as bowls.
 A hand is the same: a wrist unseen for longer than the lost buffer may have touched anything out of sight, so it comes
 back as a new hand, hand-p<k>-<side>-<n>, with unknown history. Every judgment call leans toward HOLD: a genuinely
 clean item caught by one of these holds once, an annoyance, not a risk. What no tracker can catch is an object hidden
@@ -28,7 +30,8 @@ start a person's hands over when pose swaps left and right.
 The one exception is bins. Orders keys bin profiles by bin-<n>, so a bowl first seen in the bin slot zone slot-<n> is
 bin-<n>, and a bowl re-acquired in slot-<n> is bin-<n> again, keeping the origin bin-<n> was first given. Bins are
 identified by slot, so swapping bins between slots mid-shift is unsupported. While a track holds bin-<n>, another new
-bowl in slot-<n> is a plate: two tracks never share one entity ID.
+bowl in slot-<n> is a plate: two tracks never share one entity ID. Only a bowl can be a bin: a detector with a plate
+class (a custom bundle's class_names, detect.py) makes every plate detection a plate, even in a bin slot.
 """
 
 import re
@@ -38,6 +41,12 @@ from kitchen.shared.models import Zone
 
 TOOL_CLASSES = ("knife", "spoon", "fork")
 BOWL = "bowl"
+PLATE = "plate"
+# The detector classes a plate can be seen as. A stock COCO detector knows only bowls (a bowl outside a bin slot is a
+# plate); a fine-tuned one also has plates, and may call one plate either.
+DISH_CLASSES = (BOWL, PLATE)
+# Every detector class with an entity kind. A detector's other classes are dropped (detect.py), never relabeled.
+OBJECT_CLASSES = (*TOOL_CLASSES, *DISH_CLASSES)
 HAND_SIDES = ("left", "right")
 
 # A bin slot's zone ID must say its number; a slot named any other way gives no bin ID (no guessing).
@@ -121,6 +130,8 @@ class IdentityBook:
             identity = self._new_tool(class_name, t_ms, zone, maybe_switched)
         elif class_name == BOWL:
             identity = self._new_bowl(track_id, t_ms, zone, maybe_switched)
+        elif class_name == PLATE:
+            identity = self._new_plate(t_ms, zone, maybe_switched)
         else:
             raise ValueError(f"no entity kind for detector class {class_name!r}")
 
@@ -204,7 +215,10 @@ class IdentityBook:
         return origin
 
     def _loss_key(self, class_name: str) -> str:
-        """Which clean-stack loss count a class uses: its own, or in strict mode one count for all tool classes."""
+        """Which clean-stack loss count a class uses: its own, except that plates share one whether seen as plates or
+        bowls (a bin never counts a loss), and in strict mode all tool classes share one."""
+        if class_name in DISH_CLASSES:
+            return PLATE
         if self.strict and class_name in TOOL_CLASSES:
             return "tool"
         return class_name
@@ -236,5 +250,9 @@ class IdentityBook:
                 origin = self._bin_origins.setdefault(entity_id, origin_for(t_ms, zone, self.shift_start_ms))
                 return Identity(entity_id, "bin", origin)
 
+        return self._new_plate(t_ms, zone, maybe_switched)
+
+    def _new_plate(self, t_ms: int, zone: Zone | None, maybe_switched: bool) -> Identity:
+        """A new plate entity: the next plate number, from one count for plates seen as plates or as bowls."""
         self._plate_count += 1
-        return Identity(f"plate-{self._plate_count}", "plate", self._origin(BOWL, t_ms, zone, maybe_switched))
+        return Identity(f"plate-{self._plate_count}", "plate", self._origin(PLATE, t_ms, zone, maybe_switched))
