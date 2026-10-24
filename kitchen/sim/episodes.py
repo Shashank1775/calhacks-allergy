@@ -8,18 +8,21 @@ Rules: labels come from what happens in the episode, never from a model; plain s
        (blind classifier); deterministic per seed
 
 An episode covers STEPS + 1 frames (about one second), so the clip builder gets STEPS change masks. Each episode is one
-kind: real transfers (scoop, deposit, wipe), contact without transfer (touch), and the hard negatives that stop the
-model from learning "boxes overlap means transfer" (pass over, hover, motion nearby, approach and leave).
+kind: real transfers (scoop, deposit, wipe), contact without transfer (touch, hover), and the hard negatives that stop
+the model from learning "boxes overlap means contact" (pass over, motion nearby, approach and leave).
 """
 
 from dataclasses import dataclass, field
 
 import numpy as np
 
-GENERATOR_VERSION = "1.0.0"
+GENERATOR_VERSION = "2.0.0"
 STEPS = 16  # clip length T: about one second (AGENTS.md, Open questions: clip geometry)
 FRAMES = STEPS + 1  # one extra frame, so the first step has a change mask too
 STEP_MS = 1000 / STEPS
+# A spoonful seen from overhead: about 3 to 6 px across in a 128-px clip. Smaller portions sank into the camera
+# noise in v1, so the model missed real scoops and deposits.
+PORTION_RADIUS = (0.025, 0.045)
 
 
 @dataclass(frozen=True)
@@ -40,7 +43,9 @@ KINDS = {
     "wipe": Kind(True, True, "transfer.wipe", "both", None, 0.10),
     "touch": Kind(True, False, "transfer.contact", "both", "contact_no_motion", 0.15),
     "pass_over": Kind(False, False, "unimportant", None, "overlap_no_contact", 0.15),
-    "hover": Kind(False, False, "unimportant", None, "hover", 0.10),
+    # A tool resting over the food in B: an overhead camera can't tell that from touching it, so it counts as
+    # contact (the safe side). No food moves, so it isn't a transfer.
+    "hover": Kind(True, False, "transfer.contact", "both", None, 0.10),
     "motion_nearby": Kind(False, False, "unimportant", None, "motion_no_contact", 0.10),
     "approach_leave": Kind(False, False, "unimportant", None, None, 0.15),
 }
@@ -223,7 +228,7 @@ def dwell_wiggle(rng: np.random.Generator, u: np.ndarray, start: float, end: flo
     return np.outer(np.where(inside, np.sin(2 * np.pi * cycles * phase) * amplitude, 0.0), direction(axis))
 
 
-def plan_path(rng: np.random.Generator, kind: str, b: Container, u: np.ndarray, is_tool: bool):
+def plan_path(rng: np.random.Generator, kind: str, b: Container, food: list[Food], u: np.ndarray, is_tool: bool):
     """Where A's tip goes and when it arrives and leaves, for one kind of episode."""
     center = b.center[0]
     approach = rng.uniform(0, 2 * np.pi)  # A comes in from this side of B
@@ -239,8 +244,12 @@ def plan_path(rng: np.random.Generator, kind: str, b: Container, u: np.ndarray, 
         path = start + np.outer(u, end - start)
         return path, approach, None
 
-    if kind in ("scoop", "deposit", "wipe", "hover"):
+    # Half of all touches land inside B, so where A stops says nothing about the label.
+    inside_touch = kind == "touch" and rng.random() < 0.5
+    if kind in ("scoop", "deposit", "hover") or inside_touch:
         target = center + rng.uniform(-0.5, 0.5, 2) * b.half_size
+    elif kind == "wipe":
+        target = food[int(rng.integers(len(food)))].position[0]  # a wipe goes through food, so something smears
     elif kind == "touch":
         target = center + direction(approach) * edge_distance(b, approach) * 0.95
     else:  # approach_leave, motion_nearby: stop short of B with a real gap
@@ -252,9 +261,10 @@ def plan_path(rng: np.random.Generator, kind: str, b: Container, u: np.ndarray, 
     end = target + direction(approach + rng.uniform(-1.0, 1.0)) * rng.uniform(0.12, 0.35)
     path = keyframe_path(u, [(0.0, start), (arrive, target), (leave, target), (1.0, end)])
 
-    amplitude_by_kind = {"scoop": (0.004, 0.012), "wipe": (0.025, 0.06), "hover": (0.003, 0.008)}
-    low, high = amplitude_by_kind.get(kind, (0.0, 0.003))
-    axis = approach if kind == "scoop" else rng.uniform(0, np.pi)
+    # Every still dwell shares one wiggle band, so how steady A is says nothing about the label.
+    amplitude_by_kind = {"scoop": (0.004, 0.012), "wipe": (0.025, 0.06)}
+    low, high = amplitude_by_kind.get(kind, (0.0, 0.008))
+    axis = rng.uniform(0, np.pi)
     path = path + dwell_wiggle(rng, u, arrive, leave, rng.uniform(low, high), axis)
     return path, approach, (arrive, leave)
 
@@ -276,6 +286,11 @@ def nudge(b: Container, food: list[Food], frame: int, shift: np.ndarray) -> None
     b.center[frame:] += shift
     for blob in food:
         blob.position[frame:] += shift
+
+
+def nearest_color(food: list[Food], point: np.ndarray) -> np.ndarray:
+    """The color of the food blob nearest a point (what a scoop there picks up)."""
+    return min(food, key=lambda blob: np.linalg.norm(blob.position[0] - point)).color
 
 
 def stirring_hand(rng: np.random.Generator, b: Container, u: np.ndarray, avoid_angle: float) -> Actor:
@@ -365,7 +380,7 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
     other_food = [blob for container in bystander_containers for blob in fill_with_food(rng, container)]
 
     is_tool = bool(rng.random() < 0.7)
-    tip, approach, dwell = plan_path(rng, kind, b, u, is_tool)
+    tip, approach, dwell = plan_path(rng, kind, b, b_food, u, is_tool)
     angle = approach + rng.normal(0, 0.15) + np.linspace(0, rng.normal(0, 0.3), FRAMES)
     actor = make_actor(rng, tip, angle, is_tool)
 
@@ -377,26 +392,36 @@ def simulate_episode(seed: int, family: int, kind: str | None = None) -> Episode
         contact_frame = min(arrive_frame, FRAMES - 1)
 
         if kind == "scoop":
-            # A stirs up the food it dips into, then carries the nearest blob away.
-            drag_food(b_food, tip, range(arrive_frame + 1, leave_frame + 1), 0.03, 0.4)
-            nearest = min(b_food, key=lambda blob: np.linalg.norm(blob.position[leave_frame] - tip[leave_frame]))
-            nearest.position[leave_frame:] = tip[leave_frame:]
-            nearest.on_actor[leave_frame:] = True
-        elif kind == "deposit":
-            # A arrives carrying food and leaves it in B.
-            drop = (arrive_frame + leave_frame) // 2
-            carried = Food(
-                tip.copy(), float(rng.uniform(0.012, 0.025)), np.ones(FRAMES), np.zeros(FRAMES), b_food[0].color
+            # A digs into the food under its tip, stirring what's around it, then lifts a spoonful out. The spoonful
+            # rides away on A and leaves a hole where it was: the cue that separates a scoop from a hover.
+            portion = Food(
+                position=np.tile(tip[arrive_frame], (FRAMES, 1)),
+                radius=float(rng.uniform(*PORTION_RADIUS)),
+                stretch=np.ones(FRAMES),
+                angle=np.zeros(FRAMES),
+                color=nearest_color(b_food, tip[arrive_frame]),
             )
-            carried.position[drop:] = tip[drop]
+            drag_food(b_food, tip, range(arrive_frame + 1, leave_frame + 1), 0.05, 0.6)
+            portion.position[leave_frame:] = tip[leave_frame:]
+            portion.on_actor[leave_frame:] = True
+            b_food.append(portion)
+        elif kind == "deposit":
+            # A arrives with a spoonful of something else (sauce onto rice) and drops it just past its tip, so the
+            # camera sees it land rather than it appearing from under the tool.
+            drop = (arrive_frame + leave_frame) // 2
+            radius = float(rng.uniform(*PORTION_RADIUS))
+            color = distinct_color(rng, [b.body_color, *[blob.color for blob in b_food]])
+            carried = Food(tip.copy(), radius, np.ones(FRAMES), np.zeros(FRAMES), color)
+            carried.position[drop:] = tip[drop] - direction(angle[drop]) * (radius + 0.01)  # away from the handle
             carried.stretch[drop:] = 1.4
             carried.on_actor[:drop] = True
             b_food.append(carried)
         elif kind == "wipe":
             drag_food(b_food, tip, range(arrive_frame + 1, FRAMES), 0.035, rng.uniform(0.3, 0.6))
         elif kind == "touch" and rng.random() < 0.7:
-            # Touching the rim nudges the container a little; nothing inside moves relative to it.
-            nudge(b, b_food, contact_frame, -direction(approach) * rng.uniform(0.006, 0.02))
+            # Touching nudges the container a little, one frame after A arrives so A is seen reaching it first;
+            # nothing inside moves relative to the container.
+            nudge(b, b_food, min(contact_frame + 1, FRAMES - 1), -direction(approach) * rng.uniform(0.006, 0.02))
 
     if kind == "motion_nearby":
         stirrer = stirring_hand(rng, b, u, approach)

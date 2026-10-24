@@ -23,7 +23,7 @@ The ConvLSTM learns **whether two objects touched and whether material moved**, 
 4. **Shared clip builder.** Each candidate pair's boxes (with tracker-like jitter) and the masks go through `kitchen/shared/clips.py`, giving the [`interaction_clip`](../../contracts/schemas/interaction_clip.schema.json) format the model reads.
 5. **Labels from world truth:** `contact`, `transferred`, `action`, `direction`, `contact_t_ms`. Never from a model.
 
-**Hard negatives** stop the model from learning that box overlap means transfer: boxes overlapping while one passes above the other, hovering, motion with no contact, contact with no visible movement, camera noise, lighting flicker, missed detections, and variable frame timing.
+**Hard negatives** stop the model from learning that box overlap means contact or transfer: boxes overlapping while one passes above the other, motion with no contact, contact with no visible movement (touching, or hovering over the food, which an overhead camera can't tell from touching, so it's labeled contact), camera noise, lighting flicker, missed detections, and variable frame timing.
 
 The owner's example: a spoon touches an omelette dish and the omelette shifts. In the clip, two boxes come together, and right after they overlap, the change mask lights up inside the dish's box. Labels: contact = true, transferred = true.
 

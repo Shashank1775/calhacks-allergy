@@ -63,19 +63,43 @@ def test_same_seed_gives_the_same_clip():
 
 def test_transfers_change_the_container_and_hover_does_not():
     """The model can only learn 'material moved' if the food really moves in transfer clips and stays put otherwise."""
-    for kind, should_move in (("wipe", True), ("hover", False), ("pass_over", False)):
+    for kind, should_move in (("wipe", True), ("hover", False), ("pass_over", False), ("touch", False)):
         episode = simulate_episode(seed=3, family=0, kind=kind)
         b_food = [
             blob for blob in episode.food if np.linalg.norm(blob.position[0] - episode.containers[0].center[0]) < 0.2
         ]
-        moved = max(np.linalg.norm(blob.position[-1] - blob.position[0]) for blob in b_food)
+        b_center = episode.containers[0].center
+        # Relative to B, so a touch that nudges the whole container doesn't count as food moving.
+        moved = max(
+            np.linalg.norm((blob.position[-1] - b_center[-1]) - (blob.position[0] - b_center[0])) for blob in b_food
+        )
         assert (moved > 1e-3) == should_move, kind
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_scoops_and_deposits_move_a_visible_portion(seed):
+    """v2: the moved portion is spoonful-sized, and a deposit lands outside A's footprint so the camera sees it."""
+    from kitchen.sim.episodes import PORTION_RADIUS, actor_extent
+
+    scoop = simulate_episode(seed=seed, family=0, kind="scoop")
+    portion = max(scoop.food, key=lambda blob: np.linalg.norm(blob.position[-1] - blob.position[0]))
+    assert portion.radius >= PORTION_RADIUS[0]
+    assert np.linalg.norm(portion.position[-1] - portion.position[0]) > 2 * portion.radius  # it left its spot
+
+    deposit = simulate_episode(seed=seed, family=0, kind="deposit")
+    dropped = deposit.food[[i for i, blob in enumerate(deposit.food) if blob.on_actor.any()][0]]
+    assert dropped.radius >= PORTION_RADIUS[0]
+    assert not np.allclose(dropped.color, [blob.color for blob in deposit.food if blob is not dropped][0])
+    x1, y1, x2, y2 = actor_extent(deposit.actor, len(deposit.times_ms) - 1)
+    landed = dropped.position[-1]
+    assert not (x1 <= landed[0] <= x2 and y1 <= landed[1] <= y2)  # not hidden under A once A has moved on
 
 
 def test_splits_use_disjoint_seeds_and_test_uses_unseen_layouts(tmp_path):
     stats = {split: write_split(tmp_path, split, 2, seed_base=0, workers=1) for split in SPLIT_SEED_OFFSET}
     ranges = [range(s["seeds"][0], s["seeds"][1] + 1) for s in stats.values()]
     assert not set(ranges[0]) & set(ranges[1]) and not set(ranges[1]) & set(ranges[2])
+    assert not set(ranges[0]) & set(ranges[2])
     assert not set(TRAIN_FAMILIES) & set(TEST_FAMILIES)
     lines = (tmp_path / "train" / "clips.jsonl").read_text().splitlines()
     first = json.loads(lines[0])
