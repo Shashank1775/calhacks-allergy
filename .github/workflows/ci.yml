@@ -6,58 +6,35 @@ on:
     branches: [main]
 
 jobs:
-  # Required by the protect-main ruleset (tools/bootstrap_github.sh). Keep this job name stable.
-  contracts-and-ownership:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - run: pip install jsonschema
-      - name: Validate contracts, fixtures and golden scenarios
-        run: python tools/validate_contracts.py
-      - name: Every file has an owner
-        run: python tools/check_ownership.py
-      - name: Owners touched by this PR
-        if: github.event_name == 'pull_request'
-        run: python tools/check_ownership.py --diff origin/${{ github.base_ref }} --branch ${{ github.head_ref }}
-      - name: Phase gate
-        if: github.event_name == 'pull_request'
-        run: python tools/check_phase_gate.py --diff origin/${{ github.base_ref }}
-      - name: Backlog is valid
-        run: python tools/seed_issues.py --dry-run > /dev/null
-
-  # ruff over every Python file in the repo (rules in pyproject.toml).
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
-      # --locked fails the job if someone changed pyproject.toml without re-running `uv lock`.
-      - name: Install the dev tools
-        run: uv sync --locked
+      # --locked fails if someone changed pyproject.toml without re-running `uv lock`.
+      - name: Install
+        run: uv sync --locked --all-extras
+      # Agents never edit the partner's folders (AGENTS.md §4); only partner/* branches may.
+      - name: Partner folders untouched
+        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'partner/')
+        run: |
+          touched=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- kitchen/entities kitchen/interactions kitchen/lstm kitchen/graph database)
+          if [ -n "$touched" ]; then
+            echo "Only partner/* branches may change these files:"
+            echo "$touched"
+            exit 1
+          fi
+      - name: Contracts
+        run: uv run python tools/validate_contracts.py
       - name: Lint
         run: uv run ruff check .
       - name: Format
         run: uv run ruff format --check .
-
-  # Every folder's tests, minus `hardware` (needs a real device) and `slow` (nightly).
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          enable-cache: true
-      # Every extra, so each folder's tests find the libraries its step needs.
-      - name: Install the kitchen package
-        run: uv sync --locked --all-extras
+      # hardware needs a real device; slow is for local runs.
       - name: Tests
         run: uv run pytest -m 'not hardware and not slow'

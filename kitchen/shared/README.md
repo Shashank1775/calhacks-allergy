@@ -30,7 +30,7 @@ TypeScript types for `web/` are generated from the same schemas (task platform-0
 
 ## Rules
 
-- **Generated is generated.** Never hand-edit `models.py` or the TS types. Change the schema through an RFC ([§6 How work flows](../../AGENTS.md#6-how-work-flows)), then regenerate.
+- **Generated is generated.** Never hand-edit `models.py` or the TS types. Change the schema in a contracts PR ([§6 How work flows](../../AGENTS.md#6-how-work-flows)), then regenerate.
 - **Signatures match `contracts/apis.md` exactly.** A method that isn't in apis.md doesn't go in `interfaces.py`.
 - **Fakes pass the same contract tests as the real thing.** If a fake and a real implementation disagree, one of them has a bug; settle it on an issue.
 - **Fakes for partner parts do no domain math.** `FakeProvenanceGraph` answers from a scenario's ground truth (`expected`), never by propagating allergens, so it never duplicates the partner's work.

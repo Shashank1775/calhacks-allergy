@@ -46,7 +46,7 @@ We write no database tables.
 
 ## Safety rules that apply
 
-See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). All gate work is `safety-critical` and gets the safety reviewer.
+See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). All gate work is `safety-critical`.
 
 | Rule | How we could break it | Test (`safety`) |
 |---|---|---|

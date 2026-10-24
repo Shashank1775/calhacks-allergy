@@ -1,4 +1,4 @@
-"""GENERATED from contracts/schemas by tools/gen_models.py. Never edit by hand; change the schema (RFC) and regenerate.
+"""GENERATED from contracts/schemas by tools/gen_models.py. Never edit by hand; change the schema and regenerate.
 
 Owner: platform (agents)
 Step:  shared

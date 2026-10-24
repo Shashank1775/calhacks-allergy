@@ -59,7 +59,7 @@ Invariant 5 (time-forward) belongs to the partner's graph. We check it end to en
 
 - Live in `kitchen/verdict/tests/`. Run `uv run pytest kitchen/verdict`; the safety suite alone is `uv run pytest kitchen/verdict -m safety`.
 - The golden runner is parametrized over `contracts/scenarios/*.json`, so a new scenario needs no code change.
-- Every PR touching `policy.py`, `confidence.py`, `laya.py` or `service.py` is `safety-critical` and needs `review:safety-approved`. `policy.py` is held by one Worker at a time.
+- Every PR touching `policy.py`, `confidence.py`, `laya.py` or `service.py` is `safety-critical`. `policy.py` is held by one Worker at a time.
 
 ## Milestones
 

@@ -6,7 +6,7 @@
 
 ## Context
 
-What forces are at play. Link issues, RFCs, open questions.
+What forces are at play. Link issues and open questions.
 
 ## Decision
 

@@ -1,8 +1,8 @@
 # AGENTS.md
 
-**This is the only file you need to read.** It covers what we're building, where everything lives, the safety rules, your role, and how work flows. Before you edit a folder, also read that folder's `README.md` (they're short). Machine-readable contracts live in [`contracts/`](contracts/README.md).
+**This is the only file you need to read.** It covers what we're building, where everything lives, the safety rules, your role, and how work flows. Before you edit a folder, also read that folder's `README.md`. Data shapes and interfaces live in [`contracts/`](contracts/README.md).
 
-> **Phase gate: BUILD APPROVED.** The owner approved the plan on 2026-10-23: *"Assume hailo isn't connected right now, do stuff locally and be ready to upload to Hailo though. Beyond that everything looks good."* Agents build per this file, starting with M0 (§10). Only the Director changes this line, and only on the owner's word. Setting it back to `PLANNING` stops all product-code PRs (CI enforces this).
+> **Status: hackathon MVP, build approved (2026-10-23).** The Hailo-8 isn't connected yet: build locally and stay ready to upload. Keep everything as simple as it can be. CI is the check; there are no extra review layers.
 
 ---
 
@@ -12,11 +12,9 @@ A kitchen allergen tracker. A camera on a Raspberry Pi with a Hailo-8 watches fo
 
 People can get hurt if this system is wrong in the PASS direction. Wrong in the HOLD direction is an annoyance. Every judgment call leans toward HOLD.
 
-**The Hailo-8 isn't connected yet.** Everything runs locally: vision uses ONNX Runtime on a laptop, with video files or a webcam. It stays ready to upload to the Hailo later (same model file, same processing code, a deploy bundle; see `kitchen/vision/README.md`). Nothing waits on the device.
+**The Hailo-8 isn't connected yet.** Vision runs on a laptop with ONNX Runtime, from video files or a webcam, and stays ready to upload to the Hailo later (same model file, same processing code, a deploy bundle; see `kitchen/vision/README.md`). Nothing waits on the device.
 
-**Two kinds of builders work in this repo:**
-- **Agents** (you): a Director, a Manager for each of six teams, Workers, and Reviewers.
-- **The partner**, a human who builds the interactions step with its ConvLSTM, and the entity graph/data system. Their folders are off limits to agents (§4).
+**Two kinds of builders work in this repo:** agents (a Director, a Manager per team, and Workers), and **the partner**, a human who owns the interactions step, the LSTM, the entity store, the graph and the database (§4).
 
 ## 2. Pipeline and code map
 
@@ -36,9 +34,9 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step. 
 | 8 | **Gate and screens** | Pass gate (servo, red/green light, buzzer), Cartesia Sonic voice ("Hold seven"), and the tablet, chef and expo screens with camera overlays | [`kitchen/gate/`](kitchen/gate/), [`web/`](web/) | team `outputs` |
 | — | **Simulator** | One simulated world, two outputs: event-level scenarios (graph, verdict, Laya) and **rendered training clips** for the ConvLSTM (abstract shapes, boxes, change masks, labels from world truth) | [`kitchen/sim/`](kitchen/sim/) | team `sim` |
 | — | **Shared** | Models generated from contracts, interfaces, clock, config, the one change-mask function and clip builder (used live, in sim and in training), fakes (including fakes for partner parts), contract tests | [`kitchen/shared/`](kitchen/shared/) | team `platform` |
-| — | **Contracts** | Schemas, interfaces, table spec, fixtures, golden scenarios: the only things teams may depend on across folders | [`contracts/`](contracts/) | platform (Director merges) |
-| — | **Repo** | `tools/` (checks, GitHub setup, issue seeding), `tests/e2e/`, `.github/`, `.claude/`, `pyproject.toml` | — | team `platform` |
-| — | **Decisions** | ADRs | [`docs/decisions/`](docs/decisions/) | Director |
+| — | **Contracts** | Schemas, interfaces, table spec, fixtures, golden scenarios: the only things folders may depend on across teams | [`contracts/`](contracts/) | platform (Director merges) |
+| — | **Repo** | `tools/`, `tests/e2e/`, `.github/`, `.claude/`, `pyproject.toml` | — | team `platform` |
+| — | **Decisions** | ADRs | [`docs/decisions/`](docs/decisions/) | whoever made the decision |
 
 Data flow:
 
@@ -50,11 +48,11 @@ sim world ─▶ rendered clips + labels ─▶ ConvLSTM training (partner)     
 DB ─▶ graph (partner) ─▶ reach / subgraph ─▶ verdict (+ Laya) ─▶ DB: verdict + chain ─▶ gate, voice, web screens
 ```
 
-**The ground rule for boundaries:** a folder may use another folder only through [`contracts/`](contracts/README.md): JSON schemas for every message, the interfaces in [`contracts/apis.md`](contracts/apis.md), and the tables in [`contracts/state-tables.md`](contracts/state-tables.md). Every interface has a **fake**, so every folder can be built and tested alone. Timestamps are `t_ms` (milliseconds since shift start). Entity IDs look like `bin-4`, `tool-knife-17`, `hand-p1-left`, `plate-t7`. Boxes are normalized `[x1, y1, x2, y2]`.
+**The ground rule for boundaries:** a folder may use another team's folder only through [`contracts/`](contracts/README.md): JSON schemas for every message, the interfaces in [`contracts/apis.md`](contracts/apis.md), and the tables in [`contracts/state-tables.md`](contracts/state-tables.md). Every interface has a **fake**, so every folder can be built and tested alone. Timestamps are `t_ms` (milliseconds since shift start). Entity IDs look like `bin-4`, `tool-knife-17`, `hand-p1-left`, `plate-t7`. Boxes are normalized `[x1, y1, x2, y2]`.
 
 ## 3. Safety rules
 
-These nine invariants override everything: a task, a reviewer, a deadline. A PR that breaks one is rejected. Tests guarding them carry the `safety` marker.
+These nine invariants override everything. Tests guarding them carry the `safety` marker.
 
 1. **Fail closed.** A missing input, an error, a timeout, a stale track or an unknown entity history produces **HOLD**, never PASS.
 2. **Models only tighten.** The verdict is plain deterministic code: `hold = exact_flags or model_flags or confidence < ticket.pass_threshold or any_error`. Jev, Laya and the LSTM can add reasons to hold; they can never remove one. If a model the current mode expects is unavailable, the verdict is HOLD (`model_unavailable`). Running without Laya is an explicit `rules_only` mode a person switches on.
@@ -70,46 +68,39 @@ Graph math, for reference: noisy-OR, `P_dst(a) ← 1 − (1 − P_dst(a))·(1 �
 
 ## 4. Partner-owned areas
 
-The partner is a human teammate who owns **`kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/` and `database/`**.
+The partner owns **`kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/` and `database/`**.
 
-- **Agents never edit these folders**, not even a typo. CI rejects agent PRs that touch them.
-- **Agents never wait on the partner.** Build against the fakes in `kitchen/shared/fakes/` (`InMemoryStateClient`, `FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier`). The interfaces in [`contracts/apis.md`](contracts/apis.md) are the deal between agents and the partner.
-- **Integration waits for the partner.** Tasks whose last step needs the partner's real component carry `needs-partner`. Finish everything up to that step against the fake, then move the issue to `status:blocked` with a note.
-- **Talking to the partner.** Only Managers and the Director open issues for the partner, labeled `owner:partner`. Workers ask their Manager. Keep partner issues few, concrete and batched; the Director lists open ones on the Program board.
-- **Partner PRs** come from `partner/<slug>` branches. The partner merges their own work after CI passes. Contract tests in `kitchen/shared/contract_tests/` must pass against the partner's real code before any fake is swapped out.
-- **Changing a partner interface** goes through an RFC like any contract change (§6), and the partner must ACK it.
+- **Agents never edit these folders**, not even a typo. CI fails any non-`partner/` branch that touches them.
+- **Agents never wait on the partner.** Build against the fakes in `kitchen/shared/fakes/` (`InMemoryStateClient`, `FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier`). The interfaces in [`contracts/apis.md`](contracts/apis.md) are the deal.
+- **Integration waits for the partner.** A task whose last step needs the partner's real code carries `needs-partner`: finish against the fake, then set `status:blocked` with a note.
+- **Asking the partner.** A Manager or the Director opens an issue labeled `owner:partner`. Keep them few and concrete.
+- **Partner PRs** come from `partner/<slug>` branches, and the partner merges their own. Before a fake is swapped for the partner's real code, the contract tests in `kitchen/shared/contract_tests/` must pass against it.
+- **Changing a partner interface** in `contracts/` needs the partner's OK on the PR.
 
 ## 5. Roles
 
-Your launch prompt gives you a **role**, a **team** and a **handle** (for example `role=worker team=vision handle=w2`). If it doesn't, do read-only work and ask the owner. Never promote yourself.
+Your launch prompt gives you a **role**, a **team** and a **handle** (for example `role=worker team=vision handle=w2`). If it doesn't, do read-only work and ask the owner.
 
-All agents share one GitHub account, so **sign everything** (issue comments, PR bodies, reviews) on its own last line, for example `— [worker/vision/w2]`, and add an `Agent: worker/vision/w2` trailer to every commit.
+All agents share one GitHub account, so **sign** every issue comment and PR body on its last line, for example `— [worker/vision/w2]`.
 
 | Role | Signature | Job |
 |---|---|---|
-| **Owner** (human) | — | Approves phase gates and milestone exits. Answers `status:needs-human`. Runs hardware tests. Holds keys and money |
-| **Director** (one) | `— [director]` | Keeps six teams pointed at one working system. Owns this file, contracts approval, the roadmap, ADRs, the Program board, and the relationship with the partner. Writes no product code |
-| **Manager** (one per team) | `— [manager/<team>]` | Owns the team's backlog and Team board. Writes ready issues, dispatches Workers, reviews and merges team PRs, and represents the team in RFCs |
-| **Worker** | `— [worker/<team>/w<N>]` | One issue at a time, in its own worktree, proven with commands and output. Never merges |
-| **Safety reviewer** | `— [reviewer/safety]` | Required on every `safety-critical` PR. Not on the team being reviewed. Read-only |
+| **Owner** (human) | — | Product decisions, keys, money, hardware tests, milestone sign-off |
+| **Director** (one) | `— [director]` | Keeps the teams pointed at one working demo. Owns this file, merges `contracts/` changes, keeps the roadmap and the Program board, talks to the partner. Writes no product code |
+| **Manager** (one per team) | `— [manager/<team>]` | Writes issues, dispatches Workers, reviews and merges the team's PRs |
+| **Worker** | `— [worker/<team>/w<N>]` | One issue, one worktree, one PR. Never merges |
 
-### Director: each cycle (every 30–60 min, or on escalation)
-1. Is `main` green (`gh run list --branch main --limit 5`)? If not, stop the line: no merges except the fix.
-2. Merge RFC PRs whose affected Managers (and the partner, if touched) have all ACKed. Announce the new contract version on each affected Team board.
-3. Clear cross-team blockers. Decide disputes on the issue in one sentence; write an ADR if the decision outlives the milestone.
-4. Check the milestone's exit criteria (§10) and update the Program board: done, on track, or at risk, with evidence.
-5. Move Worker capacity to the critical path, within the owner's cap.
-6. Update the Program board's **Needs the owner** and **Partner** sections. Each item gets one paragraph: the question, options, your recommendation, and what's blocked.
+### Director: each cycle
+1. If `main` is red, nothing else merges until it's fixed.
+2. Merge PRs that change `contracts/` or this file.
+3. Unblock cross-team issues; settle disputes in one sentence on the issue. Move Worker capacity to the critical path, within the owner's cap.
+4. Rewrite the **Program board** issue body: milestone status, blockers, what needs the owner, what waits on the partner.
 
-The Director flips the phase gate and closes milestones only on the owner's explicit word, quoted in the PR. It never gives Workers orders directly, and never reports something as done without checking the PR, CI run or owner's hardware report.
-
-### Manager: each cycle (every 20–30 min, or when a Worker finishes)
-1. **Review first.** Use the checklist below and check the code yourself; don't trust the PR description.
-2. **Unblock.** Answer Worker questions. Turn what you can't answer into a request or an escalation.
-3. **Groom.** Keep at least (Workers + 2) issues `status:ready`, each meeting the ready bar (§6).
-4. **Dispatch.** Claim a ready issue, then start a Worker with the prompt below. Never put two Workers on the same files.
-5. **Requests.** Triage other teams' `type:request` issues: accept with an ETA, counter-propose, or escalate.
-6. **Board.** Rewrite the Team board body: in flight (issue → worker → PR), blocked, next, decisions, risks.
+### Manager: each cycle
+1. Review and merge the team's open PRs (below).
+2. Answer Worker questions.
+3. Keep a few issues `status:ready` (§6).
+4. Dispatch Workers on ready issues, never two on the same files.
 
 Worker launch prompt:
 
@@ -119,175 +110,101 @@ Issue: #<n> — <title>
 Branch: <team>/<n>-<slug>
 You may edit only: <folder paths for this issue>
 Read AGENTS.md, the README of each folder you will touch, and the issue with all comments.
-Done means: a ready-for-review PR that closes #<n>, CI green, and verification commands and output in the PR.
+Done means: a PR that closes #<n> with CI green.
 ```
 
 Use a stronger model for `safety-critical` issues and anything with tricky concurrency or math.
 
-**Review checklist.** Merge only when all of these hold:
-- [ ] The acceptance criteria are met, and you ran the proof commands yourself or read CI logs that show them.
-- [ ] The tests would fail if the feature were broken.
-- [ ] It touches only this team's folders (or is labeled `cross-team` with the other Manager's comment), and none of the partner's.
-- [ ] Contracts are used exactly as written.
-- [ ] No secrets, no files over 1 MB.
-- [ ] Time is injected and randomness is seeded.
-- [ ] `safety-critical` PRs have `review:safety-approved`.
-- [ ] Hardware status is honest.
-- [ ] It's no bigger than the task.
+**Review: one pass, by the Manager.** CI is the proof: read the diff and the CI result, and don't re-run what CI already ran. Merge with `gh pr merge <n> --squash --delete-branch` when:
+- CI is green and the acceptance criteria are met;
+- the tests would fail if the feature broke;
+- it touches only this team's folders and no partner folder, and is no bigger than the issue;
+- for `safety-critical` PRs: every error, timeout, missing input or unknown history ends in HOLD (no bare `except`, no `None` treated as clean); no model output can remove a hold reason; each invariant touched has a `safety` test.
 
-Approve with a signed `APPROVED` comment and the `review:approved` label, then `gh pr merge <n> --squash --delete-branch`, then confirm `main` is still green. To request changes, label `review:changes-requested` and post a numbered list.
+Otherwise post one numbered list of fixes.
 
 ### Worker: steps
-1. Read this file, the README of each folder you'll touch, the issue with all comments (`gh issue view <n> --comments`), and every contract it names.
-2. Comment `STARTED in worktree <path>, branch <branch>` with a 3–6 bullet plan. If the acceptance criteria are ambiguous, ask in that comment and wait.
-3. Work in your own worktree. Rename its branch to `<team>/<n>-<slug>`. Work in **loops of design → build → test → review**. Commit small; for anything safety-relevant, write the test first. **If three loops haven't produced a passing, approved result, stop:** post what's blocking, set `status:blocked`, and move on to other work. Don't start a fourth loop.
-4. Open a **draft** PR early (`git push -u origin HEAD && gh pr create --draft --fill`).
-5. Verify: the folder's tests, `python3 tools/validate_contracts.py`, `python3 tools/check_ownership.py --diff origin/main`. Paste the exact commands and trimmed output into the PR.
-6. Rebase on `origin/main`, re-verify, `git push --force-with-lease`, `gh pr ready`, and set the issue to `status:review`.
-7. Fix each numbered review item and reply to each number.
-8. After merge, remove your worktree and report two lines to your Manager: what merged, and anything worth a new issue.
+1. Read this file, the README of each folder you'll touch, and the issue with all comments (`gh issue view <n> --comments`). If it's ambiguous, ask on the issue and wait.
+2. Work in your own worktree on branch `<team>/<n>-<slug>`. For anything safety-relevant, write the test first.
+3. Run the folder's tests (`uv run pytest kitchen/<step>`), push, open a PR that closes the issue, and get CI green.
+4. Fix each review item. **If three tries haven't produced a passing, approved PR, stop:** comment what's blocking, set `status:blocked`, and move on.
+5. After merge, remove your worktree.
 
-**Scope discipline.** Do exactly what the issue asks. No extra options, layers, refactors or features. Found a bug elsewhere? Open an issue for it and keep going on yours.
-
-### Safety reviewer: checklist
-Find the way this PR lets a contaminated plate PASS.
-- [ ] Every exception, timeout, missing input, stale feed or unknown entity ends in HOLD (or gate `fault`). Look for bare `except`, swallowed errors, and `None` treated as clean.
-- [ ] No model output can remove a hold reason or raise clean-confidence above what exact reachability allows.
-- [ ] Unknown history stays unknown. Amendments recheck full history.
-- [ ] Constants come from config and are logged and recorded in the verdict's `versions`.
-- [ ] Each invariant touched has a `safety` test that would catch the bug. Property tests where it's a property; `AdversarialLaya` where Laya is involved.
-- [ ] Golden scenarios still pass.
-
-Post one comment with numbered findings, each with a severity (`blocker`, `major`, `minor`), a `file:line` and a concrete failure scenario. Then label `review:safety-approved` or `review:changes-requested`.
+**Scope discipline.** Do exactly what the issue asks. No extra options, layers, refactors or features. Found a bug elsewhere? Open an issue for it and keep going.
 
 ## 6. How work flows
 
-**Labels.** Every issue has exactly one each of `team:`, `type:` and `status:`, plus `prio:` once triaged.
+**Issues are the work queue.** Labels:
 
 | Group | Labels |
 |---|---|
-| Team | `team:platform` `team:orders` `team:vision` `team:verdict` `team:sim` `team:outputs`, plus `owner:partner` (for the human partner) |
-| Type | `type:task` (one Worker) · `type:epic` (milestone goal) · `type:bug` · `type:spike` (time-boxed research; output is a written answer) · `type:request` (one team asks another) · `type:rfc` (contract change) · `type:question` (needs the Director or owner) · `type:board` (pinned status) |
+| Team | `team:platform` `team:orders` `team:vision` `team:verdict` `team:sim` `team:outputs`, plus `owner:partner` |
 | Status | `status:backlog` → `status:ready` → `status:in-progress` → `status:review` → closed, plus `status:blocked` and `status:needs-human` |
 | Priority | `prio:p0` (blocks this milestone's demo) · `prio:p1` (needed this milestone) · `prio:p2` (nice to have) |
-| Flags | `safety-critical` (verdict, fail-closed or gate path) · `hardware` (needs a real device; only a human verifies) · `needs-partner` (last step needs the partner's real code) · `contract-change` · `cross-team` · `good-first-task` |
-| Review | `review:approved` · `review:safety-approved` · `review:changes-requested` |
+| Flags | `safety-critical` (verdict, fail-closed or gate path) · `hardware` (needs a real device; only a human verifies) · `needs-partner` · `bug` |
 
-**The ready bar.** An issue is `ready` only when it has:
-- a goal (the outcome, not the method);
-- acceptance criteria, each with the command that proves it;
-- the contracts it touches;
-- an out-of-scope list (agents over-build; say where to stop);
-- dependencies (`Blocked by #N`, or none);
-- a size that fits one PR of about 400 changed lines or less.
+An issue is **ready** when it has a goal, acceptance criteria with the command that proves each, an out-of-scope line, and any `Blocked by #N`. It should fit one PR of about 400 changed lines. Milestones (M0–M4) group issues; there are no epic issues.
 
-**Dispatch and claims.** Only Managers dispatch. Swap the label to `status:in-progress` and comment `CLAIM worker=w2 branch=vision/42-bytetrack`, signed. Workers never claim for themselves. A claim with no commits or comments for 2 hours is stale: comment `RECLAIM` and reassign.
+**Dispatch.** Only Managers dispatch: set `status:in-progress` and comment which Worker and branch.
 
-**Branches and worktrees.**
-- Branch names are `<team>/<issue>-<slug>`. Contract branches are `contracts/<rfc>-<slug>`. The partner uses `partner/<slug>`.
-- One agent, one worktree, one branch. Never edit the main checkout. Never push to `main`. Use `--force-with-lease`, and only on your own branch.
+**Branches and commits.** Branches are `<team>/<issue>-<slug>` (the partner uses `partner/<slug>`). One agent, one worktree, one branch. Never push to `main`. Commit messages are `<team>: <imperative summary> (#<issue>)`, plus whatever co-author trailer your harness requires.
 
-**Commits.**
-```
-<team>: <imperative summary, under 72 chars> (#<issue>)
+**Pull requests.** `Closes #N`, what changed, and anything checked by hand that CI doesn't cover. Squash merge only. The team's Manager merges; the Director merges `contracts/` and `AGENTS.md`; the partner merges partner folders.
 
-<why, if not obvious>
+**CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) validates the contracts, keeps agent branches out of partner folders, and runs ruff and pytest. That's the whole gate.
 
-Agent: worker/<team>/w2
-```
-Add whatever co-author trailer your harness requires after the `Agent:` line.
+**Keeping main green.** Whoever breaks `main` reverts first and fixes second; nothing else merges until it's green.
 
-**Lockfiles.** Adding a dependency is a change to the root `pyproject.toml` (platform-owned). Ask platform with a `type:request`, or label your PR `cross-team` with platform's OK. Never hand-merge `uv.lock`: take `main`'s version, re-run `uv lock`, and commit.
+**Contracts.** To change one, open a PR touching only `contracts/` that names the teams it affects. The Director merges it; a partner interface also needs the partner's OK. Each affected team updates its code in its own PR.
 
-**Pull requests.** Open a draft early. Fill in the template: `Closes #N`, what changed, **how you verified it** (exact commands and output), contract impact, safety impact, and hardware status (`not hardware`, `fake only`, or `verified on device by owner (link)`). CI must be green.
+**Other teams.** Need something from another team? Open an issue with their `team:` label and link it from your blocked issue. Never copy their code into your folder.
 
-| PR touches | Needs before merge | Merged by |
-|---|---|---|
-| One team's folders | `review:approved` from that team's Manager | That Manager |
-| Anything `safety-critical` | Plus `review:safety-approved` | The owning Manager |
-| Another team's folders | Plus that Manager's signed approval, and the `cross-team` label | The owning Manager |
-| `contracts/` | An RFC issue with every affected Manager's ACK (and the partner's, if a partner interface changes) | The Director |
-| `AGENTS.md`, `README.md`, `OWNERS`, `docs/` | The Director's review | The Director |
-| Partner folders | Partner PRs only | The partner |
+**Dependencies.** Add them to the root `pyproject.toml` in your PR and run `uv lock`. Never hand-merge `uv.lock`: take `main`'s version and re-run `uv lock`.
 
-Merge with squash only. GitHub won't let one account approve its own PR, so approvals are a signed comment plus a label.
+**Decisions.** A spike's answer is a comment on its issue. Write an ADR (`docs/decisions/NNNN-<slug>.md`, from `0000-template.md`) only for a decision that's hard to reverse, and keep it to one page.
 
-**Keeping main green.** `main` must always pass CI and run the current demo path on fakes. Whoever sees it break opens a `type:bug` `prio:p0` issue. The team that broke it reverts first and fixes second, and nothing else merges until it's green.
+**Escalation.** Stuck → your Manager. Needs another team → an issue for them. Contract change, scope change or dispute → the Director. Needs the partner → `owner:partner`. Product decision, keys, money or hardware → the owner (`status:needs-human`, with options and a recommendation).
 
-**Cross-team requests.** Open a `type:request` issue with the **other** team's label, saying what you need, why, and by which milestone. Link it from your blocked issue. Never copy another team's code into your folder to work around a missing piece.
+**Hardware.** Agents can't touch the Pi, camera, Hailo, servo, lights or speaker. Every hardware module has a laptop backend: a video file or webcam instead of the Pi camera, ONNX Runtime instead of the Hailo, console instead of GPIO. Hailo work produces a deploy bundle and a parity script, never a blocker. `hardware` issues go as far as the fake allows, then post a step-by-step test script for the owner and move to `status:needs-human`.
 
-**Contract changes (RFCs).**
-1. Open a `type:rfc` issue with the change, motivation, producers and consumers, whether it's breaking, the migration path, and the safety impact.
-2. Every affected Manager comments `ACK`, `ACK with changes` or `NACK`. The partner too, if their interface is affected.
-3. Open a PR on a `contracts/<rfc>-<slug>` branch touching only `contracts/` (plus an ADR if behavior changes). Bump `contracts/VERSION`: minor for additive changes, major for breaking ones.
-4. The Director merges it and announces the change on the affected boards.
-
-**ADRs.** A decision that's hard to reverse, or that spans teams, gets `docs/decisions/NNNN-<slug>.md` (copy `0000-template.md`).
-
-**Boards.** Each team has a pinned `Team board: <team>` issue, and its Manager rewrites the body (not comments) every cycle. The Director keeps the `Program board` the same way: milestone status, blockers, RFCs, needs-the-owner, partner. Boards are the first thing a restarted agent reads.
-
-**Escalation.**
-- Worker stuck after three design → build → test loops → Manager (comment, `status:blocked`). The team moves on to other ready work.
-- Needs another team → `type:request`.
-- Contract change, scope change, team dispute, or milestone at risk → Director (Program board).
-- Needs the partner → Manager or Director opens `owner:partner`.
-- Product decision, keys, money or hardware → owner (`status:needs-human`, with options and a recommendation).
-
-**Hardware.** Agents can't touch the Pi, camera, Hailo, servo, lights or speaker. Every hardware module has a laptop backend: a video file or webcam instead of the Pi camera, ONNX Runtime instead of the Hailo, console instead of GPIO. The Hailo isn't connected yet, so the local backend is the default and Hailo work produces a deploy bundle and a parity script, never a blocker. `hardware` issues go as far as the fake allows, then post a step-by-step test script for the owner and move to `status:needs-human`.
-
-**Data and secrets.**
-- Nothing over 1 MB in git: no video, weights, datasets or HEF/ONNX files. Large artifacts live in `data/` (gitignored), with a `data-manifest.json` in the folder giving name, size, sha256, source and author.
-- Keys live only in the local `.env` (see `.env.example`). Never echo a key anywhere.
-- If a key is missing, fail with a clear message, and file `status:needs-human`.
+**Data and secrets.** Nothing over 1 MB in git: no video, weights, datasets or HEF/ONNX files. Large artifacts live in `data/` (gitignored), with a `data-manifest.json` giving name, size, sha256 and source. Keys live only in the local `.env` (see `.env.example`); never echo one. If a key is missing, fail with a clear message and file `status:needs-human`.
 
 ## 7. Teams
 
 | Team | Folders | Builds | Ships these fakes for others | Safety focus |
 |---|---|---|---|---|
-| `platform` | `kitchen/shared/`, `tests/e2e/`, `tools/`, `.github/`, `.claude/`, `pyproject.toml`, `contracts/` upkeep | The `kitchen` Python project, CI, models generated from contracts, interfaces, clock, the end-to-end harness, TS types for `web/` | `InMemoryStateClient`, and fakes for partner parts (`FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier`), plus contract tests the partner's code must pass | Fakes must be faithful, especially fail-closed behavior |
+| `platform` | `kitchen/shared/`, `tests/e2e/`, `tools/`, `.github/`, `.claude/`, `pyproject.toml` | The `kitchen` Python project, CI, models generated from contracts, interfaces, clock, the end-to-end harness, TS types for `web/` | `InMemoryStateClient`, and fakes for partner parts (`FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier`), plus contract tests the partner's code must pass | Fakes must be faithful, especially fail-closed behavior |
 | `orders` | `kitchen/orders/`, `kitchen/profiling/` | Note parsing via Jev, one-tap questions, cache, apply, amendments, Cartesia Ink, bin profiling, chef confirmation, menu import, the Orders HTTP API, a ticket-note eval set | `FakeJev`, `TextFileTranscriber` | 3 (never send with an open question), 4 |
 | `vision` | `kitchen/vision/` | Video and webcam input, YOLOv8 detection and pose run locally with ONNX Runtime, a Hailo deploy bundle and backend ready for upload, the per-frame change mask (shared function), ByteTrack, identity and origin, zone calibration, plate binding, frame recording and replay, the Pi HTTP server | Recorded frame JSONL packs, `FakeVisionAPI` | 8 (new ID on re-acquire, origin set correctly) |
 | `verdict` | `kitchen/verdict/` | Verdict policy, the clean-confidence ADR, the Laya adapter, the verdict service (plate at pass, amendment), Repeated Mistakes analysis | `ExactLaya`, `AdversarialLaya`, `ScriptedVerdictSource` | 1, 2, 9. **The safety-critical team** |
-| `sim` | `kitchen/sim/` | Kitchen simulator, scenario generation at scale, error injection, Laya datasets and evaluation, and the **2D clip renderer**: abstract kitchens rendered as boxes plus change masks with labels from world truth, including hard negatives (overlap without contact, motion without contact, contact without movement, camera noise) | Scenario corpora, ConvLSTM training clip datasets | Ground truth independent of the graph; clips object-blind |
+| `sim` | `kitchen/sim/` | Kitchen simulator, scenario generation, error injection, Laya datasets and evaluation, and the **2D clip renderer**: abstract kitchens rendered as boxes plus change masks with labels from world truth, including hard negatives (overlap without contact, motion without contact, contact without movement, camera noise) | Scenario corpora, ConvLSTM training clip datasets | Ground truth independent of the graph; clips object-blind |
 | `outputs` | `kitchen/gate/`, `web/` | Gate driver and service (`fault` on a stale feed), Cartesia Sonic voice, the tablet, chef and expo screens, overlays, the Repeated Mistakes view | `ConsoleGate`, `MockGPIOGate`, `ConsoleSpeaker` | 1 (gate fails closed), 3 (tablet can't send with open questions) |
 | **partner** (human) | `kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/`, `database/` | Entity store and sync; the interactions step (candidate pairs, features, zone rules, pair windows, fallback, edges, real-clip labels, the adoption benchmark) and its ConvLSTM/ConvGRU (trained on sim clips); the provenance graph and exact reachability, the SpacetimeDB module and real `StateClient` | — (platform builds the fakes) | 6, 7 in interactions; 5, 8 in the graph; writer enforcement in the database |
 
-Ownership is authoritative in [`OWNERS`](OWNERS). Each folder's README lists its milestones, risks and first tasks.
+This table is the ownership map. Each folder's README lists its milestones, risks and first tasks.
 
 ## 8. Engineering conventions
 
-**Languages and tools**
-
 | | Default |
 |---|---|
-| Python | ≥ 3.11 (vision pins exactly what the Pi runs). One package `kitchen`, one root `pyproject.toml` managed by **uv**, with extras `pi`, `ml`, `server`. `ruff check` and `ruff format`. `pyright` (basic) |
-| Tests | `pytest`, in `kitchen/<step>/tests/`. Markers: `safety` (guards an invariant), `hardware` (skipped in CI), `slow` (nightly). Run with `uv run pytest kitchen/<step>` |
-| Web | TypeScript, Node ≥ 20, Vite. The framework is chosen by an ADR from outputs |
+| Python | ≥ 3.11 (vision pins exactly what the Pi runs). One package `kitchen`, one root `pyproject.toml` managed by **uv**, with extras `pi`, `ml`, `server`. `ruff check` and `ruff format` |
+| Tests | `pytest`, in `kitchen/<step>/tests/`. Markers: `safety` (guards an invariant), `hardware` (skipped in CI), `slow` (skipped in CI). Run with `uv run pytest kitchen/<step>` |
+| Web | React + TypeScript on Vite, Node ≥ 24.15 ([ADR 0007](docs/decisions/0007-outputs-web-framework.md)) |
 | Database | SpacetimeDB module (partner's choice of module language) |
 | ML | PyTorch. Weights and datasets live outside git |
 
-**Determinism**
-- Logic never reads the wall clock; it takes a `Clock`.
-- Every RNG is seeded from config.
-- Keep pure logic over contract models, with thin I/O adapters behind the interfaces.
-- Streams are JSONL, one contract object per line, so anyone can replay anyone's output.
+**Determinism.** Logic never reads the wall clock; it takes a `Clock`. Every RNG is seeded from config. Keep pure logic over contract models, with thin I/O adapters behind the interfaces. Streams are JSONL, one contract object per line, so anyone can replay anyone's output.
 
-**Config and logs**
-- Typed settings from environment variables, prefixed per step (`ORDERS_`, `VISION_`, `VERDICT_`, ...).
-- Every safety-relevant constant lives in one config object, is logged at startup, and is recorded in verdict `versions`.
-- Structured JSON logs with `t_ms` and the relevant IDs. Every HOLD logs all its reasons. Every exception on the verdict path logs at ERROR and produces a HOLD.
+**Config and logs.** Typed settings from environment variables, prefixed per step (`ORDERS_`, `VISION_`, `VERDICT_`, ...). Every safety-relevant constant lives in one config object, is logged at startup, and is recorded in the verdict's `versions`. Structured JSON logs with `t_ms` and the relevant IDs. Every HOLD logs all its reasons. Every exception on the verdict path logs at ERROR and produces a HOLD.
 
-**Every folder has three kinds of tests**
-1. Contract tests: everything it emits validates, and it accepts every valid fixture it consumes.
-2. A fake-swap test: the main flow runs with all dependencies faked.
-3. `safety` tests if it touches the verdict path, property-based (`hypothesis`) where the rule is a property.
+**Tests.** Check what a folder emits against its schema, run its main flow on fakes, and add `safety` tests (property-based with `hypothesis` where the rule is a property) on the verdict path.
 
 **Generated files** (`kitchen/shared/models.py`, TS types) are never edited by hand.
 
 **Code style (the owner's rules; reviewers block on these)**
 - **KISS: keep it simple.** Write the simplest thing that works. No layer, option, base class or abstraction the task doesn't need. Prefer plain functions and dataclasses over class hierarchies.
 - **Readable by a human first.** Short functions that each do one thing, and descriptive names. No clever one-liners, no deep nesting.
-- **snake_case** for Python modules, functions and variables, for file and folder names, JSON fields, and TypeScript variables and functions. Use `PascalCase` only for classes, types and React components, and `UPPER_SNAKE_CASE` for constants.
+- **snake_case** for Python modules, functions and variables, for file and folder names, JSON fields, and TypeScript variables and functions. Use `PascalCase` only for classes, types and React components, and `UPPER_SNAKE_CASE` for constants. React hooks are the one exception: they're named `useSomething`, because React's lint finds hooks by that name.
 - **Spacing.** Format with `ruff format` (Python) or Prettier (TypeScript). Put blank lines between logical blocks, and one statement per line.
 - **Comments.**
   - Every module starts with its docstring (owner, step, reads, emits, rules).
@@ -304,69 +221,59 @@ Stop, comment on your issue, and wait if:
 - the task needs hardware, a paid account, a key you lack, or a purchase;
 - two issues contradict each other, or an issue contradicts this file;
 - you're about to delete or rewrite more than you were asked to;
-- anything would push to `main`, force-push someone else's branch, or rewrite published history;
-- three design → build → test loops on the same task haven't passed (post each attempt and its errors, then move on).
+- three tries on the same task haven't passed.
 
-**Never:**
-- commit secrets, `.env`, weights or video;
-- write `@claude` in GitHub text (it can trigger automation);
-- skip or weaken a test to get green;
-- merge your own PR unless you're the owning Manager (or the Director, for `contracts/` and docs);
-- make the verdict depend on a model being right.
+**Never:** commit secrets, `.env`, weights or video; push to `main` or force-push someone else's branch; write `@claude` in GitHub text (it can trigger automation); skip or weaken a test to get green; merge as a Worker; make the verdict depend on a model being right.
 
 ## 10. Roadmap
 
-There's always a working demo on `main` after M1. Each later milestone swaps a fake for a real part. A milestone closes only when the owner signs off on the Program board. There are no dates yet (OQ-10).
+There's always a working demo on `main` after M1. Each later milestone swaps a fake for a real part. The owner signs off each milestone.
 
 | Milestone | Goal | Exit criteria (summary) |
 |---|---|---|
-| **Gate** ✅ | Owner approves the plan | Approved 2026-10-23 with defaults for the blocking questions. GitHub bootstrapped and backlog seeded |
-| **M0 Foundations** | Everyone builds against fakes | `kitchen` project and CI; generated models; interfaces; all fakes, including the partner-part fakes and their contract tests; each step has a skeleton with a passing test; vision replays a video locally (ONNX Runtime, no Hailo) into frame JSONL plus change masks; Hailo readiness ADR; the shared change-mask function and clip builder; sim renders a first labeled clip set for the partner; sim generates ≥ 20 valid scenarios |
-| **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End-to-end on fakes: typed note → `FakeJev` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `ConsoleGate`, `ConsoleSpeaker`. All golden scenarios pass in `rules_only`. Property tests for invariants 1, 2 and 9 approved by the safety reviewer. Tablet can't send with open questions. Hailo deploy bundle and parity script ready (no device needed). A large sim clip dataset with hard negatives and leak-free splits for the partner's ConvLSTM training. **Integration with the partner's interactions, graph and database as they land** (`needs-partner`) |
+| **Gate** ✅ | Owner approves the plan | Approved 2026-10-23. Backlog seeded |
+| **M0 Foundations** | Everyone builds against fakes | `kitchen` project and CI; generated models; interfaces; all fakes, including the partner-part fakes and their contract tests; each step has a skeleton with a passing test; vision replays a video locally (ONNX Runtime, no Hailo) into frame JSONL plus change masks; the shared change-mask function and clip builder; sim renders a first labeled clip set for the partner; sim generates ≥ 20 valid scenarios |
+| **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End-to-end on fakes: typed note → `FakeJev` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `ConsoleGate`, `ConsoleSpeaker`. All golden scenarios pass in `rules_only`. `safety` tests for invariants 1, 2 and 9. Tablet can't send with open questions. Hailo deploy bundle and parity script ready (no device needed). A sim clip dataset with hard negatives and leak-free splits for the partner's ConvLSTM. Integration with the partner's interactions, graph and database as they land (`needs-partner`) |
 | **M2 Live on Pi** | The camera drives it | Connect the Hailo and upload the bundle; the owner runs the parity check; det+pose plus ByteTrack ≥ 30 FPS (`hardware`). Calibration and plate binding. Live zone-rule edges. Gate hardware with `fault` on a stale feed (`hardware`). Overlays. Deterministic replay of a recorded live session |
-| **M3 Models** | Learned parts, gated by evaluation | Real Jev parse on the eval set, with misses becoming questions. Bin profiling from photos. Laya fine-tuned on sim; on held-out sim it never misses an allergen exact reachability finds. The partner's ConvLSTM (trained on sim clips, checked on labeled real clips) vs zone rules, decided by the partner's benchmark and an ADR. Sim clip realism calibrated against real change masks. Cartesia Ink and Sonic live |
-| **M4 Demo Hardening** | It survives a live demo | Repeated Mistakes view. Live late-change recheck. Offline mode. Failure drills (kill any component → HOLD or `fault`, never PASS). Optional Apify import. Demo script rehearsed three times |
+| **M3 Models** | Learned parts, gated by evaluation | Real Jev parse on the eval set, with misses becoming questions. Bin profiling from photos. Laya fine-tuned on sim; on held-out sim it never misses an allergen exact reachability finds. The partner's ConvLSTM vs zone rules, decided by the partner's benchmark. Cartesia Ink and Sonic live |
+| **M4 Demo Hardening** | It survives a live demo | Repeated Mistakes view. Live late-change recheck. Offline mode. Failure drills (kill any component → HOLD or `fault`, never PASS). Optional Apify import. Demo script rehearsed |
 
 ## 11. Open questions
 
-The gate is open. The blocking questions were settled with their defaults on 2026-10-23. Anything still open uses its default until its owner decides.
+Everything here runs on its default until its owner decides otherwise.
 
-| ID | Question | Decides | Blocking | Default |
-|---|---|---|---|---|
-| OQ-1 | How does Python reach SpacetimeDB (HTTP reducer calls, bridge process, community SDK)? | partner | no | HTTP reducer calls, plus polling for subscriptions |
-| OQ-2 | Only the nine major allergens, or child units (coconut under tree nuts)? | owner | resolved | **Default accepted (2026-10-23):** nine majors; exceptions stored as free-text ingredient |
-| OQ-3 | Default severity per allergen unit | owner | no | `allergy` |
-| OQ-4 | Pass threshold per severity (preference / intolerance / allergy / anaphylactic) | owner | resolved | **Default accepted (2026-10-23):** 0.80 / 0.90 / 0.95 / 0.99 |
-| OQ-5 | What backs Jev and Laya: provider, hosting, cost, offline story, keys? | owner | by M3 | **Default accepted (2026-10-23):** both behind interfaces with fakes until the owner decides; the orders and sim spikes gather options |
-| OQ-6 | Camera overlays drawn client-side or burned into the Pi stream? | vision + outputs | no | Client-side |
-| OQ-7 | SpacetimeDB local on the laptop or Maincloud? | owner + partner | no | Local standalone |
-| OQ-8 | What does `trace_sensitive: false` change? | verdict (ADR), owner approves | no | Every transfer edge counts (strict) |
-| OQ-9 | Contact and wipe edges: both directions, or inferred? | partner | no | Both |
-| OQ-10 | Deadline, and agent hours per day? | owner | resolved | **Default accepted (2026-10-23):** no dates; milestones in order |
-| OQ-11 | Hardware inventory (Pi, Hailo form factor, camera, servo, lights, buzzer, speaker) | owner | by M2 | **Hailo not connected yet (owner, 2026-10-23): build locally, stay upload-ready.** Assumed: Pi 5 + Hailo-8 AI HAT+ + Camera Module 3 |
-| OQ-12 | Who records and labels real clips, with what tool? | owner + partner | by M3 | Owner records; the partner's interactions step supplies a labeling tool |
-| OQ-13 | How the unknown-history profile enters noisy-OR | partner (ADR) | no | Probability 1 for every unit |
-| OQ-14 | One camera or several? | owner | no | One |
-| OQ-15 | Budget for agent tokens and paid APIs | owner | at launch | Owner sets the Worker concurrency cap when the Director starts |
-| OQ-16 | Ultralytics YOLOv8 is AGPL-3.0: acceptable? | owner | by M2 | Fine for a non-distributed demo |
-| OQ-17 | Ordering of edges with equal timestamps | partner (ADR) | no | By `t_start_ms`, `t_end_ms`, `event_id`; a tied wash goes before the transfer (strict) |
-| OQ-18 | Where do Hailo HEFs come from: precompiled Hailo Model Zoo files, or our own compile with the Dataflow Compiler (needs an x86-64 Linux machine, not the Mac)? | vision (ADR, vision-02), owner provides a machine if needed | by M2 | Precompiled Model Zoo HEFs for COCO YOLOv8 det + pose; compile only if we fine-tune |
-| OQ-19 | What does the ConvLSTM output, and how does it map to actions? | partner (ADR) | by M1 | Two heads: P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`; a contact without visible movement still counts as a possible trace transfer (OQ-8) |
-| OQ-20 | Clip geometry: H × W, steps T and stride, full frame or pair crop, change-mask gain/blur/decay | partner (ADR); sim and vision follow | by M0 end | 128 × 128, full frame, T = 16 steps covering about 1 s, gain 4, blur 1.5 px, no trail |
+| ID | Question | Default (who decides) |
+|---|---|---|
+| OQ-1 | How does Python reach SpacetimeDB? | HTTP reducer calls, plus polling for subscriptions (partner) |
+| OQ-2 | Only the nine major allergens, or child units? | **Settled:** nine majors; exceptions stored as free-text ingredient |
+| OQ-3 | Default severity per allergen unit | `allergy` (owner) |
+| OQ-4 | Pass threshold per severity (preference / intolerance / allergy / anaphylactic) | **Settled:** 0.80 / 0.90 / 0.95 / 0.99 |
+| OQ-5 | What backs Jev and Laya? | **Settled for now:** both behind interfaces with fakes until the owner decides |
+| OQ-6 | Camera overlays drawn client-side or burned into the Pi stream? | Client-side (vision + outputs) |
+| OQ-7 | SpacetimeDB local or Maincloud? | Local standalone (owner + partner) |
+| OQ-8 | What does `trace_sensitive: false` change? | Every transfer edge counts (verdict, owner approves) |
+| OQ-9 | Contact and wipe edges: both directions, or inferred? | Both (partner) |
+| OQ-11 | Hardware inventory | Pi 5 + Hailo-8 AI HAT+ + Camera Module 3; Hailo not connected yet (owner) |
+| OQ-12 | Who records and labels real clips? | Owner records; the partner supplies a labeling tool |
+| OQ-13 | How the unknown-history profile enters noisy-OR | Probability 1 for every unit (partner) |
+| OQ-14 | One camera or several? | One (owner) |
+| OQ-15 | Budget for agent tokens and paid APIs | Owner sets the Worker concurrency cap |
+| OQ-16 | Ultralytics YOLOv8 is AGPL-3.0: acceptable? | Fine for a non-distributed demo (owner) |
+| OQ-17 | Ordering of edges with equal timestamps | By `t_start_ms`, `t_end_ms`, `event_id`; a tied wash goes before the transfer (partner) |
+| OQ-18 | Where do Hailo HEFs come from? | Precompiled Model Zoo HEFs for COCO YOLOv8 det + pose; compile only if we fine-tune (vision) |
+| OQ-19 | What does the ConvLSTM output, and how does it map to actions? | P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`; contact without movement still counts as a possible trace transfer (partner) |
+| OQ-20 | Clip geometry | 128 × 128, full frame, T = 16 steps over about 1 s, gain 4, blur 1.5 px, no trail (partner; sim and vision follow) |
 
-The Director moves answered questions to the bottom of this table with the answer and a link.
-
-## 12. Commands and tools
+## 12. Commands
 
 ```bash
-python3 tools/validate_contracts.py                    # schemas, fixtures, golden scenarios (pip install jsonschema)
-python3 tools/check_ownership.py                       # every file has exactly one owner
-python3 tools/check_ownership.py --diff origin/main    # which owners this branch touches (fails on partner folders from agent branches)
-python3 tools/check_phase_gate.py --diff origin/main   # fails on product code while the gate is PLANNING
-python3 tools/seed_issues.py --dry-run                 # validate the seed backlog in tools/backlog/
+uv sync --all-extras                                   # set up
+uv run python tools/validate_contracts.py              # schemas, fixtures, golden scenarios
+uv run ruff check . && uv run ruff format --check .    # lint
+uv run pytest -m 'not hardware and not slow'           # every test CI runs
+uv run pytest kitchen/<step>                           # one step's tests
 gh issue list -l team:<team> -l status:ready           # your team's ready queue
 gh issue view <n> --comments                           # an issue and its history
-uv run pytest kitchen/<step>                           # a step's tests (once the project exists)
 ```
 
 ## 13. Glossary
@@ -391,31 +298,14 @@ uv run pytest kitchen/<step>                           # a step's tests (once th
 
 ## 14. Running the org (Claude Code)
 
-**For the owner, one-time setup:**
-- Install `gh`, `uv` and Node ≥ 20.
-- Copy `.env.example` to `.env`.
-- Review `tools/claude-settings.recommended.json` and copy it to `.claude/settings.json`.
-- After approval, run `tools/bootstrap_github.sh` (labels, milestones, `main` ruleset) and `tools/seed_issues.py`.
-
-**Launching each role:**
+**One-time setup (owner):** install `gh`, `uv` and Node ≥ 24.15; copy `.env.example` to `.env`; optionally copy `tools/claude-settings.recommended.json` to `.claude/settings.json` (fewer permission prompts; Managers need `gh pr merge` allowed to merge).
 
 | Role | How it runs |
 |---|---|
-| Director | `claude --agent director` at the repo root (long-lived) |
-| Managers | One desktop-app session each, or `claude --bg --agent team-manager --name mgr-<team> "<prompt>"`. Keep each awake with `/loop 20m Run one Manager cycle` |
-| Workers | The `worker` subagent type, spawned by a Manager. Each runs in its own git worktree under `.claude/worktrees/`, branched from `origin/main` |
-| Reviewers | The `reviewer` subagent type, one per PR |
+| Director | `claude --agent director` at the repo root, with the prompt `role=director handle=director. Concurrency cap: <N> Workers. Run one Director cycle and report only what needs the owner.` |
+| Managers | One session each: `claude --bg --agent team-manager --name mgr-<team> "role=manager team=<team> handle=mgr-<team>. Max Workers: <k>. Dispatch only status:ready issues in milestone <M>."`. Keep each awake with `/loop 20m Run one Manager cycle` |
+| Workers | The `worker` subagent type, spawned by a Manager, each in its own git worktree under `.claude/worktrees/` |
 
-Agent definitions live in [`.claude/agents/`](.claude/agents/). Nesting is Director → Manager → Worker, which fits Claude Code's default depth.
+Agent definitions live in [`.claude/agents/`](.claude/agents/).
 
-**Prompts:**
-- Director: `role=director handle=director. Concurrency cap: <N> Workers. Phase gate: <state>. Run one Director cycle and report only what needs the owner.`
-- Manager: `role=manager team=<team> handle=mgr-<team>. Max Workers: <k>. Dispatch only status:ready issues in milestone <M>.`
-- Safety reviewer: `role=reviewer handle=safety. Review PR #<n> per AGENTS.md §5.`
-
-**Pitfalls**
-- **One GitHub identity.** That's why signatures are mandatory.
-- **Shared auto memory.** Every worktree of this repo on the Mac shares it, so keep task state in GitHub only.
-- **Worktrees pile up.** Remove worktrees after merge, and run `git worktree prune` weekly.
-- **Settings deny rules can be bypassed.** The GitHub ruleset is the real guard on `main`.
-- **Concurrency multiplies spend.** Respect the owner's cap.
+**Pitfalls:** every agent shares one GitHub identity (hence signatures); keep task state in GitHub, not local memory; remove worktrees after merge and run `git worktree prune` now and then; concurrency multiplies spend, so respect the owner's cap.
