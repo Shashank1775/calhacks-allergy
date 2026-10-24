@@ -17,7 +17,7 @@ import random
 from collections import Counter
 from pathlib import Path
 
-from kitchen.verdict.laya_check import UNITS, exact_reach, plate_state, reached_question, time_order
+from kitchen.verdict.laya_check import MAX_EDGES, UNITS, exact_reach, on_path, plate_state, reached_question
 
 SCENARIOS = Path(__file__).resolve().parents[3] / "contracts" / "scenarios"
 
@@ -44,46 +44,16 @@ GOLD_FLOOR = 0.001  # keep soft targets off exact 0 and 1
 # ---------- the plate's subgraph ----------
 
 
-def ancestry(edges, plate_id):
-    """The edges on some time-forward path into the plate, washes of entities on those paths included.
-
-    Walks the time-ordered edges backwards. `deadline[e]` is the position of e's last edge on a path to the plate,
-    so an edge only counts if it happened before that.
-    """
-    ordered = time_order(edges)
-    deadline = {plate_id: len(ordered)}
-    kept = []
-    for position in range(len(ordered) - 1, -1, -1):
-        edge = ordered[position]
-        a, b = edge["a_id"], edge["b_id"]
-        if edge["action"] == "unimportant":
-            continue
-        if edge["action"] == "clean.wash":
-            if position < deadline.get(a, -1):
-                kept.append(edge)
-            continue
-        flows = {"a_to_b": [(a, b)], "b_to_a": [(b, a)], "both": [(a, b), (b, a)]}[edge["direction"]]
-        on_path = False
-        for src, dst in flows:
-            if position < deadline.get(dst, -1):
-                deadline[src] = max(deadline.get(src, -1), position)
-                on_path = True
-        if on_path:
-            kept.append(edge)
-    return list(reversed(kept))
-
-
-def make_subgraph(nodes, edges, plate_id, as_of_t_ms, distractors=()):
-    """A PlateSubgraph: the plate's ancestry, plus any extra (non-path) edges, and the nodes they mention."""
-    kept = ancestry([e for e in edges if e["t_start_ms"] <= as_of_t_ms], plate_id)
-    kept_ids = {e["event_id"] for e in kept}
-    chosen = time_order(kept + [e for e in distractors if e["event_id"] not in kept_ids])
-    mentioned = {plate_id} | {e["a_id"] for e in chosen} | {e["b_id"] for e in chosen}
+def make_subgraph(nodes, edges, plate_id, as_of_t_ms):
+    """A PlateSubgraph as the partner's graph returns it: the plate's on-path edges up to as_of and their nodes."""
+    everything = {"plate_id": plate_id, "nodes": nodes, "edges": [e for e in edges if e["t_start_ms"] <= as_of_t_ms]}
+    kept = on_path(everything)
+    mentioned = {plate_id} | {e["a_id"] for e in kept} | {e["b_id"] for e in kept}
     return {
         "plate_id": plate_id,
         "as_of_t_ms": as_of_t_ms,
         "nodes": [n for n in nodes if n["entity_id"] in mentioned],
-        "edges": chosen,
+        "edges": kept,
     }
 
 
@@ -143,6 +113,14 @@ def random_steps(rng, bins, tools, hands, plate):
     else:
         pickup = [("transfer.contact", mover, source, "both")]
 
+    for _ in range(rng.randint(0, 4)) if pickup else []:  # more stops on the way, so histories run up to 10 edges
+        more = rng.choice(bins)
+        pickup.append(
+            ("transfer.scoop", mover, more, "b_to_a")
+            if mover["kind"] == "tool"
+            else ("transfer.contact", mover, more, "both")
+        )
+
     if pickup and mover["kind"] == "tool" and rng.random() < 0.3:  # handed on: the hand touches the tool
         hand = rng.choice(hands)
         pickup.append(("transfer.contact", hand, mover, "both"))
@@ -178,9 +156,9 @@ def random_noise(rng, bins, tools, hands, plate):
 
 
 def random_edges(rng, bins, tools, hands, plate):
-    """A story plus 0 to 3 noise steps, as time-ordered interaction events. Returns (edges, as_of_t_ms)."""
+    """A story plus 0 to 4 noise steps, as time-ordered interaction events. Returns (edges, as_of_t_ms)."""
     steps = random_steps(rng, bins, tools, hands, plate)
-    for _ in range(rng.randint(0, 3)):
+    for _ in range(rng.randint(0, 4)):
         steps.insert(rng.randint(0, len(steps)), random_noise(rng, bins, tools, hands, plate))
 
     edges, t = [], rng.randint(500, 3000)
@@ -207,11 +185,9 @@ def random_row(rng, index):
     """One training row: a random kitchen's plate subgraph, every allergen question, and the exact answers."""
     bins, tools, hands, plate = random_kitchen(rng)
     edges, as_of = random_edges(rng, bins, tools, hands, plate)
-    nodes = bins + tools + hands + [plate]
-    on_path = {e["event_id"] for e in ancestry(edges, plate["entity_id"])}
-    off_path = [e for e in edges if e["event_id"] not in on_path]
-    distractors = rng.sample(off_path, min(len(off_path), rng.randint(0, 2))) if rng.random() < 0.3 else []
-    subgraph = make_subgraph(nodes, edges, plate["entity_id"], as_of, distractors)
+    subgraph = make_subgraph(bins + tools + hands + [plate], edges, plate["entity_id"], as_of)
+    if len(subgraph["edges"]) > MAX_EDGES:
+        return None  # longer than the check will ever read
     return row_for(f"plate-{index}", subgraph)
 
 
@@ -298,7 +274,14 @@ def main():
     args = arg_parser.parse_args()
 
     rng = random.Random(args.seed)
-    rows = [random_row(rng, i) for i in range(args.count)]
+    rows, seen, index = [], set(), 0
+    while len(rows) < args.count:  # unique states only, so no test row is a copy of a training row
+        row = random_row(rng, index)
+        index += 1
+        key = json.dumps(row["state"], sort_keys=True) if row else None
+        if row and key not in seen:
+            seen.add(key)
+            rows.append(row)
     splits = {"test": rows[:200], "val": rows[200:300], "train": rows[300:]}
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -314,9 +297,15 @@ def main():
         else "nothing reaches the plate"
         for r in rows
     )
+    golds = [g["probabilities"]["true"] for r in rows for g in r["gold"].values()]
     manifest = {
         "rows": {name: len(items) for name, items in splits.items()},
-        "balance": dict(reached),
+        "plates_by_outcome": dict(reached),
+        "questions_by_gold": {
+            "reached (>= 0.5)": sum(g >= 0.5 for g in golds),
+            "faint (0.01 to 0.5)": sum(0.01 <= g < 0.5 for g in golds),
+            "clean (< 0.01)": sum(g < 0.01 for g in golds),
+        },
         "max_edges": max(len(r["subgraph"]["edges"]) for r in rows),
         "seed": args.seed,
     }

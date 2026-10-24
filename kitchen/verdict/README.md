@@ -62,7 +62,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
 | Rule | How we could break it | Test |
 |---|---|---|
 | Fail closed | An exception, timeout, `StateUnavailable`, `GraphUnavailable`, missing ticket or binding, or a stale plate reaches PASS | Fault injection at every `StateClient` and `ProvenanceGraph` call: the result is always HOLD with `error`, `missing_input` or `stale_track`, and confidence 0 |
-| Plain-code verdict | Anything but `decide()` makes the call, confidence rises with more evidence, or Laya removes a hold | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence; a property test checks that no Laya answer removes a reason, and that a Laya failure holds |
+| Plain-code verdict | Anything but `decide()` makes the call, confidence rises with more evidence, or Laya removes a hold | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence; now: `laya_hold_reasons` only ever returns `laya_flagged` reasons for forbidden allergens, and every model failure raises `LayaCheckUnavailable`; with `decide()`: a property test that no Laya answer removes a reason and that a Laya failure holds |
 | Allergens, not contacts | The policy reads anything but the ticket's forbidden allergens | The policy reads only `ticket.forbidden` and the reach probabilities |
 | Known-clean source | An unknown ancestor is ignored | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` and `clean-plate-from-stack` |
 | Late changes recheck everything | An amendment reuses the previous verdict | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy` |
@@ -81,4 +81,4 @@ Time running forward belongs to the partner's graph; we check it end to end by r
 - The default pass thresholds are placeholders the owner can change. They live in `VerdictSettings` and are recorded on every verdict.
 - `FakeProvenanceGraph` tests the policy only; real-graph runs carry `needs-partner`.
 - A false wash erases real contamination. The partner's graph caps how much a wash can clean.
-- The plate model reads at most 20 edges (Laya's 512-token limit); a longer subgraph raises `LayaCheckUnavailable` and holds. It was trained on generated kitchens with full transfer (k = 1), so it leans strict.
+- The plate model reads only the plate's time-forward paths, at most 10 edges (the longest in its training data, about 340 of Laya's 512 tokens); a longer history raises `LayaCheckUnavailable` and holds. It was trained on generated kitchens with full transfer (k = 1), so it leans strict.

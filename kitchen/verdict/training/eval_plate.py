@@ -32,10 +32,11 @@ def read_rows(path):
 
 
 def score(agent, rows):
-    """Per-question accuracy at FLAG_THRESHOLD, missed allergens and false flags."""
+    """Accuracy at FLAG_THRESHOLD, misses and extra holds at each verdict threshold, and clean-plate scores."""
     total = right = 0
     missed, false_flags, errors = [], [], []
     clean_scores, reached_scores = [], []  # model scores where gold is ~0, and where gold is >= 0.5
+    golds, scores = [], []
     for row in rows:
         answers = agent.predict(row["state"], row["questions"])["answers"]
         for key in row["questions"]:
@@ -44,6 +45,8 @@ def score(agent, rows):
             total += 1
             right += (gold >= FLAG_THRESHOLD) == (predicted >= FLAG_THRESHOLD)
             errors.append(abs(gold - predicted))
+            golds.append(gold)
+            scores.append(predicted)
             if gold < 0.01:
                 clean_scores.append(predicted)
             elif gold >= FLAG_THRESHOLD:
@@ -54,7 +57,16 @@ def score(agent, rows):
             elif predicted >= FLAG_THRESHOLD > gold:
                 false_flags.append({**example, "events": row["state"]["events"]})
     clean_scores.sort()
+    pairs = [(g, s) for g, s in zip(golds, scores, strict=True)]
+    by_threshold = {
+        str(t): {
+            "missed": sum(1.0 - g <= t < 1.0 - s for g, s in pairs),  # the exact answer flags it, Laya doesn't
+            "extra_holds": sum(1.0 - s <= t < 1.0 - g for g, s in pairs),  # Laya flags it, the exact answer doesn't
+        }
+        for t in PASS_THRESHOLDS
+    }
     return {
+        "at_verdict_thresholds": by_threshold,
         "clean_score_percentiles": {
             f"p{q}": round(clean_scores[min(len(clean_scores) - 1, int(len(clean_scores) * q / 100))], 4)
             for q in (50, 90, 99)
@@ -81,7 +93,7 @@ def golden(agent, rows):
     for row in rows:
         answers = agent.predict(row["state"], row["questions"])["answers"]
         scores = {u: round(answers[f"reached_{u}"]["noul"], 4) for u in row["forbidden"]}
-        flagged = sorted(u for u, p in scores.items() if p >= 1 - row["pass_threshold"])
+        flagged = sorted(u for u, p in scores.items() if 1 - p <= row["pass_threshold"])
         expected = sorted(set(row["expected_reached"]) & set(row["forbidden"]))
         results.append(
             {

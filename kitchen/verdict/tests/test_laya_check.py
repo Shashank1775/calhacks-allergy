@@ -19,15 +19,16 @@ from kitchen.verdict.laya_check import (
     LocalLayaCheck,
     exact_reach,
     laya_hold_reasons,
+    on_path,
     plate_state,
     reached_question,
 )
-from kitchen.verdict.training.plate_data import ancestry, golden_rows, subgraph_from_scenario
+from kitchen.verdict.training.plate_data import golden_rows, subgraph_from_scenario
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
 
-# sha256 of the questions exactly as the plate model (plate-v1) was fine-tuned on them. If this test fails, the
-# wording changed: retrain the plate model, then update this hash. test_the_state_reads_like_the_kitchen pins the input.
+# sha256 of the questions exactly as the plate model was fine-tuned on them. If this test fails, the wording
+# changed: retrain the plate model, then update this hash. test_the_state_reads_like_the_kitchen pins the input.
 TRAINED_QUESTIONS_SHA256 = "b64d73daf123c6ea596b08244ddb9b6c752ab1baf8c14c3aa2eab3500d464cb2"
 
 
@@ -39,9 +40,23 @@ def schema_errors(name, document):
     """Every way `document` breaks contracts/schemas/<name>.schema.json."""
     docs = {p.name: json.loads(p.read_text()) for p in (CONTRACTS / "schemas").glob("*.schema.json")}
     registry = Registry().with_resources((n, Resource.from_contents(d)) for n, d in docs.items())
-    return [
-        e.message for e in Draft202012Validator(docs[f"{name}.schema.json"], registry=registry).iter_errors(document)
-    ]
+    validator = Draft202012Validator(docs[f"{name}.schema.json"], registry=registry)
+    return [e.message for e in validator.iter_errors(document)]
+
+
+def edge(event_id, t, a, b, action="transfer.contact", direction="both", p=0.9):
+    """A minimal interaction event."""
+    return {
+        "event_id": event_id,
+        "t_start_ms": t,
+        "t_end_ms": t + 100,
+        "a_id": a,
+        "b_id": b,
+        "action": action,
+        "probability": p,
+        "direction": direction,
+        "classifier": {"name": "manual", "version": "test"},
+    }
 
 
 class ScriptedAgent:
@@ -84,50 +99,29 @@ def test_the_subgraph_matches_the_contract():
     assert schema_errors("plate_subgraph", KNIFE) == []
 
 
-def test_the_subgraph_keeps_only_time_forward_paths():
+def test_the_state_reads_like_the_kitchen():
+    state = plate_state(KNIFE)
+    assert state["start"] == "tool-knife-1 (knife): clean | bin-1 (satay sauce): peanuts 0.98 | plate-t1 (plate): clean"
+    assert state["events"] == "1. scoop tool-knife-1 <- bin-1 (p 0.95) | 2. contact tool-knife-1 <-> plate-t1 (p 0.90)"
+
+
+def test_only_time_forward_paths_are_read():
     blocked = subgraph_from_scenario(scenario("time-order-blocks-path"), "plate-t3", 3000)
     assert [e["event_id"] for e in blocked["edges"]] == ["e1"]  # the scoop came after the knife touched the plate
     washed = subgraph_from_scenario(scenario("wash-resets-knife"), "plate-t2", 3000)
     assert [e["action"] for e in washed["edges"]] == ["transfer.scoop", "clean.wash", "transfer.contact"]
 
 
-def test_the_state_reads_like_the_kitchen():
-    state = plate_state(KNIFE)
-    assert state["start"] == "bin-1 (satay sauce): peanuts 0.98 | tool-knife-1 (knife): clean | plate-t1 (plate): clean"
-    assert state["events"] == (
-        "1. 1.0s scoop bin-1 -> tool-knife-1 (p 0.95) | 2. 2.0s contact tool-knife-1 <-> plate-t1 (p 0.90)"
-    )
+def test_extra_off_path_edges_are_dropped_before_the_model_reads_them():
+    late_scoop = edge("e9", 2500, "tool-knife-1", "bin-1", action="transfer.scoop", direction="b_to_a")
+    with_extra = dict(KNIFE, edges=KNIFE["edges"] + [late_scoop])
+    assert plate_state(with_extra) == plate_state(KNIFE)
+    assert on_path(with_extra) == KNIFE["edges"]
 
 
 def test_exact_reach_is_noisy_or_with_full_transfer():
     assert exact_reach(KNIFE)["peanut"] == pytest.approx(0.98 * 0.95 * 0.90)
     assert exact_reach(KNIFE)["milk"] == 0.0
-
-
-def test_ancestry_ignores_edges_after_the_plate_was_touched():
-    edges = [
-        {
-            "event_id": "e1",
-            "t_start_ms": 1,
-            "t_end_ms": 2,
-            "a_id": "tool-a",
-            "b_id": "plate-t1",
-            "action": "transfer.contact",
-            "probability": 0.9,
-            "direction": "both",
-        },
-        {
-            "event_id": "e2",
-            "t_start_ms": 5,
-            "t_end_ms": 6,
-            "a_id": "tool-a",
-            "b_id": "bin-1",
-            "action": "transfer.scoop",
-            "probability": 0.9,
-            "direction": "b_to_a",
-        },
-    ]
-    assert [e["event_id"] for e in ancestry(edges, "plate-t1")] == ["e1"]
 
 
 @pytest.mark.safety
@@ -140,7 +134,13 @@ def test_laya_only_ever_adds_hold_reasons_for_forbidden_allergens(reached, forbi
     reasons = laya_hold_reasons(reached, forbidden, pass_threshold)
     assert all(r["code"] == "laya_flagged" and r["allergen_unit_id"] in forbidden for r in reasons)
     flagged = {r["allergen_unit_id"] for r in reasons}
-    assert flagged == {u for u in forbidden if reached[u] >= 1.0 - pass_threshold}
+    assert flagged == {u for u in forbidden if 1.0 - reached[u] <= pass_threshold}
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(("p", "pass_threshold"), [(0.01, 0.99), (0.05, 0.95), (0.10, 0.90), (0.20, 0.80)])
+def test_the_flag_boundary_holds(p, pass_threshold):
+    assert laya_hold_reasons({"peanut": p}, ["peanut"], pass_threshold) != []
 
 
 def test_the_local_check_asks_only_about_forbidden_allergens():
@@ -155,9 +155,10 @@ def test_the_local_check_asks_only_about_forbidden_allergens():
         ScriptedAgent(fail=True),
         ScriptedAgent(broken={"noul": math.nan}),
         ScriptedAgent(broken={"noul": 1.4}),
+        ScriptedAgent(broken={"noul": None}),
         ScriptedAgent(broken={}),
     ],
-    ids=["crash", "nan", "out-of-range", "missing"],
+    ids=["crash", "nan", "out-of-range", "none", "missing"],
 )
 def test_a_model_failure_holds(agent):
     with pytest.raises(LayaCheckUnavailable):
@@ -165,12 +166,30 @@ def test_a_model_failure_holds(agent):
 
 
 @pytest.mark.safety
+def test_a_missing_forbidden_list_holds():
+    with pytest.raises(LayaCheckUnavailable):
+        local_check(ScriptedAgent()).check(KNIFE, None)
+
+
+@pytest.mark.safety
 def test_a_history_too_long_to_read_holds():
-    long = dict(KNIFE, edges=[dict(KNIFE["edges"][0], event_id=f"e{i}") for i in range(MAX_EDGES + 1)])
+    chain = [edge(f"e{i}", 1000 * i, "hand-p1-left", "plate-t1") for i in range(1, MAX_EDGES + 2)]
+    hand = dict(KNIFE["nodes"][1], entity_id="hand-p1-left", kind="hand", label="left hand")
+    long = dict(KNIFE, edges=chain, nodes=KNIFE["nodes"] + [hand])
     with pytest.raises(LayaCheckUnavailable):
         FakeLayaCheck().check(long, ["peanut"])
     with pytest.raises(LayaCheckUnavailable):
         local_check(ScriptedAgent()).check(long, ["peanut"])
+
+
+@pytest.mark.safety
+def test_an_edge_without_a_node_holds():
+    stray = edge("e9", 2500, "tool-spoon-3", "plate-t1")  # on the path, but nobody said what the spoon carried
+    broken = dict(KNIFE, edges=KNIFE["edges"] + [stray])
+    with pytest.raises(LayaCheckUnavailable):
+        FakeLayaCheck().check(broken, ["peanut"])
+    with pytest.raises(LayaCheckUnavailable):
+        local_check(ScriptedAgent()).check(broken, ["peanut"])
 
 
 def test_a_missing_checkpoint_raises():

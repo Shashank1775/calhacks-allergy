@@ -169,12 +169,13 @@ Owner: **verdict** (`kitchen/verdict/laya_check.py`). A second fine-tuned Laya m
 
 ```python
 class LayaPlateCheck(Protocol):
+    version: str   # the checkpoint's name, recorded as verdict.versions.laya
     def check(self, subgraph: PlateSubgraph, forbidden: list[str]) -> dict[str, float]: ...
         # P(reached the plate) for each forbidden allergen unit
 ```
 
 - **Stricter only.** The verdict adds a `laya_flagged` hold reason for each forbidden allergen with P >= 1 − `pass_threshold`, the same flag rule it applies to the graph's numbers. Laya can never remove a hold reason or cause a PASS.
-- Raises `LayaCheckUnavailable`, including for a subgraph with more than 20 edges (too long to read whole). The verdict then holds with `laya_unavailable` (safety rule: fail closed).
+- It reads only the edges on a time-forward path to the plate (anything else is dropped first). Raises `LayaCheckUnavailable` on any failure, including more than 10 such edges (longer than anything it was trained on) or an edge whose entity has no node. The verdict then holds with `laya_unavailable` (safety rule: fail closed).
 - **Fake:** `FakeLayaCheck`, which answers with the exact noisy-OR result over the subgraph (a perfect Laya).
 
 ## Transcriber and Speaker

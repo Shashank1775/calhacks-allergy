@@ -32,12 +32,69 @@ UNIT_NAMES = {
     "sesame": "sesame",
 }
 
-MAX_EDGES = 20  # about what fits in Laya's 512 tokens; a longer history can't be read whole, so the check refuses
+# The longest on-path history in the training data, and well inside Laya's 512 tokens. A longer one was never seen
+# in training, so the check refuses it (fail closed) rather than guess.
+MAX_EDGES = 10
 
 ACTION_WORDS = {"transfer.contact": "contact", "transfer.scoop": "scoop", "transfer.wipe": "wipe"}
 
 
-# ---------- the plate's subgraph as text (the model's input) ----------
+# ---------- the plate's history ----------
+
+
+def time_order(edges):
+    """Edges in time order; a wash tied with a transfer goes first (the partner's rule, AGENTS.md OQ-17)."""
+    return sorted(edges, key=lambda e: (e["t_start_ms"], e["t_end_ms"], e["action"] != "clean.wash", e["event_id"]))
+
+
+def flows(edge):
+    """The (source, destination) pairs an edge can move allergens along."""
+    a, b = edge["a_id"], edge["b_id"]
+    return {"a_to_b": [(a, b)], "b_to_a": [(b, a)], "both": [(a, b), (b, a)]}[edge["direction"]]
+
+
+def on_path(subgraph):
+    """The edges on some time-forward path into the plate (washes of entities on those paths included), in order.
+
+    Walks the time-ordered edges backwards. `deadline[e]` is the position of e's last edge on a path to the plate, so
+    an edge only counts if it happened before that. The graph should send only these, but anything extra is dropped
+    here, so the model always reads exactly what it was trained on.
+    """
+    ordered = [e for e in time_order(subgraph["edges"]) if e["action"] != "unimportant"]
+    deadline = {subgraph["plate_id"]: len(ordered)}
+    kept = []
+    for position in range(len(ordered) - 1, -1, -1):
+        edge = ordered[position]
+        if edge["action"] == "clean.wash":
+            if position < deadline.get(edge["a_id"], -1):
+                kept.append(edge)
+            continue
+        counts = False
+        for src, dst in flows(edge):
+            if position < deadline.get(dst, -1):
+                deadline[src] = max(deadline.get(src, -1), position)
+                counts = True
+        if counts:
+            kept.append(edge)
+    return list(reversed(kept))
+
+
+def readable_history(subgraph):
+    """The on-path edges and the nodes they need, or LayaCheckUnavailable if it's too long or a node is missing."""
+    edges = on_path(subgraph)
+    if len(edges) > MAX_EDGES:
+        raise LayaCheckUnavailable(
+            f"{len(edges)} edges on the plate's paths; the model was trained on up to {MAX_EDGES}"
+        )
+    nodes = {n["entity_id"]: n for n in subgraph["nodes"]}
+    needed = [subgraph["plate_id"]] + [entity for e in edges for entity in (e["a_id"], e["b_id"])]
+    missing = sorted({entity for entity in needed if entity not in nodes})
+    if missing:
+        raise LayaCheckUnavailable(f"the subgraph has edges but no node for {missing}")
+    return edges, nodes
+
+
+# ---------- the history as text (the model's input) ----------
 
 
 def node_text(node):
@@ -51,26 +108,22 @@ def node_text(node):
 
 
 def event_text(number, edge):
-    """One interaction, e.g. "2. 2.0s contact tool-knife-1 <-> plate-t1 (p 0.90)"."""
-    seconds = edge["t_start_ms"] / 1000
-    a, b, p = edge["a_id"], edge["b_id"], edge["probability"]
+    """One interaction, numbered in time order, e.g. "2. contact tool-knife-1 <-> plate-t1 (p 0.90)"."""
+    a, p = edge["a_id"], edge["probability"]
     if edge["action"] == "clean.wash":
-        return f"{number}. {seconds:.1f}s wash {a} (p {p:.2f})"
-    flow = {"a_to_b": f"{a} -> {b}", "b_to_a": f"{b} -> {a}", "both": f"{a} <-> {b}"}[edge["direction"]]
-    return f"{number}. {seconds:.1f}s {ACTION_WORDS[edge['action']]} {flow} (p {p:.2f})"
-
-
-def time_order(edges):
-    """Edges in time order. A wash tied with a transfer goes first, so a tie never erases contamination (OQ-17)."""
-    return sorted(edges, key=lambda e: (e["t_start_ms"], e["t_end_ms"], e["action"] != "clean.wash", e["event_id"]))
+        return f"{number}. wash {a} (p {p:.2f})"
+    src_dst = {"a_to_b": "->", "b_to_a": "<-", "both": "<->"}[edge["direction"]]
+    return f"{number}. {ACTION_WORDS[edge['action']]} {a} {src_dst} {edge['b_id']} (p {p:.2f})"
 
 
 def plate_state(subgraph):
-    """The state the plate model reads (same shape as in training)."""
-    edges = [e for e in time_order(subgraph["edges"]) if e["action"] != "unimportant"]
+    """The state the plate model reads: who carried what at the start, then the on-path events in order."""
+    edges, nodes = readable_history(subgraph)
+    mentioned = [entity for e in edges for entity in (e["a_id"], e["b_id"])] + [subgraph["plate_id"]]
+    shown = list(dict.fromkeys(mentioned))  # each entity once, in the order the events first mention it
     return {
         "plate": subgraph["plate_id"],
-        "start": " | ".join(node_text(n) for n in subgraph["nodes"]),
+        "start": " | ".join(node_text(nodes[entity]) for entity in shown),
         "events": " | ".join(event_text(i, e) for i, e in enumerate(edges, start=1)) or "none",
     }
 
@@ -96,24 +149,20 @@ def exact_reach(subgraph):
     Same math the partner's graph uses (AGENTS.md, Graph math), with the most conservative efficiency. Used to label
     training data and by FakeLayaCheck; the verdict's own reachability still comes from the partner's graph.
     """
-    carried = {}
-    for node in subgraph["nodes"]:
-        start = node["start"]
-        carried[node["entity_id"]] = {u: 1.0 if start["unknown"] else start["probabilities"].get(u, 0.0) for u in UNITS}
-
-    for edge in time_order(subgraph["edges"]):
-        a, b, p = edge["a_id"], edge["b_id"], edge["probability"]
-        if edge["action"] == "unimportant":
-            continue
+    edges, nodes = readable_history(subgraph)
+    carried = {
+        entity: {u: 1.0 if node["start"]["unknown"] else node["start"]["probabilities"].get(u, 0.0) for u in UNITS}
+        for entity, node in nodes.items()
+    }
+    for edge in edges:
+        p = edge["probability"]
         if edge["action"] == "clean.wash":
-            carried[a] = {u: (1.0 - p) * carried[a][u] for u in UNITS}
+            carried[edge["a_id"]] = {u: (1.0 - p) * carried[edge["a_id"]][u] for u in UNITS}
             continue
-        before = {a: dict(carried[a]), b: dict(carried[b])}  # a "both" edge moves allergens both ways at once
-        flows = {"a_to_b": [(a, b)], "b_to_a": [(b, a)], "both": [(a, b), (b, a)]}[edge["direction"]]
-        for src, dst in flows:
+        before = {entity: dict(carried[entity]) for entity in (edge["a_id"], edge["b_id"])}  # "both" moves at once
+        for src, dst in flows(edge):
             for u in UNITS:
                 carried[dst][u] = 1.0 - (1.0 - carried[dst][u]) * (1.0 - p * before[src][u])
-
     return carried[subgraph["plate_id"]]
 
 
@@ -121,7 +170,7 @@ def exact_reach(subgraph):
 
 
 def laya_hold_reasons(reached, forbidden, pass_threshold):
-    """Hold reasons from Laya's answer: one "laya_flagged" reason per forbidden allergen with P >= 1 - pass_threshold.
+    """Hold reasons from Laya's answer: one "laya_flagged" reason per forbidden allergen with 1 - P <= pass_threshold.
 
     That is the same flag rule the verdict applies to the graph's numbers (kitchen/verdict/README.md), so an
     anaphylactic ticket (0.99) flags anything Laya puts at 1% or more. The verdict policy appends these reasons to
@@ -130,14 +179,8 @@ def laya_hold_reasons(reached, forbidden, pass_threshold):
     return [
         {"code": "laya_flagged", "allergen_unit_id": u, "detail": f"Laya: P(reached the plate) = {reached[u]:.3f}"}
         for u in sorted(forbidden)
-        if reached[u] >= 1.0 - pass_threshold
+        if 1.0 - reached[u] <= pass_threshold
     ]
-
-
-def check_size(subgraph):
-    """Refuse a history too long for the model to read whole (fail closed)."""
-    if len(subgraph["edges"]) > MAX_EDGES:
-        raise LayaCheckUnavailable(f"{len(subgraph['edges'])} edges is more than the {MAX_EDGES} the model can read")
 
 
 # ---------- the real model and the fake ----------
@@ -157,17 +200,19 @@ class LocalLayaCheck:
 
     def check(self, subgraph, forbidden):
         """P(reached the plate) for each forbidden allergen. Any failure or odd answer raises LayaCheckUnavailable."""
-        check_size(subgraph)
-        if not forbidden:
-            return {}
-        questions = {f"reached_{u}": reached_question(u) for u in forbidden}
         try:
-            answers = self._agent.predict(plate_state(subgraph), questions)["answers"]
-            reached = {u: answers[f"reached_{u}"]["noul"] for u in forbidden}
+            state = plate_state(subgraph)
+            if len(forbidden) == 0:
+                return {}
+            questions = {f"reached_{u}": reached_question(u) for u in forbidden}
+            answers = self._agent.predict(state, questions)["answers"]
+            reached = {u: float(answers[f"reached_{u}"]["noul"]) for u in forbidden}
+            if not all(0.0 <= p <= 1.0 for p in reached.values()):  # also False for NaN
+                raise ValueError(f"impossible probability {reached}")
+        except LayaCheckUnavailable:
+            raise
         except Exception as error:
             raise LayaCheckUnavailable(f"the plate model failed to answer: {error}") from error
-        if not all(0.0 <= p <= 1.0 for p in reached.values()):  # also False for NaN
-            raise LayaCheckUnavailable(f"impossible probability from the plate model: {reached}")
         return reached
 
 
@@ -178,6 +223,10 @@ class FakeLayaCheck:
 
     def check(self, subgraph, forbidden):
         """P(reached the plate) for each forbidden allergen, computed exactly."""
-        check_size(subgraph)
-        reached = exact_reach(subgraph)
-        return {u: round(reached[u], 4) for u in forbidden}
+        try:
+            reached = exact_reach(subgraph)
+            return {u: reached[u] for u in forbidden}
+        except LayaCheckUnavailable:
+            raise
+        except Exception as error:
+            raise LayaCheckUnavailable(f"the fake plate check failed: {error}") from error
