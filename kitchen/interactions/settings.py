@@ -34,6 +34,11 @@ class InteractionSettings:
     # A pair missing from candidates for up to this long (a detector miss, a hand in the way) keeps its dwell and
     # window. Longer, and it starts over.
     pair_gap_ms: int = 300
+    # A tool or hand in the wash zone (its self pair) keeps its dwell and its open wash through a loss this long: a
+    # hand over the knife, or its box center jittering across the sink's edge. Vision keeps the entity's ID through a
+    # loss of up to its track_lost_ms (1000), and one rinse split in two would clean twice. Time unseen for longer
+    # than pair_gap_ms is bridged but not counted as rinsing.
+    wash_gap_ms: int = 1000
 
     # Pair windows and clips (AGENTS.md, Open questions: clip geometry: 16 steps over about 1 s, 128 x 128).
     window_ms: int = 1000
@@ -43,8 +48,9 @@ class InteractionSettings:
     # Zone rules: contact. Overlap is intersection over the smaller box. Kept low so a knife tip on a plate's rim
     # counts; a pass-over is told apart by time, not by overlap.
     contact_min_overlap: float = 0.1
-    # How long the pair must keep overlapping. A tool passing over a plate overlaps for about a tenth of a second; a
-    # tap that touches lasts longer. Short on purpose: a false contact only holds a plate.
+    # How long the pair must keep overlapping, counted from one frame before the overlap was first seen (when it may
+    # have begun), so a touch measures the same at 10 or 60 FPS. A tool passing over a plate overlaps for about a
+    # tenth of a second; a tap that touches lasts longer. Short on purpose: a false contact only holds a plate.
     contact_min_ms: int = 200
     contact_probability: float = 0.8
 
@@ -52,8 +58,9 @@ class InteractionSettings:
     scoop_min_ms: int = 300
     scoop_probability: float = 0.9
 
-    # Zone rules: wash. A tool or hand must stay in the wash zone this long. Rinsing a knife takes several seconds,
-    # and a false wash would clear real contamination, so a quick pass through the sink never counts.
+    # Zone rules: wash. A tool or hand must stay in the wash zone this long, and also this long after the last transfer
+    # that touched it (events.py), so a touch during the soak isn't washed away by a wash moments later. Rinsing a
+    # knife takes several seconds, and a false wash would clear real contamination, so a quick pass never counts.
     wash_min_dwell_ms: int = 3000
     # Leaves 5% of what was carried: enough to clear an allergy ticket after a wash, never an anaphylactic one.
     wash_probability: float = 0.95
@@ -65,10 +72,12 @@ class InteractionSettings:
     # a wash lowers risk, so it needs to be sure.
     event_floor: float = 0.5
     wash_floor: float = 0.9
-    # Hits on the same pair and action this close together are one event; a longer gap closes it.
+    # Hits on the same pair and action this close together are one touch; a longer gap ends it. A touch's first hit
+    # is written as an event the frame it is seen, so a plate carried to the pass by a dirty hand already has its
+    # edge when it arrives; the rest follows as events written merge_gap_ms after the touch ends.
     merge_gap_ms: int = 300
-    # A transfer still going after this long is written and a new event starts, so a plate carried to the pass by a
-    # dirty hand gets its edge before the hand lets go.
+    # A transfer still going after this long is written and a new event starts, so a long touch keeps reaching the
+    # database while it lasts.
     max_event_ms: int = 1000
     # After a failed database write, wait this long before trying the buffered events again.
     retry_ms: int = 250

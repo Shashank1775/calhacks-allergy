@@ -5,15 +5,16 @@ Step:  Interactions (candidate pairs, features, zone rules)
 Reads: observation_frame stream (+ change masks), zones, candidates.py, features.py, windows.py, classifier.py,
        StateClient, Clock
 Emits: interaction_event via StateClient.record_interaction (interaction table) and events.jsonl
-Rules: 5 frames must move forward, t_start_ms <= t_end_ms, each pair and action's events come out in time order, and
-       event IDs are deterministic, so a replay writes no duplicates; 1 events are buffered and retried on
-       StateUnavailable, never dropped; a wash is a self-loop (a_id == b_id), only a self pair can make one, and only
-       with probability at least wash_floor; "unimportant" makes no edge
+Rules: 5 frames must move forward, t_start_ms <= t_end_ms, each pair and action's events come out in time order and
+       never overlap, edge order follows cause and effect, and event IDs are deterministic, so a replay writes no
+       duplicates; 1 events are buffered and retried on StateUnavailable, never dropped; a transfer's first hit is
+       written the frame it is seen; a wash is a self-loop (a_id == b_id), only a self pair can make one, only with
+       probability at least wash_floor, one rinse is one wash, and no wash comes before a transfer it followed;
+       "unimportant" makes no edge
 
 How a frame becomes edges: candidate pairs (candidates.py) -> feature rows (features.py) -> one PairWindow per pair
-(windows.py) -> labels from the classifier wrapper (classifier.py) -> the Segmenter here, which merges a pair's hits on
-the same action into one event and closes it merge_gap_ms after the last hit, so it reaches the database within about
-half a second of its end. A transfer still going after max_event_ms is closed and a new one started.
+(windows.py) -> labels from the classifier wrapper (classifier.py) -> the Segmenter here, which turns each frame's
+labels into events (its docstring says how).
 
 Directions (AGENTS.md, Open questions): a scoop from a bin moves bin -> tool (b_to_a, as b is the bin); every other
 transfer can move both ways, which is also the safe answer when the camera can't tell which way food went.
@@ -61,9 +62,32 @@ def direction_for(action: str, b_kind: str) -> str:
     return "both"
 
 
+# A transfer's open event is keyed by pair and action, whichever classifier answered each frame.
+Key = tuple[str, str, str]
+
+
+@dataclass(frozen=True)
+class Hit:
+    """One frame's label on one pair that can become an edge, and the classifier that gave it."""
+
+    a_id: str
+    b_id: str
+    b_kind: str
+    action: str
+    t_ms: int
+    frame_id: int
+    probability: float
+    classifier: dict
+
+    @property
+    def key(self) -> Key:
+        """The pair and action."""
+        return (self.a_id, self.b_id, self.action)
+
+
 @dataclass
 class Segment:
-    """An open event: consecutive hits of one action on one pair, from one classifier."""
+    """An open event: consecutive hits of one action on one pair."""
 
     a_id: str
     b_id: str
@@ -76,14 +100,18 @@ class Segment:
     frame_end: int
     probability: float
 
-    def extend(self, t_ms: int, frame_id: int, probability: float) -> None:
-        """Add a hit. A transfer keeps its highest probability; a wash its lowest, since a wash lowers risk."""
-        self.t_end_ms = t_ms
-        self.frame_end = frame_id
+    def extend(self, hit: Hit) -> None:
+        """Add a hit. A transfer keeps its highest probability, a wash its lowest (a wash lowers risk), and the event
+        names the classifier that gave that probability."""
+        self.t_end_ms = hit.t_ms
+        self.frame_end = hit.frame_id
         if self.action == "clean.wash":
-            self.probability = min(self.probability, probability)
+            stronger = hit.probability < self.probability
         else:
-            self.probability = max(self.probability, probability)
+            stronger = hit.probability > self.probability
+        if stronger:
+            self.probability = hit.probability
+            self.classifier = hit.classifier
 
     def event(self) -> InteractionEvent:
         """The finished interaction_event, validated. Its ID depends only on what happened, so replays repeat it."""
@@ -103,76 +131,194 @@ class Segment:
         return validate(event, "interaction_event")
 
 
+def segment_from(hit: Hit) -> Segment:
+    """A new segment holding one hit."""
+    return Segment(
+        a_id=hit.a_id,
+        b_id=hit.b_id,
+        b_kind=hit.b_kind,
+        action=hit.action,
+        classifier=hit.classifier,
+        t_start_ms=hit.t_ms,
+        t_end_ms=hit.t_ms,
+        frame_start=hit.frame_id,
+        frame_end=hit.frame_id,
+        probability=hit.probability,
+    )
+
+
 class Segmenter:
-    """Merges per-frame labels into events, one open Segment per (pair, action, classifier)."""
+    """Turns each frame's labels into events, so edges reach the database early and apply in cause-and-effect order.
+
+    The graph applies edges in (t_start_ms, t_end_ms, event_id) order, so an event counts as happening at its start:
+    - A touch is a transfer's hits on one pair and action less than merge_gap_ms apart. Its first hit is written at
+      once as a one-hit event, so a plate carried to the pass by a dirty hand has its edge when it arrives. The rest
+      is one event from the next hit, written merge_gap_ms after the touch's last hit, or cut every max_event_ms.
+    - When a new touch starts, every other open transfer on either of its entities is cut there and its rest starts
+      after it (written at once, again a new touch), so what the new touch brings is carried on: a dirty hand that
+      grabs a spoon resting on a plate dirties the plate. Transfers on the same pair carry nothing new and aren't cut.
+    - A wash is one event per rinse, bridged across a loss of up to wash_gap_ms. It counts only once no transfer has
+      touched the entity for wash_min_dwell_ms, so it never comes before a touch during the soak, and a transfer on
+      the entity ends its open wash. A new wash on an entity no transfer has touched since its last one is dropped:
+      it can't make it cleaner than the safe reading, and two washes from one rinse would clean twice.
+    """
 
     def __init__(self, settings: InteractionSettings) -> None:
         self.settings = settings
-        self._open: dict[tuple, Segment] = {}
+        self._open: dict[Key, Segment] = {}  # open transfers
+        self._washes: dict[str, Segment] = {}  # open washes, by entity
+        self._last_hit_ms: dict[Key, int] = {}  # each recent touch's last hit, to tell a new touch from a going one
+        self._write_next: set[Key] = set()  # transfers cut for a new touch: their next hit is written at once
+        self._last_transfer_ms: dict[str, int] = {}  # entity -> its last transfer hit, within wash_min_dwell_ms
+        self._washed: set[str] = set()  # entities washed, and touched by no transfer since
 
-    def edge_labels(self, latest: InteractionFeatures, labels: Labels) -> Labels:
-        """The labels that can become edges.
+    def edge_hits(self, latest: InteractionFeatures, labels: Labels, classifier: dict) -> list[Hit]:
+        """The labels that can become edges, one hit per action.
 
         A wash only on a self pair and only at wash_floor or above; a transfer only between two entities and only at
         event_floor or above. A transfer on a self pair means nothing and a wash between two entities would clean
-        the wrong thing, so both are dropped.
+        the wrong thing, so both are dropped. An action named twice keeps its strongest (a wash its weakest).
         """
         self_pair = latest["a_id"] == latest["b_id"]
-        kept = []
+        kept: dict[str, float] = {}
         for action, probability in labels:
             if action == "unimportant":
                 continue
             if action == "clean.wash":
-                if self_pair and probability >= self.settings.wash_floor:
-                    kept.append((action, probability))
-            elif not self_pair and probability >= self.settings.event_floor:
-                kept.append((action, probability))
-        return kept
+                keep = self_pair and probability >= self.settings.wash_floor
+            else:
+                keep = not self_pair and probability >= self.settings.event_floor
+            if keep:
+                pick = min if action == "clean.wash" else max
+                kept[action] = pick(kept.get(action, probability), probability)
+        a_id, b_id, b_kind, t_ms, frame_id = (latest[name] for name in ("a_id", "b_id", "b_kind", "t_ms", "frame_id"))
+        return [Hit(a_id, b_id, b_kind, action, t_ms, frame_id, p, classifier) for action, p in kept.items()]
 
-    def continues(self, segment: Segment, t_ms: int) -> bool:
-        """Whether a hit at t_ms belongs to the open segment rather than a new one."""
-        if t_ms - segment.t_end_ms > self.settings.merge_gap_ms:
-            return False
-        # A long transfer is cut so its edge isn't held back. A wash never is: two washes would clean twice.
-        if segment.action != "clean.wash" and t_ms - segment.t_start_ms > self.settings.max_event_ms:
-            return False
-        return True
+    def add_frame(self, t_ms: int, judged: list[tuple[InteractionFeatures, Labels, dict]]) -> list[InteractionEvent]:
+        """Add one frame's judged windows, each (newest feature row, labels, classifier). Returns the events to write
+        now, in edge order: first hits, cut and finished transfers, finished washes.
 
-    def add(self, latest: InteractionFeatures, labels: Labels, classifier: dict) -> list[InteractionEvent]:
-        """Add one window's labels, judged at its newest frame. Returns any event this closes (a cut transfer)."""
-        t_ms, frame_id = latest["t_ms"], latest["frame_id"]
-        closed = []
-        for action, probability in self.edge_labels(latest, labels):
-            key = (latest["a_id"], latest["b_id"], action, classifier["name"], classifier["version"])
-            segment = self._open.get(key)
-            if segment is not None and self.continues(segment, t_ms):
-                segment.extend(t_ms, frame_id, probability)
-                continue
-            if segment is not None:
-                closed.append(segment.event())
-            self._open[key] = Segment(
-                a_id=latest["a_id"],
-                b_id=latest["b_id"],
-                b_kind=latest["b_kind"],
-                action=action,
-                classifier=classifier,
-                t_start_ms=t_ms,
-                t_end_ms=t_ms,
-                frame_start=frame_id,
-                frame_end=frame_id,
-                probability=probability,
-            )
-        return closed
+        Transfers go first, so a transfer on an entity this frame already stops its wash this frame.
+        """
+        hits = [hit for latest, labels, classifier in judged for hit in self.edge_hits(latest, labels, classifier)]
+        written = []
+        new_touches: list[Hit] = []
+        for hit in hits:
+            if hit.action != "clean.wash":
+                written += self.add_transfer(hit, new_touches)
+        written += self.cut_for_new_touches(t_ms, new_touches)
+        for hit in hits:
+            if hit.action == "clean.wash":
+                written += self.add_wash(hit)
+        written += self.close_stale(t_ms)
+        return sorted(written, key=event_order)
+
+    def add_transfer(self, hit: Hit, new_touches: list[Hit]) -> list[InteractionEvent]:
+        """One transfer hit: extend its open event, or start one. Returns any event to write now.
+
+        A new touch's first hit, and the first hit after a cut for a new touch, is written at once as a one-hit
+        event and noted in new_touches; the touch goes on from its next hit.
+        """
+        written = []
+        for entity_id in (hit.a_id, hit.b_id):
+            written += self.note_transfer(entity_id, hit.t_ms)
+
+        key = hit.key
+        last_ms = self._last_hit_ms.get(key)
+        new_touch = last_ms is None or hit.t_ms - last_ms > self.settings.merge_gap_ms
+        self._last_hit_ms[key] = hit.t_ms
+        segment = self._open.get(key)
+        # A touch that ended, or one that ran max_event_ms, is written; this hit starts a new event.
+        if segment is not None and (new_touch or hit.t_ms - segment.t_start_ms > self.settings.max_event_ms):
+            written.append(self._open.pop(key).event())
+            segment = None
+
+        if segment is not None:
+            segment.extend(hit)
+        elif new_touch or key in self._write_next:
+            self._write_next.discard(key)
+            written.append(segment_from(hit).event())
+            new_touches.append(hit)
+        else:
+            self._open[key] = segment_from(hit)
+        return written
+
+    def note_transfer(self, entity_id: str, t_ms: int) -> list[InteractionEvent]:
+        """A transfer touched the entity: its wash dwell starts over, it may be washed again, and an open wash on it
+        ends here, so no wash spans a transfer. Returns that wash's event, if any."""
+        self._last_transfer_ms[entity_id] = t_ms
+        self._washed.discard(entity_id)
+        wash = self._washes.pop(entity_id, None)
+        return [] if wash is None else [wash.event()]
+
+    def cut_for_new_touches(self, t_ms: int, new_touches: list[Hit]) -> list[InteractionEvent]:
+        """Cut every open transfer that started before this frame and shares an entity with a new touch on another
+        pair. Its part so far is written, and its rest starts at its next hit, after the new touch's first hit.
+
+        Without the cut, a long transfer stamped at its start applies before the new touch for all of its length,
+        and what the new touch brings never crosses it.
+        """
+        written = []
+        for new in new_touches:
+            entities = {new.a_id, new.b_id}
+            for key, segment in list(self._open.items()):
+                shares_an_entity = segment.a_id in entities or segment.b_id in entities
+                same_pair = (segment.a_id, segment.b_id) == (new.a_id, new.b_id)
+                if shares_an_entity and not same_pair and segment.t_start_ms < t_ms:
+                    written.append(self._open.pop(key).event())
+                    self._write_next.add(key)
+        return written
+
+    def add_wash(self, hit: Hit) -> list[InteractionEvent]:
+        """One wash hit on a self pair: extend the entity's open wash, start one, or drop it. Returns any event to
+        write now.
+
+        Dropped while a transfer touched the entity less than wash_min_dwell_ms ago, so the dwell counts from the
+        later of zone entry (zone rules) and that touch; and dropped when nothing touched the entity since its last
+        wash.
+        """
+        entity_id = hit.a_id
+        last_transfer_ms = self._last_transfer_ms.get(entity_id)
+        if last_transfer_ms is not None and hit.t_ms - last_transfer_ms < self.settings.wash_min_dwell_ms:
+            return []
+
+        written = []
+        wash = self._washes.get(entity_id)
+        if wash is not None and hit.t_ms - wash.t_end_ms <= self.settings.wash_gap_ms:
+            wash.extend(hit)
+            return []
+        if wash is not None:
+            written.append(self._washes.pop(entity_id).event())
+        if entity_id not in self._washed:
+            self._washes[entity_id] = segment_from(hit)
+            self._washed.add(entity_id)
+        return written
 
     def close_stale(self, t_ms: int) -> list[InteractionEvent]:
-        """Close every segment with no hit for longer than merge_gap_ms, in edge order."""
-        stale = [key for key, segment in self._open.items() if t_ms - segment.t_end_ms > self.settings.merge_gap_ms]
-        return sorted((self._open.pop(key).event() for key in stale), key=event_order)
+        """Close every transfer with no hit for longer than merge_gap_ms and every wash with none for wash_gap_ms,
+        and forget what can no longer matter."""
+        s = self.settings
+        stale = [key for key, segment in self._open.items() if t_ms - segment.t_end_ms > s.merge_gap_ms]
+        written = [self._open.pop(key).event() for key in stale]
+        rinsed = [entity_id for entity_id, wash in self._washes.items() if t_ms - wash.t_end_ms > s.wash_gap_ms]
+        written += [self._washes.pop(entity_id).event() for entity_id in rinsed]
+
+        for key in [key for key, last_ms in self._last_hit_ms.items() if t_ms - last_ms > s.merge_gap_ms]:
+            del self._last_hit_ms[key]
+            self._write_next.discard(key)
+        settled = [
+            entity for entity, last_ms in self._last_transfer_ms.items() if t_ms - last_ms >= s.wash_min_dwell_ms
+        ]
+        for entity_id in settled:
+            del self._last_transfer_ms[entity_id]
+        return written
 
     def close_all(self) -> list[InteractionEvent]:
-        """Close every open segment (the stream ended), in edge order."""
+        """Close every open transfer and wash (the stream ended), in edge order."""
         events = [segment.event() for segment in self._open.values()]
+        events += [wash.event() for wash in self._washes.values()]
         self._open.clear()
+        self._washes.clear()
         return sorted(events, key=event_order)
 
 
@@ -216,7 +362,7 @@ class EventWriter:
 
 
 class InteractionStep:
-    """The whole step for one camera: feed it frames in order, get back the events each frame closes."""
+    """The whole step for one camera: feed it frames in order, get back the events each frame writes."""
 
     def __init__(
         self,
@@ -255,7 +401,7 @@ class InteractionStep:
         )
 
     def process(self, frame: ObservationFrame, change_mask: np.ndarray | None = None) -> list[InteractionEvent]:
-        """Run one frame (and its change mask, float [S, S] in [0, 1]) through the step; return the events it closes."""
+        """Run one frame (and its change mask, float [S, S] in [0, 1]) through the step; return the events to write."""
         validate(frame, "observation_frame")
         t_ms = frame["t_ms"]
         # An older or repeated frame would put a pair's events out of order (safety rule: time runs forward).
@@ -265,12 +411,11 @@ class InteractionStep:
 
         pairs = candidate_pairs(frame["detections"], self.kinds, self.settings.candidate_max_gap, self.aspect)
         rows = self.features.update(frame, pairs)
-        closed = []
+        judged = []
         for window in self.windows.update(frame, rows, change_mask):
             labels, classifier = self.classifier.classify_window(window)
-            closed += self.segmenter.add(window.features[-1], labels, classifier)
-        closed += self.segmenter.close_stale(t_ms)
-        return sorted(closed, key=event_order)
+            judged.append((window.features[-1], labels, classifier))
+        return self.segmenter.add_frame(t_ms, judged)
 
     def finish(self) -> list[InteractionEvent]:
         """Close every open event at the end of the stream."""
@@ -279,7 +424,7 @@ class InteractionStep:
 
 def live_consumer(state: StateClient, clock: Clock, classifier: FallbackClassifier | None = None):
     """The vision frame loop's consumer for live mode: each FrameOutput runs through the step, and the events it
-    closes are written with state.record_interaction.
+    gives (a touch's first hit among them, the frame it is seen) are written with state.record_interaction.
 
     Zone rules answer unless `classifier` brings an adopted primary (safety rule 7: never the ConvLSTM by default).
     The step is built at the first frame, from the zones in `state` and the camera's frame size, so calibration has

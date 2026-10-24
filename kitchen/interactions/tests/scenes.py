@@ -9,11 +9,13 @@ Rules: frames validate against observation_frame (every detection carries origin
 
 A scene is a few entities, each moving in straight lines between (t_ms, center) keyframes. render() samples it at any
 frame rate, which is how the tests check that the same scene gives the same events at 15, 30 and 60 FPS. Zones are
-rectangles, and a detection's zone is the one its box center is in, as vision assigns them.
+rectangles, and a detection's zone is the one its box center is in, as vision assigns them. A track can also go
+unseen for a while (a hand over it), keeping its ID, as vision's tracker does through a short loss.
 """
 
 from dataclasses import dataclass
 
+from kitchen.interactions.settings import InteractionSettings
 from kitchen.shared.models import Zone, validate
 
 
@@ -27,6 +29,7 @@ ZONES = [
     Zone("plating", "plating_spot", rectangle(0.4, 0.4, 0.6, 0.6)),
     Zone("wash", "wash", rectangle(0.05, 0.7, 0.3, 0.95)),
     Zone("clean-stack", "clean_stack", rectangle(0.75, 0.4, 0.95, 0.6)),
+    Zone("pass", "pass", rectangle(0.75, 0.75, 0.95, 0.95)),
 ]
 
 # Box sizes (width, height) in normalized frame coordinates.
@@ -36,19 +39,24 @@ CLASS_NAMES = {"bin": "bowl", "plate": "bowl", "tool": "knife", "hand": "wrist"}
 BIN_AT = (0.15, 0.15)  # inside slot-1
 PLATE_AT = (0.5, 0.5)  # inside the plating spot
 WASH_AT = (0.17, 0.82)  # inside the wash zone
+PASS_AT = (0.85, 0.85)  # inside the pass
 
 
 @dataclass(frozen=True)
 class Track:
-    """One entity moving in straight lines between (t_ms, (x, y)) center keyframes, seen from first to last key."""
+    """One entity moving in straight lines between (t_ms, (x, y)) center keyframes, seen from first to last key,
+    except during the (start, end) spans in `unseen`, when the detector misses it."""
 
     entity_id: str
     kind: str
     keys: tuple[tuple[int, tuple[float, float]], ...]
+    unseen: tuple[tuple[int, int], ...] = ()
 
     def center_at(self, t_ms: int) -> tuple[float, float] | None:
-        """The center at t_ms, or None before the first or after the last keyframe."""
+        """The center at t_ms, or None before the first or after the last keyframe, or while unseen."""
         if t_ms < self.keys[0][0] or t_ms > self.keys[-1][0]:
+            return None
+        if any(start <= t_ms < end for start, end in self.unseen):
             return None
         for (t0, (x0, y0)), (t1, (x1, y1)) in zip(self.keys, self.keys[1:], strict=False):
             if t0 <= t_ms <= t1:
@@ -189,6 +197,44 @@ SCENES = {
         length_ms=5000,
         expected=[("clean.wash", KNIFE, KNIFE, "both", 3180, 4420)],
     ),
+    # One rinse with the knife unseen for 400 ms in the middle (a hand over it): it enters the wash zone at about 180
+    # and leaves at about 7420, so it is one wash from about 3180 to 7420, never two. Vision keeps its ID through the
+    # loss, and two washes would clean twice.
+    "wash_with_dropout": Scene(
+        tracks=[
+            Track(
+                KNIFE,
+                "tool",
+                ((0, (0.5, 0.8)), (300, WASH_AT), (7300, WASH_AT), (7600, (0.5, 0.8)), (8000, (0.5, 0.8))),
+                unseen=((4000, 4400),),
+            ),
+        ],
+        length_ms=8000,
+        expected=[("clean.wash", KNIFE, KNIFE, "both", 3180, 7420)],
+    ),
+    # The same rinse with the knife's box center jittering just out of the wash zone (x 0.32, past its 0.3 edge) from
+    # about 4040 to 4360: still one wash, from about 3180 to 7420.
+    "wash_with_jitter": Scene(
+        tracks=[
+            Track(
+                KNIFE,
+                "tool",
+                (
+                    (0, (0.5, 0.8)),
+                    (300, WASH_AT),
+                    (4000, WASH_AT),
+                    (4050, (0.32, 0.82)),
+                    (4350, (0.32, 0.82)),
+                    (4400, WASH_AT),
+                    (7300, WASH_AT),
+                    (7600, (0.5, 0.8)),
+                    (8000, (0.5, 0.8)),
+                ),
+            ),
+        ],
+        length_ms=8000,
+        expected=[("clean.wash", KNIFE, KNIFE, "both", 3180, 7420)],
+    ),
     # The knife passes through the wash zone in about a second: too short to be a wash.
     "brief_wash": Scene(
         tracks=[
@@ -217,10 +263,33 @@ SCENES = {
 }
 
 
+def spans(events: list[dict]) -> list[dict]:
+    """Events with the pieces of one interaction joined: a transfer is written in pieces (its first hit at once, then
+    cuts), and pieces of the same pair, action and direction at most merge_gap_ms apart are one touch."""
+    gap_ms = InteractionSettings().merge_gap_ms
+    joined: list[dict] = []
+    for event in sorted(events, key=lambda event: (event["t_start_ms"], event["t_end_ms"])):
+        same = (event["action"], event["a_id"], event["b_id"], event["direction"])
+        earlier = next(
+            (
+                span
+                for span in joined
+                if (span["action"], span["a_id"], span["b_id"], span["direction"]) == same
+                and event["t_start_ms"] - span["t_end_ms"] <= gap_ms
+            ),
+            None,
+        )
+        if earlier is None:
+            joined.append(dict(event))
+        else:
+            earlier["t_end_ms"] = max(earlier["t_end_ms"], event["t_end_ms"])
+    return joined
+
+
 def unmatched(events: list[dict], expected: list[tuple], tolerance_ms: int = 200) -> list:
     """What doesn't line up between events and the expected ones; empty when every expected event is matched by one
-    real event within tolerance_ms on both ends, and no real event is left over."""
-    left = list(events)
+    real interaction (its pieces joined by spans()) within tolerance_ms on both ends, and none is left over."""
+    left = spans(events)
     missing = []
     for action, a_id, b_id, direction, start_ms, end_ms in expected:
         match = next(

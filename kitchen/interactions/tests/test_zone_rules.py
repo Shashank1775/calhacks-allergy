@@ -4,15 +4,26 @@ Owner: partner (written by an agent at the owner's request)
 Step:  Interactions (tests)
 Reads: kitchen.interactions.zone_rules, kitchen.interactions.events.replay, scenes
 Emits: pytest tests
-Rules: 1 a wash needs the wash zone, a long dwell and a self pair; a brief pass is no wash; 7 zone rules need nothing
-       but features, so they always answer
+Rules: 1 a wash needs the wash zone, a long dwell and a self pair; a brief pass is no wash; a real touch counts at any
+       frame rate; 7 zone rules need nothing but features, so they always answer
 """
 
 import pytest
 
 from kitchen.interactions.events import replay
 from kitchen.interactions.settings import InteractionSettings
-from kitchen.interactions.tests.scenes import KNIFE, SCENES, ZONES, unmatched
+from kitchen.interactions.tests.scenes import (
+    BIN_AT,
+    KNIFE,
+    PLATE_AT,
+    SCENES,
+    ZONES,
+    Track,
+    render,
+    spans,
+    still,
+    unmatched,
+)
 from kitchen.interactions.zone_rules import RULES_VERSION, ZoneRules
 from kitchen.shared.contract_tests import contract_fixture
 from kitchen.shared.interfaces import PairWindow
@@ -39,6 +50,49 @@ def test_rules_fixtures_give_the_expected_events(name, fps):
     events = replay(scene.frames(fps), ZONES, SETTINGS)
 
     assert unmatched(events, scene.expected) == []
+
+
+# Out of every zone, and too far from the plate and the bin to be a candidate with either.
+AWAY = (0.65, 0.2)
+
+
+def tap(target: tuple[float, float], start_ms: float, length_ms: int, scene_ms: int = 2000) -> Track:
+    """The knife jumps onto `target` at start_ms, stays length_ms and jumps back: a touch with no approach, so the
+    pair is first seen already overlapping, the hardest case for a low frame rate."""
+    end_ms = start_ms + length_ms
+    keys = ((0, AWAY), (start_ms - 0.001, AWAY), (start_ms, target), (end_ms, target), (end_ms + 0.001, AWAY))
+    return Track(KNIFE, "tool", (*keys, (scene_ms, AWAY)))
+
+
+def tap_phases(fps: int) -> list[float]:
+    """Ten start times spread over one frame interval, off the sample times, so every way a tap can fall between
+    frames is tried."""
+    return [500 + phase * (1000 / fps) / 10 + 0.5 for phase in range(10)]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [10, 15, 30, 60])
+def test_a_tap_just_over_contact_min_ms_is_a_contact_at_any_frame_rate(fps):
+    """A 220 ms knife tap on a plate is a contact (contact_min_ms is 200) whatever the frame rate and however the tap
+    falls between frames: the overlap is counted from one frame before it was first seen, when it may have begun."""
+    for start_ms in tap_phases(fps):
+        frames = render([still("plate-t1", "plate", PLATE_AT, 2000), tap(PLATE_AT, start_ms, 220)], 2000, fps)
+
+        touches = [span for span in spans(replay(frames, ZONES, SETTINGS)) if span["action"] == "transfer.contact"]
+
+        assert len(touches) == 1, (fps, start_ms)
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [10, 15, 30, 60])
+def test_a_dip_just_over_scoop_min_ms_is_a_scoop_at_any_frame_rate(fps):
+    """A 340 ms dip into the bin is a scoop (scoop_min_ms is 300) at 10, 15, 30 and 60 FPS, at every phase."""
+    for start_ms in tap_phases(fps):
+        frames = render([still("bin-1", "bin", BIN_AT, 2000), tap(BIN_AT, start_ms, 340)], 2000, fps)
+
+        scoops = [span for span in spans(replay(frames, ZONES, SETTINGS)) if span["action"] == "transfer.scoop"]
+
+        assert len(scoops) == 1, (fps, start_ms)
 
 
 def test_rules_fixtures_scoop_comes_before_the_plate_contact():

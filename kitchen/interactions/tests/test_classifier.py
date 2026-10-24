@@ -8,6 +8,7 @@ Rules: 7 zone rules whenever the primary is missing, raises, answers badly or ha
 """
 
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -44,15 +45,28 @@ def primary(labels=None) -> FakeClassifier:
 
 
 class HangingClassifier(FakeClassifier):
-    """A primary that blocks until released, like a model stuck on a device."""
+    """A primary that blocks until released, like a model stuck on a device. Counts the calls it gets."""
 
     def __init__(self) -> None:
         super().__init__({}, name="lstm", version="hangs")
         self.release = threading.Event()
+        self.calls = 0
 
     def classify(self, window):
+        self.calls += 1
         self.release.wait(10)
         return super().classify(window)
+
+
+class ExitingClassifier(FakeClassifier):
+    """A primary that raises a BaseException that isn't an Exception, like a library calling sys.exit."""
+
+    def __init__(self, error: BaseException) -> None:
+        super().__init__({}, name="lstm", version="exits")
+        self.error = error
+
+    def classify(self, window):
+        raise self.error
 
 
 class AnswerClassifier(FakeClassifier):
@@ -133,15 +147,32 @@ def test_numpy_probabilities_are_accepted_as_floats():
 
 
 @pytest.mark.safety
+@pytest.mark.parametrize("error", [SystemExit(1), KeyboardInterrupt()])
+def test_a_primary_that_raises_a_base_exception_falls_back_to_zone_rules(error):
+    wrapper = FallbackClassifier(RULES, ExitingClassifier(error))
+
+    labels, classifier = wrapper.classify_window(knife_in_bin_window())
+
+    assert classifier == ZONE_RULES
+    assert labels == RULES.classify(knife_in_bin_window())
+    assert wrapper.fallback_count == 1
+
+
+@pytest.mark.safety
 def test_a_hanging_primary_falls_back_and_is_skipped_until_it_returns():
     hanging = HangingClassifier()
-    wrapper = FallbackClassifier(RULES, hanging, timeout_ms=50)
+    wrapper = FallbackClassifier(RULES, hanging, timeout_ms=200)
 
     first = wrapper.classify_window(knife_in_bin_window())
-    second = wrapper.classify_window(knife_in_bin_window())  # skips the stuck primary instead of waiting again
+    started = time.perf_counter()
+    later = [wrapper.classify_window(knife_in_bin_window()) for _ in range(5)]
+    waited_ms = (time.perf_counter() - started) * 1000
 
-    assert first[1] == ZONE_RULES and second[1] == ZONE_RULES
-    assert wrapper.fallback_count == 2
+    # The later windows skip the stuck primary: no second wait, and no second thread stuck beside the first.
+    assert first[1] == ZONE_RULES and all(classifier == ZONE_RULES for _, classifier in later)
+    assert wrapper.fallback_count == 6
+    assert waited_ms < wrapper.timeout_ms / 2
+    assert hanging.calls == 1
 
     hanging.release.set()
     wrapper._hung.join(5)

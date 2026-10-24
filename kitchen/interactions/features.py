@@ -5,7 +5,9 @@ Step:  Interactions (candidate pairs, features, zone rules)
 Reads: candidate pairs (candidates.py), observation_frame detections, zone kinds
 Emits: interaction_features rows, each validated against the schema
 Rules: 6 no allergen fields (the schema refuses extra fields) and zone_kind, never the zone ID; time-based units
-       (frame widths, frame widths per second, milliseconds), so features don't change with FPS
+       (frame widths, frame widths per second, milliseconds), so features don't change with FPS; 1 a self pair (a
+       wash) keeps its dwell through a loss of up to wash_gap_ms, so one rinse is one wash, but unseen time beyond
+       pair_gap_ms isn't counted as rinsing
 
 Units: distances in normalized frame widths (a normalized y difference is height / width widths), speeds in frame
 widths per second, overlap as intersection over the smaller box.
@@ -83,7 +85,8 @@ class FeatureTracker:
         self.settings = settings
         self.aspect = aspect
         self._centers: dict[str, deque[tuple[int, float, float]]] = {}
-        self._pair_seen: dict[tuple[str, str], tuple[int, int]] = {}  # pair -> (first t_ms, last t_ms) in range
+        # pair -> (first t_ms, last t_ms) in range, and the time unseen that doesn't count toward dwell
+        self._pair_seen: dict[tuple[str, str], tuple[int, int, int]] = {}
 
     def update(self, frame: ObservationFrame, pairs: list[tuple[dict, dict]]) -> list[InteractionFeatures]:
         """Record this frame's detections and return one validated feature row per candidate pair."""
@@ -134,16 +137,29 @@ class FeatureTracker:
             del self._centers[entity_id]
         return speeds
 
+    def gap_allowed_ms(self, pair: tuple[str, str]) -> int:
+        """How long the pair may be missing before its dwell starts over: wash_gap_ms for a self pair (a wash, which
+        must not split in two), pair_gap_ms for any other."""
+        return self.settings.wash_gap_ms if pair[0] == pair[1] else self.settings.pair_gap_ms
+
     def track_dwell(self, t_ms: int, a_id: str, b_id: str) -> int:
-        """How long the pair has been a candidate, allowing gaps up to pair_gap_ms (a missed detection or two)."""
-        first, last = self._pair_seen.get((a_id, b_id), (t_ms, t_ms))
-        if t_ms - last > self.settings.pair_gap_ms:
-            first = t_ms
-        self._pair_seen[(a_id, b_id)] = (first, t_ms)
-        return t_ms - first
+        """How long the pair has been a candidate, allowing gaps up to gap_allowed_ms (a missed detection or two).
+
+        A gap longer than pair_gap_ms can only be a self pair's (a knife in the sink, a hand over it): it is bridged
+        but not counted, since nothing shows the knife was under the water then.
+        """
+        pair = (a_id, b_id)
+        first, last, unseen = self._pair_seen.get(pair, (t_ms, t_ms, 0))
+        gap = t_ms - last
+        if gap > self.gap_allowed_ms(pair):
+            first, unseen = t_ms, 0
+        elif gap > self.settings.pair_gap_ms:
+            unseen += gap
+        self._pair_seen[pair] = (first, t_ms, unseen)
+        return t_ms - first - unseen
 
     def forget_stale_pairs(self, t_ms: int) -> None:
-        """Drop pairs not in range for longer than pair_gap_ms; if they come back, their dwell starts over."""
-        stale = [pair for pair, (_, last) in self._pair_seen.items() if t_ms - last > self.settings.pair_gap_ms]
+        """Drop pairs not in range for longer than gap_allowed_ms; if they come back, their dwell starts over."""
+        stale = [pair for pair, (_, last, _) in self._pair_seen.items() if t_ms - last > self.gap_allowed_ms(pair)]
         for pair in stale:
             del self._pair_seen[pair]
