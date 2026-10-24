@@ -142,19 +142,54 @@ def test_unknown_ancestors_are_the_expected_unknown_history_entities(make_graph,
 def test_subgraph_is_valid_and_never_reaches_past_as_of(make_graph, scenario):
     """Time runs forward: the subgraph holds no edge that starts after as_of_t_ms, and its edges are in time order.
 
-    Every edge's two entities and the plate itself are nodes, so the plate check can read each edge's start state.
+    Every golden event starts before its plate reaches the pass, so asking only at the pass time could never catch a
+    graph that ignores as_of. Each plate is also asked just before every event, which leaves that event out. Every
+    edge's two entities and the plate itself are nodes, so the plate check can read each edge's start state.
     """
     graph = make_graph(scenario)
     for plate_id in _plates(scenario):
-        as_of = _pass_time(scenario, plate_id)
-        subgraph = validate(graph.subgraph(plate_id, as_of), "plate_subgraph")
-        starts = [edge["t_start_ms"] for edge in subgraph["edges"]]
-        node_ids = {node["entity_id"] for node in subgraph["nodes"]}
-        assert subgraph["plate_id"] == plate_id
-        assert all(start <= as_of for start in starts)
-        assert starts == sorted(starts)
-        assert plate_id in node_ids
-        assert {edge["a_id"] for edge in subgraph["edges"]} | {edge["b_id"] for edge in subgraph["edges"]} <= node_ids
+        moments = {_pass_time(scenario, plate_id)}
+        moments |= {event["t_start_ms"] - 1 for event in scenario["events"] if event["t_start_ms"] > 0}
+        for as_of in sorted(moments):
+            subgraph = validate(graph.subgraph(plate_id, as_of), "plate_subgraph")
+            starts = [edge["t_start_ms"] for edge in subgraph["edges"]]
+            node_ids = {node["entity_id"] for node in subgraph["nodes"]}
+            assert subgraph["plate_id"] == plate_id
+            assert subgraph["as_of_t_ms"] == as_of
+            assert all(start <= as_of for start in starts), (as_of, starts)
+            assert starts == sorted(starts)
+            assert plate_id in node_ids
+            assert {edge["a_id"] for edge in subgraph["edges"]} | {
+                edge["b_id"] for edge in subgraph["edges"]
+            } <= node_ids
+
+
+@pytest.mark.contract
+@pytest.mark.safety
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
+def test_subgraph_nodes_start_as_the_scenario_says(make_graph, scenario):
+    """Known-clean source: each node's origin and start profile are what the shift says, since Laya reads only those.
+
+    A bin starts with its profile; a late entity of unknown origin starts unknown; a clean_stack entity and every
+    other tool, hand or plate start clean. A graph that reported everything clean would blind the plate check.
+    """
+    bins = {entry["entity_id"]: entry["allergen_profile"] for entry in scenario["bins"]}
+    late = {entry["entity_id"]: entry.get("origin", "unknown") for entry in scenario.get("late_entities", [])}
+    graph = make_graph(scenario)
+    for plate_id in _plates(scenario):
+        for node in graph.subgraph(plate_id, _pass_time(scenario, plate_id))["nodes"]:
+            entity_id, start = node["entity_id"], node["start"]
+            if entity_id in bins:
+                assert node["origin"] == "shift_start", entity_id
+                assert start["unknown"] is False, entity_id
+                assert start["probabilities"] == bins[entity_id]["probabilities"], entity_id
+            elif late.get(entity_id) == "unknown":
+                assert node["origin"] == "unknown", entity_id
+                assert start["unknown"] is True, entity_id
+            else:
+                assert node["origin"] == late.get(entity_id, "shift_start"), entity_id
+                assert start["unknown"] is False, entity_id
+                assert not any(start["probabilities"].values()), entity_id
 
 
 @pytest.mark.contract
