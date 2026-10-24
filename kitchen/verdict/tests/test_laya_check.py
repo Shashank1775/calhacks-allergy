@@ -1,5 +1,6 @@
 """Tests for Laya's final plate check. They run without torch: the real adapter gets a scripted agent."""
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -19,10 +20,15 @@ from kitchen.verdict.laya_check import (
     exact_reach,
     laya_hold_reasons,
     plate_state,
+    reached_question,
 )
 from kitchen.verdict.training.plate_data import ancestry, golden_rows, subgraph_from_scenario
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
+
+# sha256 of the questions exactly as the plate model (plate-v1) was fine-tuned on them. If this test fails, the
+# wording changed: retrain the plate model, then update this hash. test_the_state_reads_like_the_kitchen pins the input.
+TRAINED_QUESTIONS_SHA256 = "b64d73daf123c6ea596b08244ddb9b6c752ab1baf8c14c3aa2eab3500d464cb2"
 
 
 def scenario(name):
@@ -67,6 +73,11 @@ def test_the_fake_flags_exactly_the_expected_allergens_in_every_golden_scenario(
     reached = FakeLayaCheck().check(row["subgraph"], row["forbidden"])
     flagged = [r["allergen_unit_id"] for r in laya_hold_reasons(reached, row["forbidden"], row["pass_threshold"])]
     assert flagged == sorted(set(row["expected_reached"]) & set(row["forbidden"]))
+
+
+def test_question_wording_matches_training():
+    wording = json.dumps([reached_question(u) for u in UNITS], sort_keys=True)
+    assert hashlib.sha256(wording.encode()).hexdigest() == TRAINED_QUESTIONS_SHA256
 
 
 def test_the_subgraph_matches_the_contract():
