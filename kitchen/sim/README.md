@@ -64,9 +64,9 @@ See [Safety rules](../../AGENTS.md#3-safety-rules).
 
 | Rule | Our part | Test |
 |---|---|---|
-| Time runs forward | A tool carries an allergen only after its true contact with the source | Property test over random seeds (`safety`) |
-| Blind classifier | Clips contain only box masks, the change mask and timing: no allergens, no classes, no realistic utensils | Schema validation on every clip; a test that the renderer's shape set has no utensil sprites |
-| Known-clean source | Track loss and late entities appear in `late_entities` with `origin: unknown`; fresh plates come from a `clean_stack` zone | Mistake-injection unit tests |
+| Time runs forward | A tool carries an allergen only after its true contact with the source | Planned with `world.py` (scenarios aren't built yet) |
+| Blind classifier | Clips contain only box masks, the change mask and timing: no allergens, no classes, no realistic utensils | Schema validation on every clip (`safety`); the renderer only draws plain bars, discs and ellipses |
+| Known-clean source | Track loss and late entities appear in `late_entities` with `origin: unknown`; fresh plates come from a `clean_stack` zone | Planned with `world.py` |
 
 ## Tests
 

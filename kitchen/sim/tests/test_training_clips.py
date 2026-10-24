@@ -115,6 +115,7 @@ def test_the_v2_label_fixes_hold_over_many_seeds():
         assert np.allclose(b.center[f], b.center[0])  # the nudge comes after A arrives
     assert 0.35 < inside / 200 < 0.75
     assert (KINDS["hover"].contact, KINDS["hover"].transferred) == (True, False)
+    assert KINDS["hover"].hard_negative == KINDS["touch"].hard_negative == "contact_no_motion"
 
 
 def test_food_on_a_and_food_color_say_nothing_by_themselves():
@@ -183,6 +184,33 @@ def test_no_contact_clips_keep_a_and_its_load_off_bs_food():
             circle_hits_box(x.position[f], x.radius, container_extent(b, f)) for x in load for f in frames
         )
     assert food_under_a <= 8 and load_over_b <= 8  # v2.2 had about 100 and 27 per 200
+
+
+def dwell_paths(kind, seeds=150):
+    """(B, path during the dwell, arrival point) from plan_path on a fine time grid, for one kind."""
+    from kitchen.sim.episodes import fill_with_food, make_container, plan_path
+
+    grid = np.linspace(0, 1, 2001)
+    for seed in range(seeds):
+        rng = np.random.default_rng(seed)
+        b = make_container(rng, np.array([0.5, 0.5]))
+        path, _, (arrive, leave) = plan_path(rng, kind, b, fill_with_food(rng, b), grid, is_tool=True)
+        inside = (grid > arrive) & (grid < leave)
+        yield b, path[inside], path[np.searchsorted(grid, arrive)]
+
+
+def test_still_dwells_share_one_wiggle_and_wipes_and_touches_stay_on_b():
+    """Scoop jiggles no more than any other still dwell; a wipe's wide wiggle stays over B; rim touches reach the rim."""
+    for kind in ("scoop", "deposit", "hover", "touch"):
+        for _b, dwell, arrival in dwell_paths(kind):
+            assert np.abs(dwell - arrival).max() <= 0.008 + 1e-9, kind
+    for b, dwell, _ in dwell_paths("wipe"):
+        assert all(inside_body(b, point, 0) for point in dwell)
+    for b, _, arrival in dwell_paths("touch"):
+        # Every touch ends at least half a rim inside B's outline, so the drawn tip visibly overlaps B.
+        offset = np.abs(arrival - b.center[0]) / (b.half_size - RIM_WIDTH / 2)
+        reach = np.sqrt((offset**2).sum()) if b.is_round else offset.max()
+        assert reach <= 1.0 + 1e-3
 
 
 def test_splits_use_disjoint_seeds_and_test_uses_unseen_layouts(tmp_path):
