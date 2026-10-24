@@ -2,32 +2,88 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "verdict.schema.json",
   "title": "Verdict",
-  "description": "The pass/hold decision for one plate against one ticket revision. Producer: verdict. Consumers: outputs (gate, voice, expo board), verdict mistakes analysis.",
+  "description": "The pass/hold decision for one plate against one ticket revision, computed in plain code from the partner graph's reachability. Producer: verdict. Consumers: outputs (gate, voice, expo board), verdict mistakes analysis.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict_id", "ticket_id", "ticket_revision", "plate_id", "decided_t_ms", "trigger", "decision", "mode", "confidence", "pass_threshold", "reasons", "flagged", "chain", "versions"],
+  "required": [
+    "verdict_id",
+    "ticket_id",
+    "ticket_revision",
+    "plate_id",
+    "decided_t_ms",
+    "trigger",
+    "decision",
+    "confidence",
+    "pass_threshold",
+    "reasons",
+    "flagged",
+    "chain",
+    "versions"
+  ],
   "properties": {
-    "verdict_id": { "type": "string" },
-    "ticket_id": { "type": "string" },
-    "ticket_revision": { "type": "integer", "minimum": 1 },
-    "plate_id": { "$ref": "common.schema.json#/$defs/entity_id" },
-    "decided_t_ms": { "$ref": "common.schema.json#/$defs/t_ms" },
-    "trigger": { "enum": ["plate_at_pass", "ticket_amended", "manual_recheck"] },
-    "decision": { "enum": ["pass", "hold"] },
-    "mode": { "$ref": "common.schema.json#/$defs/verdict_mode" },
-    "confidence": { "$ref": "common.schema.json#/$defs/probability", "description": "Clean-confidence: how sure we are the plate carries no forbidden allergen." },
-    "pass_threshold": { "$ref": "common.schema.json#/$defs/probability" },
+    "verdict_id": {
+      "type": "string"
+    },
+    "ticket_id": {
+      "type": "string"
+    },
+    "ticket_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "plate_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "decided_t_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "trigger": {
+      "enum": [
+        "plate_at_pass",
+        "ticket_amended",
+        "manual_recheck"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "pass",
+        "hold"
+      ]
+    },
+    "confidence": {
+      "$ref": "common.schema.json#/$defs/probability",
+      "description": "Clean-confidence: how sure we are the plate carries no forbidden allergen."
+    },
+    "pass_threshold": {
+      "$ref": "common.schema.json#/$defs/probability"
+    },
     "reasons": {
       "description": "Every reason to hold. Empty if and only if decision is pass.",
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["code"],
+        "required": [
+          "code"
+        ],
         "properties": {
-          "code": { "enum": ["exact_flag", "model_flag", "low_confidence", "model_unavailable", "unknown_history", "stale_track", "missing_input", "unanswered_question", "error"] },
-          "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
-          "detail": { "type": "string" }
+          "code": {
+            "enum": [
+              "exact_flag",
+              "low_confidence",
+              "unknown_history",
+              "stale_track",
+              "missing_input",
+              "unanswered_question",
+              "error"
+            ]
+          },
+          "allergen_unit_id": {
+            "$ref": "common.schema.json#/$defs/allergen_unit_id"
+          },
+          "detail": {
+            "type": "string"
+          }
         }
       }
     },
@@ -36,35 +92,81 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["allergen_unit_id", "probability", "flagged_by"],
+        "required": [
+          "allergen_unit_id",
+          "probability"
+        ],
         "properties": {
-          "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
-          "probability": { "$ref": "common.schema.json#/$defs/probability" },
-          "flagged_by": { "type": "array", "items": { "enum": ["exact", "laya"] }, "minItems": 1 }
+          "allergen_unit_id": {
+            "$ref": "common.schema.json#/$defs/allergen_unit_id"
+          },
+          "probability": {
+            "$ref": "common.schema.json#/$defs/probability"
+          }
         }
       }
     },
-    "chain": { "type": "array", "items": { "$ref": "chain_step.schema.json" } },
+    "chain": {
+      "type": "array",
+      "items": {
+        "$ref": "chain_step.schema.json"
+      }
+    },
     "versions": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["policy", "exact"],
+      "required": [
+        "policy",
+        "exact"
+      ],
       "properties": {
-        "policy": { "type": "string" },
-        "exact": { "type": "string" },
-        "laya": { "type": "string" },
-        "classifier": { "type": "string" }
+        "policy": {
+          "type": "string"
+        },
+        "exact": {
+          "type": "string"
+        },
+        "classifier": {
+          "type": "string"
+        }
       }
     }
   },
   "allOf": [
     {
-      "if": { "properties": { "decision": { "const": "pass" } } },
-      "then": { "properties": { "reasons": { "maxItems": 0 }, "flagged": { "maxItems": 0 } } }
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reasons": {
+            "maxItems": 0
+          },
+          "flagged": {
+            "maxItems": 0
+          }
+        }
+      }
     },
     {
-      "if": { "properties": { "decision": { "const": "hold" } } },
-      "then": { "properties": { "reasons": { "minItems": 1 } } }
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "hold"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reasons": {
+            "minItems": 1
+          }
+        }
+      }
     }
   ]
 }

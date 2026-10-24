@@ -9,7 +9,7 @@ Proves the pieces fit. It runs a whole kitchen through the system, with every co
 ```
 typed note ──▶ FakeLayaParser parse ──▶ scripted answers to questions ──▶ ticket (StateClient)
 scenario file ──▶ bins, plate bindings, interaction events (StateClient)
-plate reaches the pass ──▶ FakeProvenanceGraph ──▶ verdict policy (kitchen/verdict, rules_only mode)
+plate reaches the pass ──▶ FakeProvenanceGraph ──▶ verdict policy (kitchen/verdict)
 verdict ──▶ ConsoleGate + ConsoleSpeaker
 ```
 

@@ -1,7 +1,23 @@
 {
   "$comment": "Must fail: a pass verdict cannot carry a reason to hold.",
-  "verdict_id": "v-x", "ticket_id": "t9", "ticket_revision": 1, "plate_id": "plate-t9", "decided_t_ms": 1,
-  "trigger": "plate_at_pass", "decision": "pass", "mode": "full", "confidence": 0.99, "pass_threshold": 0.95,
-  "reasons": [ { "code": "model_unavailable" } ], "flagged": [], "chain": [],
-  "versions": { "policy": "0.1.0", "exact": "0.1.0" }
+  "verdict_id": "v-x",
+  "ticket_id": "t9",
+  "ticket_revision": 1,
+  "plate_id": "plate-t9",
+  "decided_t_ms": 1,
+  "trigger": "plate_at_pass",
+  "decision": "pass",
+  "confidence": 0.99,
+  "pass_threshold": 0.95,
+  "reasons": [
+    {
+      "code": "error"
+    }
+  ],
+  "flagged": [],
+  "chain": [],
+  "versions": {
+    "policy": "0.1.0",
+    "exact": "0.1.0"
+  }
 }

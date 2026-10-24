@@ -10,7 +10,6 @@ Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`
 | [`InteractionClassifier`](#interactionclassifier) | **partner** (zone rules in `kitchen/interactions/`, ConvLSTM / ConvGRU in `kitchen/lstm/`) | `ScriptedClassifier` | platform |
 | [Change mask and clip builder](#change-mask-and-clips) | platform (`kitchen/shared/change_mask.py`, `kitchen/shared/clips.py`) | none needed: pure functions | platform |
 | [`LayaParser`](#layaparser) | orders | `FakeLayaParser` | orders |
-| [`LayaClient`](#layaclient) | verdict (adapter), sim (the model) | `ExactLaya`, `AdversarialLaya` | verdict |
 | Verdict feed (`verdict`, `verdict_step`, `entity_risk`, `mistake_pattern` rows) | verdict, partner graph | `ScriptedVerdictSource` (replays scenario verdicts into `InMemoryStateClient`) | verdict |
 | [`Transcriber`](#transcriber-and-speaker) | orders | `TextFileTranscriber` | orders |
 | [`Speaker`](#transcriber-and-speaker) | outputs | `ConsoleSpeaker` | outputs |
@@ -90,8 +89,6 @@ Real: **partner** (`kitchen/graph/`). Fake: `FakeProvenanceGraph` (platform). Th
 class ProvenanceGraph(Protocol):
     def reach(self, plate_id: str, as_of_t_ms: int) -> list[AllergenReach]: ...
         # exact reachability: every allergen unit with nonzero probability at the plate, each with its chain
-    def subgraph(self, plate_id: str, ticket_id: str, as_of_t_ms: int, forbidden: list[str]) -> LayaRequest: ...
-        # the plate's time-forward ancestors, ready to send to Laya
     def unknown_ancestors(self, plate_id: str, as_of_t_ms: int) -> list[str]: ...
         # entity IDs in the plate's ancestry with origin "unknown" and no wash since (invariant 8)
     def version(self) -> str: ...
@@ -170,18 +167,6 @@ class LayaParser(Protocol):
 
 - Raises `LayaParserUnavailable`. With no cached result, the tablet falls back to manual entry. It never guesses.
 - **Fake:** `FakeLayaParser`, a deterministic keyword parser covering the notes in the orders eval set.
-
-## LayaClient
-
-Owner: **verdict** (adapter, timeouts, validation) and **sim** (the model, its training data and evaluation).
-
-```python
-class LayaClient(Protocol):
-    def analyze(self, request: LayaRequest, *, timeout_ms: int) -> LayaResponse: ...
-```
-
-- Raises `LayaUnavailable` on error or timeout. In `full` mode the verdict is then HOLD with reason `model_unavailable`.
-- **Fakes:** `ExactLaya` answers with `ProvenanceGraph.reach`. `AdversarialLaya` gives random, late, empty or malformed answers that must never loosen a verdict.
 
 ## Transcriber and Speaker
 

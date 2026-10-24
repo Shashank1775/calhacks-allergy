@@ -6,7 +6,7 @@ The only things teams may depend on across team lines. If it is not in this fold
 |---|---|
 | [`allergen_units.json`](allergen_units.json) | Seed data for the allergen unit table (the nine major allergens). |
 | [`schemas/`](schemas/) | JSON Schema (draft 2020-12) for every message that crosses a team boundary. |
-| [`apis.md`](apis.md) | HTTP endpoints and the Python interfaces (`StateClient`, `LayaParser`, `LayaClient`, ...) every team codes against. |
+| [`apis.md`](apis.md) | HTTP endpoints and the Python interfaces (`StateClient`, `LayaParser`, `ProvenanceGraph`, ...) every team codes against. |
 | [`state-tables.md`](state-tables.md) | SpacetimeDB tables and reducers, and which team is the single writer of each table. |
 | [`fixtures/valid/<schema>/`](fixtures/valid/) | Example payloads that **must** validate. Use them in your tests. |
 | [`fixtures/invalid/<schema>/`](fixtures/invalid/) | Payloads that **must not** validate. Each guards an invariant. |

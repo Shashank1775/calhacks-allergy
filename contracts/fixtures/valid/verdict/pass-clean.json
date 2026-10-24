@@ -6,11 +6,13 @@
   "decided_t_ms": 201300,
   "trigger": "plate_at_pass",
   "decision": "pass",
-  "mode": "rules_only",
   "confidence": 0.997,
   "pass_threshold": 0.95,
   "reasons": [],
   "flagged": [],
   "chain": [],
-  "versions": { "policy": "0.1.0", "exact": "0.1.0" }
+  "versions": {
+    "policy": "0.1.0",
+    "exact": "0.1.0"
+  }
 }

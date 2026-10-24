@@ -2,18 +2,44 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "chain_step.schema.json",
   "title": "ChainStep",
-  "description": "One hop in a contamination chain, from the allergen's source toward the plate. Used by laya_response and verdict.",
+  "description": "One hop in a contamination chain, from the allergen's source toward the plate. Used by allergen_reach and verdict.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["step", "event_id", "from_id", "to_id", "t_ms", "action", "allergen_unit_id", "step_confidence"],
+  "required": [
+    "step",
+    "event_id",
+    "from_id",
+    "to_id",
+    "t_ms",
+    "action",
+    "allergen_unit_id",
+    "step_confidence"
+  ],
   "properties": {
-    "step": { "type": "integer", "minimum": 1 },
-    "event_id": { "type": "string" },
-    "from_id": { "$ref": "common.schema.json#/$defs/entity_id" },
-    "to_id": { "$ref": "common.schema.json#/$defs/entity_id" },
-    "t_ms": { "$ref": "common.schema.json#/$defs/t_ms" },
-    "action": { "$ref": "common.schema.json#/$defs/action" },
-    "allergen_unit_id": { "$ref": "common.schema.json#/$defs/allergen_unit_id" },
-    "step_confidence": { "$ref": "common.schema.json#/$defs/probability" }
+    "step": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event_id": {
+      "type": "string"
+    },
+    "from_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "to_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "t_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "action": {
+      "$ref": "common.schema.json#/$defs/action"
+    },
+    "allergen_unit_id": {
+      "$ref": "common.schema.json#/$defs/allergen_unit_id"
+    },
+    "step_confidence": {
+      "$ref": "common.schema.json#/$defs/probability"
+    }
   }
 }

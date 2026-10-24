@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "allergen_reach.schema.json",
   "title": "AllergenReach",
-  "description": "One allergen that may have reached a plate, with its probability and the chain back to its source. Returned by the partner graph's exact reachability (ProvenanceGraph.reach) and by Laya. Consumer: verdict.",
+  "description": "One allergen that may have reached a plate, with its probability and the chain back to its source. Returned by the partner graph's exact reachability (ProvenanceGraph.reach). Consumer: verdict.",
   "type": "object",
   "additionalProperties": false,
   "required": [

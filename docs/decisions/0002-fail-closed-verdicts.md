@@ -1,4 +1,4 @@
-# 0002: Verdicts fail closed, and models only tighten
+# 0002: Verdicts fail closed and are plain code
 
 - **Status:** accepted
 - **Date:** 2026-10-23
@@ -10,10 +10,9 @@ A wrong PASS can send an allergen to a guest who reacts to it. A wrong HOLD cost
 
 ## Decision
 
-- The verdict is computed in plain, deterministic code: `hold = exact_flags or model_flags or confidence < ticket.pass_threshold or any_error`.
-- Model outputs can add reasons to hold. They can never remove one, and never raise clean-confidence above what exact reachability allows.
+- The verdict is computed in plain, deterministic code from the partner graph's reachability: `hold = forbidden_allergen_reachable or confidence < ticket.pass_threshold or any_error`.
+- Learned models (Laya, the ConvLSTM) only produce the verdict's inputs. A low-confidence input becomes a one-tap question or a HOLD, never a PASS.
 - Any exception, timeout, missing input, stale feed or unknown-history entity on the verdict path yields HOLD (the gate shows `fault` when it loses its feed).
-- Running without an expected model is an explicit `rules_only` mode a person turns on, and is recorded on every verdict.
 
 ## Consequences
 
