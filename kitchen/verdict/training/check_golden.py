@@ -6,7 +6,7 @@ Reads: contracts/scenarios/*.json; a plate-check checkpoint (or the exact fake w
 Emits: a PASS/FAIL line per expected verdict, and a non-zero exit code if any failed
 Rules: flags use the verdict's own rule (laya_hold_reasons: P >= 1 - pass_threshold)
 
-    uv run --with laya==0.4.14 python -m kitchen.verdict.training.check_golden --model data/models/laya-plate-v1
+    uv run --with laya==0.4.14 python -m kitchen.verdict.training.check_golden --model data/models/laya-plate-v2
 """
 
 import argparse

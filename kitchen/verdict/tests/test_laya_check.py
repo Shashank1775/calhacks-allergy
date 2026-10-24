@@ -27,7 +27,7 @@ from kitchen.verdict.training.plate_data import golden_rows, subgraph_from_scena
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
 
-# sha256 of the questions exactly as the plate model was fine-tuned on them. If this test fails, the wording
+# sha256 of the questions exactly as the plate model (plate-v2) was fine-tuned on them. If this test fails, the wording
 # changed: retrain the plate model, then update this hash. test_the_state_reads_like_the_kitchen pins the input.
 TRAINED_QUESTIONS_SHA256 = "b64d73daf123c6ea596b08244ddb9b6c752ab1baf8c14c3aa2eab3500d464cb2"
 
