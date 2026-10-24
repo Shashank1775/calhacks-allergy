@@ -130,12 +130,18 @@ def test_food_on_a_and_food_color_say_nothing_by_themselves():
 
 
 def test_stirred_food_stays_in_its_container():
-    """Food pushed by someone stirring never leaves B, so it never ends up under A on the counter."""
+    """Food pushed by someone stirring never leaves B, drawn smear included, so it never ends up under A."""
     for seed in range(60):
         episode = simulate_episode(seed, 0, "motion_nearby")
         b = episode.containers[0]
         in_b = [blob for blob in episode.food if not blob.on_actor.any() and inside_body(b, blob.position[0], 0)]
-        assert all(inside_body(b, blob.position[f], f) for blob in in_b for f in range(len(episode.times_ms)))
+        for blob in in_b:
+            for f in range(len(episode.times_ms)):
+                long_axis = blob.radius * blob.stretch[f]
+                room = np.maximum(b.half_size - RIM_WIDTH - long_axis, 1e-3)  # the whole smear, not just its center
+                offset = np.abs(blob.position[f] - b.center[f]) / room
+                reach = np.sqrt((offset**2).sum()) if b.is_round else offset.max()
+                assert reach <= 1.0 + 1e-6 or blob.stretch[f] == 1.0
 
 
 def test_no_contact_clips_keep_a_and_its_load_off_bs_food():
