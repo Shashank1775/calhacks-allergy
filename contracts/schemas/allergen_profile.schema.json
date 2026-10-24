@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "allergen_profile.schema.json",
   "title": "AllergenProfile",
-  "description": "Probability that an entity carries each allergen unit. Bins: set by orders from the bin label (Laya), and a person can adjust it before saving. Tools, hands, plates: clean at shift start, then updated by the partner graph.",
+  "description": "Probability that an entity carries each allergen unit. Bins: hard-coded for the demo by orders (kitchen/orders/bins.py, source manual). Tools, hands, plates: clean at shift start, then updated by the partner graph.",
   "type": "object",
   "additionalProperties": false,
   "required": ["probabilities", "unknown", "source"],
@@ -18,7 +18,7 @@
       "type": "boolean"
     },
     "source": {
-      "description": "laya: read from the bin label. manual: set or adjusted by a person. The rest are set by the partner graph.",
+      "description": "laya: read from a bin label (unused while bins are hard-coded). manual: set by a person. The rest are set by the partner graph.",
       "enum": ["laya", "manual", "shift_start_clean", "propagated", "wash_reset", "unknown_history"]
     }
   }

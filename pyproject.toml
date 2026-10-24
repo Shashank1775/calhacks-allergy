@@ -13,7 +13,11 @@ dependencies = []
 # Each extra starts empty. A team adds what its step needs, then runs `uv lock`.
 pi = []      # on the Raspberry Pi: camera, GPIO, Hailo runtime (vision, gate)
 ml = []      # models: PyTorch, ONNX Runtime (vision, sim, the partner's LSTM)
-server = []  # HTTP servers: the Orders API and the Pi server (orders, vision)
+server = [  # HTTP servers and clients: the Orders API, Cartesia, the Pi server (orders, vision)
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "uvicorn>=0.30",
+]
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]

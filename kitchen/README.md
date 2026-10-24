@@ -4,7 +4,7 @@ All Python code, one folder per pipeline step. Open a folder's README to see wha
 
 | Folder | What it does | Owner |
 |---|---|---|
-| [orders/](orders/) | Ticket notes and bin labels become typed allergen data, through Laya and one-tap questions | team orders |
+| [orders/](orders/) | Ticket notes become typed allergen data, through Laya and one-tap questions; demo bin profiles are hard-coded | team orders |
 | [vision/](vision/) | Camera frames become tracked, identified entities, change masks and recordings | team vision |
 | [entities/](entities/) | Keeps every entity in memory on the Pi and syncs to the database at about 5 Hz | **partner** |
 | [interactions/](interactions/) | Nearby entity pairs become features and clips, which become classified edges | **partner** |

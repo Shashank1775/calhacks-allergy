@@ -8,7 +8,7 @@
       "allergen_unit_id": "tree_nut",
       "severity": "anaphylactic",
       "trace_sensitive": true,
-      "confidence": { "allergen_unit_id": 0.72, "severity": 0.93, "trace_sensitive": 0.61 }
+      "confidence": { "allergen_unit_id": 0.95, "severity": 0.93, "trace_sensitive": 0.61 }
     }
   ],
   "exceptions": [ { "allergen_unit_id": "tree_nut", "ingredient": "coconut", "confidence": 0.95 } ],

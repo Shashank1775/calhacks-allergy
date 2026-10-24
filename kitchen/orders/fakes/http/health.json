@@ -1,0 +1,9 @@
+{
+  "method": "GET",
+  "path": "/health",
+  "request": null,
+  "status": 200,
+  "response": {
+    "ok": true
+  }
+}
