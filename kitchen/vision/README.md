@@ -18,7 +18,7 @@ curl --max-time 3 -o stream.bin http://localhost:8002/stream.mjpg               
 
 Settings are `VISION_*` environment variables (`kitchen/vision/common.py`, `VisionSettings`), logged at startup. The ones you'll touch: `VISION_BUNDLE_DIR` (the model bundle, default `data/models/stock-yolov8s`), `VISION_DETECTOR` (`onnx` or `hailo`), `VISION_PORT` (8002) and `VISION_CORS_ORIGINS` (the web app's origin, `http://localhost:5173`).
 
-Without `--serve`, a video plays as fast as it can with its own timestamps, so two runs give identical output. With `--serve` (or `--live`) it plays like a live camera: each frame waits for its place in the video, then is stamped with the clock, so "start plate" sees fresh frames.
+Without `--serve`, a video plays as fast as it can with its own timestamps from 0, so two runs give byte-identical output and the first `VISION_SHIFT_START_MS` (3 s) of the video is shift start. With `--serve` (or `--live`) it plays like a live camera: each frame waits for its place in the video, then is stamped with the clock, so "start plate" sees fresh frames. Live, the clock starts once the detector has loaded, so a slow model load can't eat the shift-start window. The JSONL and recording are complete as soon as the source ends; with `--serve` the API stays up (its `/health` going stale) until Ctrl-C or SIGTERM.
 
 On a Mac, ONNX Runtime's CoreML provider runs detection and pose about ten times faster than the CPU (`VISION_ONNX_PROVIDERS`, CoreML then CPU by default). The whole frame loop takes about 40 ms per 1280×720 frame there, against about 300 ms on the CPU alone.
 
@@ -69,12 +69,14 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `safety`.
 
 - **Known-clean source.**
-  - A track lost beyond the tracker's buffer and re-acquired gets a **new** entity ID, with `origin: unknown` and `first_seen_t_ms` set to when it reappeared. Entity IDs are never reused within a shift (property test). A person re-acquired by pose gets new hand IDs. No re-identification or track merging.
+  - A track lost beyond the tracker's buffer (`track_lost_ms`, 1 s, measured in time so a slow frame rate or a camera stall can't stretch it) and re-acquired gets a **new** entity ID, with `origin: unknown` and `first_seen_t_ms` set to when it reappeared. Entity IDs are never reused within a shift (property test). A person re-acquired by pose gets new hand IDs, and a wrist unseen for longer than the buffer comes back as a new hand, `hand-p<k>-<side>-<n>`, with `origin: unknown`. No re-identification or track merging.
   - `origin: clean_stack` only for a tool or plate first seen in a `clean_stack` zone. A hand never comes out of a stack, so a hand first seen after shift start is `unknown` wherever it is.
-  - A clean stack can't vouch for something that vanished inside it. When a tool or plate track ends in a `clean_stack` zone, the next new track of that class first seen there is `unknown`, once per loss (a dirty knife put back in the rack and hidden by a hand must not come back clean).
+  - An ID switch never starts clean. A new track that starts in a frame where a track of its class went unmatched may be that object under a new ID (a dirty knife carried fast into the rack, or covered there and uncovered to one side), so it is `unknown`, not `clean_stack`, and not `shift_start` either. The same goes for the hands of a new pose track while another is lost.
+  - A clean stack can't vouch for something that vanished inside it. When a tool or plate track ends in a `clean_stack` zone, the next new track of that class first seen there is `unknown`, once per loss.
   - The one ID exception: a bowl first seen in bin slot `slot-<n>` is `bin-<n>`, and is `bin-<n>` again if re-acquired there, because orders keys bin profiles by `bin-<n>`. Swapping bins between slots mid-shift is unsupported.
 - **Fail closed.**
-  - `/plates/start` refuses when the spot has 0 plates or 2+ plates, when the plate is already bound to another ticket, or when the latest frame is more than `plate_bind_max_age_ms` (500 ms) old, so a frozen camera can't bind a stale plate.
+  - `/plates/start` refuses when the spot has 0 plates or 2+ plates, when the plate is already bound to another ticket, or when the latest frame is more than `plate_bind_max_age_ms` (500 ms) old, so a frozen camera can't bind a stale plate. A plate last seen at the spot within the last `track_lost_ms` counts as still there, so a second plate the detector missed for a frame still refuses the bind.
+  - Open `/stream.mjpg` clients wait for frames on their own few threads (`STREAM_THREADS`), so any number of them can't stall `/health` (the gate's staleness check) or `/plates/start`.
   - Detections are never interpolated or invented: a lost track emits nothing, a wrist below `wrist_min_confidence` is no hand, a point in no zone has zone `null`, and NaN or inf in a network's output raises instead of decoding to an empty kitchen.
   - A detector error stops the frame loop, so `/health.last_frame_t_ms` stops advancing and the gate goes to `fault`. A consumer's error is logged and never starves the other consumers or the API.
 - **Time runs forward.** Frame `t_ms` comes from the injected `Clock` and is strictly increasing, including across source restarts; the frame loop refuses a frame that doesn't follow the last. Replay keeps the recorded `t_ms`.
@@ -138,7 +140,8 @@ Unverified until the device is connected: the HailoRT calls in `HailoNetwork` (w
 
 ## Watch out for
 
-- Hands occlude tools, so ByteTrack switches IDs and causes unknown-history holds. Safe, but it hurts the demo: mount the camera overhead and tune the track buffer.
+- Hands occlude tools, so ByteTrack switches IDs and causes unknown-history holds. Safe, but it hurts the demo: mount the camera overhead and tune the track buffer. The ID-switch guard makes this stricter: a plate taken from the stack while any bowl (a bin too) is occluded, or a wrist hidden for over a second, comes back `unknown` and holds until washed.
+- What no tracker catches: an object hidden for longer than `track_lost_ms` (a knife covered by a hand the whole way) while it is carried into a clean stack comes back `clean_stack`. So can an object swapped for another at the same spot while hidden, which then takes over the hidden one's track. Keep the clean stack where hands don't linger.
 - A wrist is not the contact point. The hand box is a square (`VISION_HAND_BOX_SIZE`) placed beyond the wrist, away from the elbow, and shifted back inside the frame at the edges.
 - COCO pose is trained on people seen from the front. From straight overhead it may find few wrists: measure it on the first real recording before the demo, and tune `VISION_WRIST_MIN_CONFIDENCE` only upward if it invents hands.
 - Bowls are both bins and plates (COCO has no plate class): the bin slots decide which is which, so the zones file has to be right.
