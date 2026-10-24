@@ -158,6 +158,28 @@ def test_a_late_subscriber_sees_only_what_changes_after_it_subscribed(make_state
     validate(late[0].row, "ticket")
 
 
+def test_a_write_polls_only_the_tables_it_and_its_callbacks_wrote(test_database):
+    """Live video writes a few entity_state rows a frame: each reads back entity_state, then only what its callbacks
+    wrote (here a verdict), never every subscribed table. Both changes still arrive before the write returns."""
+    uri, name = test_database
+    client = SpacetimeStateClient(uri, name, poll_s=60)  # no background poll while queries are counted
+    client.start_shift()
+    client.register_entity(entity("plate-t7"))
+    verdicts = []
+    client.subscribe("ticket", lambda change: None)
+    client.subscribe("verdict", verdicts.append)
+    client.subscribe("entity_state", lambda change: client.record_verdict(contract_fixture("verdict", "hold-peanut")))
+    queries = []
+    sql = client._sql
+    client._sql = lambda query: queries.append(query) or sql(query)
+
+    client.move_entity(EntityState("plate-t7", 1, 1000, "pass", None, {}, False))
+    client.close()
+
+    assert [query.split(" WHERE")[0] for query in queries] == ["SELECT * FROM entity_state", "SELECT * FROM verdict"]
+    assert len(verdicts) == 1
+
+
 @pytest.mark.safety
 @pytest.mark.parametrize("method", sorted(_CALLS))
 def test_a_missing_database_raises_state_unavailable(test_database, method):

@@ -46,7 +46,7 @@ uv run pytest tests/e2e --state real
 ```
 
 How the client behaves:
-- **Its own writes:** each write delivers its own change events before it returns, as `FakeStateClient` does, plus whatever its subscribers write in turn, for up to 3 rounds. If only that follow-up poll fails, the write still succeeds and the background poll delivers the changes.
+- **Its own writes:** each write delivers its own change events before it returns, as `FakeStateClient` does, plus whatever its subscribers write in turn, for up to 3 rounds. It polls only the tables those writes touched, so a `move_entity` costs one reducer call and one SQL query. If only that follow-up poll fails, the write still succeeds and the background poll delivers the changes.
 - **Other processes' writes:** a background poll every 0.2 s picks them up. Each subscription keeps its own snapshot, and `entity_state` is polled only past the highest `state_id` already delivered. Several changes to one row between two polls arrive as one change, carrying the latest row.
 - **Reads:** entities are joined through `entity_latest`, a derived table `move_entity` keeps current, so reads don't grow with the shift's history.
 - **Who may write:** any identity may call a reducer.
