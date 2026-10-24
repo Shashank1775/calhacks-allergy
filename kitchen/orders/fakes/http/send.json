@@ -1,0 +1,21 @@
+{
+  "method": "POST",
+  "path": "/drafts/d-ce545326b9/send",
+  "request": {
+    "number": 7
+  },
+  "status": 200,
+  "response": {
+    "ticket_id": "t7",
+    "number": 7,
+    "revision": 1,
+    "created_t_ms": 120000,
+    "source": "typed",
+    "note": "allergic to nuts, carries an epipen",
+    "pass_threshold": 0.99,
+    "forbidden": [
+      "peanut",
+      "tree_nut"
+    ]
+  }
+}
