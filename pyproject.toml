@@ -7,7 +7,9 @@ version = "0.1.0"
 description = "Kitchen allergen tracker: camera tracking, a provenance graph and fail-closed plate verdicts."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "jsonschema>=4.26.0",  # kitchen.shared.models.validate checks every record against contracts/schemas
+]
 
 [project.optional-dependencies]
 # Each extra starts empty. A team adds what its step needs, then runs `uv lock`.
@@ -53,7 +55,6 @@ markers = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.170.9",
-    "jsonschema>=4.26.0",
     "pytest>=9.1.1",
     "ruff>=0.17.2",
 ]
