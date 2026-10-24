@@ -58,7 +58,7 @@ def test_stock_bundle_has_everything_the_pi_needs(tmp_path, inputs):
     assert manifest["networks"]["det"]["hef_source"] == "zoo/yolov8s"
     assert manifest["networks"]["pose"]["hef_sha256"] == bundle.sha256(out / "pose.hef")
     assert manifest["networks"]["det"]["classes"] == 80
-    assert manifest["hailo"] == {"model_zoo": "v2.18.0", "hailort": "4.23.0", "hw_arch": "hailo8"}
+    assert manifest["hailo"] == {"model_zoo": "v2.18.0", "hailort": "4.23.0", "hw_arch": "hailo8l"}
     assert len(list((out / "calib").glob("*.jpg"))) == 8
     assert json.loads((out / "manifest.json").read_text()) == manifest
     assert not (out / "compile.sh").exists()
@@ -80,7 +80,7 @@ def test_custom_weights_get_a_compile_script_and_no_hef(tmp_path, inputs):
     out, manifest = build(tmp_path, inputs, "custom")
 
     script = (out / "compile.sh").read_text()
-    assert "hailomz compile yolov8s --ckpt det.onnx --hw-arch hailo8 --calib-path calib/ --classes 3" in script
+    assert "hailomz compile yolov8s --ckpt det.onnx --hw-arch hailo8l --calib-path calib/ --classes 3" in script
     assert manifest["networks"]["det"]["hef_sha256"] is None
     assert not (out / "det.hef").exists()
 
