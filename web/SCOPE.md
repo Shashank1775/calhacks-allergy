@@ -31,7 +31,8 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 - **Tablet: changing a ticket** (`tablet/amend_ticket.tsx`): pick a sent ticket, type the change, answer Laya's questions, send. It uses the same send gate, plus a message for `409 ticket_changed`.
 - **Live camera** (`expo/camera_panel.tsx`): vision's `GET /stream.mjpg`, with each entity's latest box from `entity_state` colored by risk (unknown history and strong allergens red, weak amber, clean green). A broken stream says "camera offline" and changes no verdict.
 - **Home.** Video picker with local preview and a REPLAY marker; live camera card stamped 86'd.
-- **Tests.** 114 Vitest tests; the ones guarding a safety rule are named `safety: …`.
+- **Tests.** Vitest, with the ones guarding a safety rule named `safety: …`.
+- **CI.** The `web` job in `.github/workflows/ci.yml` runs on every PR and every push to `main`: `npm ci`, the tests, the type check and build (`npm run build`), lint, and Prettier on `src`.
 
 ## To be implemented
 
@@ -49,7 +50,6 @@ Each of these is drawn on screen with a "To be implemented" marker.
 |---|---|
 | `SpacetimeSource` behind `StateSource` (#75). Until then `WEB_STATE_SOURCE=spacetime` means no source, so FEED LOST | The partner's TypeScript bindings |
 | Generated TS types in `src/generated/`; then delete `src/types/TEMPORARY.ts` | Platform |
-| Web job in CI (`npm --prefix web test`, `npm --prefix web run build`) | Platform |
 | Styling pass on the ticket-rail look | Nothing. Deliberately rough for now |
 | Self-hosted fonts, so the screens work offline | Nothing (demo hardening). Fonts load from Google Fonts today |
 
