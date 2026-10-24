@@ -142,10 +142,12 @@ def change_mask(prev_rgb: np.ndarray, rgb: np.ndarray, prev_mask: np.ndarray | N
 ### Clip builder
 
 ```python
-def build_clip(a_id: str, b_id: str, steps: Sequence[ClipStep], *, H: int = 128, W: int = 128, view: str = "full",
-               channels: Sequence[str] = ("box_a", "box_b", "change")) -> tuple[InteractionClip, np.ndarray]: ...
-    # ClipStep = (t_ms, box_a, box_b, other_boxes, change_mask)
-    # returns metadata (schema interaction_clip) and a [T, C, H, W] tensor
+def build_clip(a_id: str, b_id: str, steps: Sequence[ClipStep], *, clip_id: str, source: str, tensor_file: str,
+               change_mask_params: dict, H: int = 128, W: int = 128, view: str = "full",
+               channels: Sequence[str] = ("box_a", "box_b", "change"), generator: dict | None = None,
+               labels: dict | None = None) -> tuple[InteractionClip, np.ndarray]: ...
+    # ClipStep = (t_ms, box_a, box_b, change_mask, other_boxes); a missed box is None and draws as all zeros
+    # returns the interaction_clip record and a uint8 [T, C, H, W] tensor (0 to 255)
 ```
 
 - `box_a` and `box_b` channels are 1 inside each entity's box (normalized boxes drawn at H x W). `change` is the change mask. `dt_ms` carries elapsed time per step.

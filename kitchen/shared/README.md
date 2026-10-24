@@ -14,8 +14,8 @@ Everything the other folders import to talk to each other. Every Python folder i
 | `config.py` | `load_settings(SettingsClass, prefix="VERDICT_")` fills a dataclass from env vars; `require_secret(name)`; `log_settings(settings)` logs one JSON line at startup |
 | `fakes/` | `FakeStateClient`, `load_scenario` and `scenario_timeline`, `FakeEntityStore`, `FakeProvenanceGraph`, `FakeClassifier`, `FakeClock` |
 | `contract_tests/` | One pytest suite per interface; every fake passes it, and the partner's real code must too |
-| `change_mask.py` | The one change-mask function (RGB frame pair → gradient mask), used by vision on real frames and by sim on rendered frames |
-| `clips.py` | The one clip builder (boxes + change masks over time → `interaction_clip` + `[T, C, H, W]` tensor), used by sim and by the partner |
+| `change_mask.py` | The one change-mask function (RGB frame pair → gradient mask), used by vision on real frames and by sim on rendered frames. Built |
+| `clips.py` | The one clip builder (boxes + change masks over time → `interaction_clip` + `[T, C, H, W]` tensor), used by sim and by the partner. Built |
 
 TypeScript types for `web/` are generated from the same schemas into `web/src/generated/`.
 
