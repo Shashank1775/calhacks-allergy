@@ -49,8 +49,10 @@ def change_mask(
 ) -> np.ndarray:
     """Return where pixels changed between two frames: a float32 [H, W] mask in [0, 1], brighter where more moved.
 
-    Both frames are uint8 RGB [H, W, 3], already letterboxed to the same size. With decay > 0, the previous mask fades
-    instead of vanishing, leaving a short motion trail.
+    Both frames are uint8 RGB [H, W, 3], already letterboxed to the clip size (kitchen.shared.clips.letterbox_frame).
+    Always compute at clip size, never at camera resolution and then shrink: gain and blur are tuned for clip-size
+    frames, and full-resolution noise would survive the shrink. The first frame of a stream has no previous frame, so
+    its mask is all zeros. With decay > 0, the previous mask fades instead of vanishing, leaving a short motion trail.
     """
     if prev_rgb.shape != rgb.shape:
         raise ValueError(f"frames differ in shape: {prev_rgb.shape} vs {rgb.shape}")
