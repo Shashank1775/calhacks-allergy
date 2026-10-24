@@ -52,6 +52,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 from kitchen.orders.api import DEFAULT_CORS_ORIGINS, DEFAULT_PORT
+from kitchen.orders.api import parse_cors_origins as parse_orders_cors_origins
 from kitchen.orders.laya_parser import FakeLayaParser, LocalLayaParser
 from kitchen.orders.tickets import PASS_THRESHOLDS
 from kitchen.shared.clock import SystemClock
@@ -582,6 +583,11 @@ def run_kitchen(runner: LocalRunner) -> None:
         time.sleep(TICK_MS / 1000)
 
 
+def orders_cors_origins() -> list[str]:
+    """The browser origins the Orders API and GET /state allow, from ORDERS_CORS_ORIGINS ("a, b"; spaces are fine)."""
+    return parse_orders_cors_origins(os.environ.get("ORDERS_CORS_ORIGINS", DEFAULT_CORS_ORIGINS))
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI: start the runner on a golden scenario, the kitchen loop in a thread, and the HTTP server in front."""
     import uvicorn
@@ -603,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # the scenario's own Orders API calls, one line each
-    origins = os.environ.get("ORDERS_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    origins = orders_cors_origins()
     path = next(path for path in GOLDEN_SCENARIO_PATHS if path.stem == args.scenario)
     note_dir, plate_dir = os.environ.get("LAYA_MODEL_DIR"), os.environ.get("LAYA_PLATE_MODEL_DIR")
     print(

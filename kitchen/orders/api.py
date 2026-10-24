@@ -165,6 +165,15 @@ class ShiftClock:
         return int((time.monotonic() - self._start) * 1000)
 
 
+def parse_cors_origins(text: str) -> list[str]:
+    """Split ORDERS_CORS_ORIGINS ("a, b") into the list create_app takes.
+
+    Each entry is stripped and empty ones dropped. CORS compares origins exactly, so an unstripped
+    " http://192.168.1.10:5173" (a space after the comma) would never match, and the iPad's preflight would be refused.
+    """
+    return [origin.strip() for origin in text.split(",") if origin.strip()]
+
+
 def main():
     """Pick the parser and transcriber from the environment, write the demo bins and serve the API."""
     import uvicorn
@@ -181,7 +190,7 @@ def main():
     save_bins(state)  # hard-coded demo bins (kitchen/orders/bins.py)
     desk = TicketDesk(parser, state, ShiftClock())
 
-    origins = os.environ.get("ORDERS_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    origins = parse_cors_origins(os.environ.get("ORDERS_CORS_ORIGINS", DEFAULT_CORS_ORIGINS))
     app = create_app(desk, transcriber, origins)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("ORDERS_PORT", DEFAULT_PORT)))
 
