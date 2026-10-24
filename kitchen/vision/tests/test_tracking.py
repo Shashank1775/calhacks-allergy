@@ -92,6 +92,33 @@ def test_a_low_score_detection_keeps_a_track_but_never_starts_one():
     assert owners == {0: 1}
 
 
+def test_a_detection_below_the_match_iou_starts_a_new_track():
+    counter = iter(range(1, 100))
+    tracks = TrackSet(SETTINGS, lambda: next(counter))
+    tracks.update([(0.3, 0.3, 0.4, 0.4)], [0.9])
+
+    # IoU 1/3 with the track's box is above track_match_iou, so it matches; IoU 0.18 is below, so a new track.
+    owners, _ = tracks.update([(0.3, 0.35, 0.4, 0.45)], [0.9])
+    assert owners == {0: 1}
+    owners, _ = tracks.update([(0.3, 0.42, 0.4, 0.52)], [0.9])
+    assert owners == {0: 2}
+
+
+@pytest.mark.safety
+def test_a_far_away_knife_does_not_take_a_lost_knifes_entity():
+    tracker = Tracker(SETTINGS)
+    first = tracker.update([knife(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    tracker.update([], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)
+    # Still inside the lost buffer, but nowhere near the lost knife: a different knife, so a new unknown entity.
+    again = tracker.update([knife(KNIFE_BOX)], [], AFTER_SHIFT_START + 2 * FRAME_MS, zone_of, 640, 640)
+
+    assert first[0]["origin"] == "clean_stack"
+    assert len(again) == 1
+    assert again[0]["track_id"] != first[0]["track_id"]
+    assert again[0]["entity_id"] == "tool-knife-2"
+    assert again[0]["origin"] == "unknown"
+
+
 def test_a_track_matched_within_the_lost_buffer_keeps_its_id():
     tracker = Tracker(SETTINGS)
     outputs = run(tracker, [([knife()], [])] + gone(SETTINGS.track_lost_frames) + [([knife()], [])])
@@ -246,13 +273,46 @@ def test_the_hand_box_is_centred_on_the_wrist_when_the_elbow_is_unsure():
     assert box == pytest.approx((0.46, 0.46, 0.54, 0.54))
 
 
-def test_the_hand_box_stays_square_on_a_wide_frame_and_is_clipped():
+def test_the_hand_box_stays_square_on_a_wide_frame_and_is_shifted_inside_at_the_edge():
     box = hand_box((0.5, 0.5, 0.9), UNSURE, SETTINGS, 1280, 640)
     side_px = SETTINGS.hand_box_size * 1280
 
     assert (box[2] - box[0]) * 1280 == pytest.approx(side_px)
     assert (box[3] - box[1]) * 640 == pytest.approx(side_px)
-    assert hand_box((0.0, 1.0, 0.9), UNSURE, SETTINGS, 640, 640) == pytest.approx((0.0, 0.96, 0.04, 1.0))
+    assert hand_box((0.0, 1.0, 0.9), UNSURE, SETTINGS, 640, 640) == pytest.approx((0.0, 0.92, 0.08, 1.0))
+
+
+@pytest.mark.safety
+def test_a_hand_at_the_frame_edge_keeps_its_full_box():
+    # The elbow is inward, so the box centre lands past the edge; clipping it there would leave a zero-area box.
+    assert hand_box((1.0, 0.5, 0.9), (0.8, 0.5, 0.9), SETTINGS, 640, 640) == pytest.approx((0.92, 0.46, 1.0, 0.54))
+    assert hand_box((0.5, 1.0, 0.9), (0.5, 0.8, 0.9), SETTINGS, 1280, 720) == pytest.approx(
+        (0.46, 1.0 - 0.08 * 1280 / 720, 0.54, 1.0)
+    )
+
+
+UNIT = st.floats(0.0, 1.0)
+CONFIDENT = st.floats(SETTINGS.wrist_min_confidence, 1.0)
+
+
+@pytest.mark.safety
+@settings(max_examples=200, deadline=None)
+@given(
+    st.tuples(UNIT, UNIT, CONFIDENT),
+    st.tuples(UNIT, UNIT, CONFIDENT),
+    st.sampled_from([(640, 640), (1280, 720), (720, 1280), (640, 480)]),
+)
+def test_a_confident_hand_box_has_area_stays_in_frame_and_holds_the_wrist(wrist, elbow, size):
+    width, height = size
+    x1, y1, x2, y2 = hand_box(wrist, elbow, SETTINGS, width, height)
+
+    assert x2 - x1 > 0
+    assert y2 - y1 > 0
+    assert 0.0 <= x1 and x2 <= 1.0
+    assert 0.0 <= y1 and y2 <= 1.0
+    tolerance = 1e-9
+    assert x1 - tolerance <= wrist[0] <= x2 + tolerance
+    assert y1 - tolerance <= wrist[1] <= y2 + tolerance
 
 
 def test_the_hand_zone_comes_from_the_wrist_point():
@@ -260,7 +320,22 @@ def test_the_hand_zone_comes_from_the_wrist_point():
     items = tracker.update([], [person(left_wrist=(0.9, 0.9, 0.9))], AFTER_SHIFT_START, zone_of, 640, 640)
 
     assert items[0]["zone"] == "clean-stack"
-    assert items[0]["origin"] == "clean_stack"
+    # A hand never comes out of a clean stack, so reaching into one doesn't make it clean.
+    assert items[0]["origin"] == "unknown"
+
+
+@pytest.mark.safety
+def test_a_reacquired_hand_first_seen_in_the_clean_stack_is_unknown():
+    tracker = Tracker(SETTINGS)
+    first = tracker.update([], [person()], 0, zone_of, 640, 640)
+    for frame in range(1, SETTINGS.track_lost_frames + 3):
+        tracker.update([], [], frame * FRAME_MS, zone_of, 640, 640)
+    again = tracker.update([], [person(left_wrist=(0.9, 0.9, 0.9))], AFTER_SHIFT_START, zone_of, 640, 640)
+
+    assert first[0]["origin"] == "shift_start"
+    assert [(item["entity_id"], item["zone"], item["origin"]) for item in again] == [
+        ("hand-p2-left", "clean-stack", "unknown")
+    ]
 
 
 def test_every_item_validates_against_observation_frame():

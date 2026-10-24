@@ -146,7 +146,9 @@ def hand_box(wrist: Keypoint, elbow: Keypoint, settings: VisionSettings, width: 
     """The square box a hand covers: side hand_box_size times the frame's larger side, placed beyond the wrist away
     from the elbow (the hand, not the forearm), or centred on the wrist when the elbow isn't confident.
 
-    Works in pixels so the box stays square on a non-square frame, then normalizes and clips to [0, 1].
+    Works in pixels so the box stays square on a non-square frame. A box past the frame edge is shifted back inside,
+    not clipped: clipping would shrink a hand at the edge to a sliver (or nothing) that never overlaps the plate or bin
+    it touches, and a missed contact leans toward PASS.
     """
     side = settings.hand_box_size * max(width, height)
     centre_x = wrist[0] * width
@@ -160,14 +162,18 @@ def hand_box(wrist: Keypoint, elbow: Keypoint, settings: VisionSettings, width: 
             centre_x += forearm_x / length * side / 2
             centre_y += forearm_y / length * side / 2
 
-    corners = (
-        (centre_x - side / 2) / width,
-        (centre_y - side / 2) / height,
-        (centre_x + side / 2) / width,
-        (centre_y + side / 2) / height,
-    )
-    x1, y1, x2, y2 = (min(max(value, 0.0), 1.0) for value in corners)
-    return (x1, y1, x2, y2)
+    x1, x2 = span_inside(centre_x, side, width)
+    y1, y2 = span_inside(centre_y, side, height)
+    return (x1 / width, y1 / height, x2 / width, y2 / height)
+
+
+def span_inside(centre: float, side: float, size: int) -> tuple[float, float]:
+    """The span of length `side` around `centre`, shifted to lie within [0, size], or all of [0, size] when `side`
+    is longer than that."""
+    if side >= size:
+        return (0.0, float(size))
+    start = min(max(centre - side / 2, 0.0), size - side)
+    return (start, start + side)
 
 
 class Tracker:
@@ -236,7 +242,7 @@ class Tracker:
                 if wrist[2] < self.settings.wrist_min_confidence:
                     continue
                 zone = zone_of((wrist[0], wrist[1]))
-                identity = self.identities.hand_identity(track_id, side, t_ms, zone)
+                identity = self.identities.hand_identity(track_id, side, t_ms)
                 box = hand_box(wrist, elbow, self.settings, width, height)
                 item = detection_item(track_id, identity, "wrist", box, wrist[2], zone)
                 item["person_id"] = self.identities.person_label(track_id)

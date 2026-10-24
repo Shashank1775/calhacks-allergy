@@ -6,8 +6,8 @@ Step:  vision
 Reads: track IDs and classes from tracking.py, the zone each track is first seen in, the shift start time
 Emits: Identity (entity_id, kind, origin) for every tracked object and hand
 Rules: known-clean source: a new track is a new entity, so a re-acquired object or person gets a new ID; origin is
-       shift_start only up to shift start, clean_stack only when first seen in a clean_stack zone, otherwise unknown;
-       numbers are never reused
+       shift_start only up to shift start, clean_stack only for a tool or bowl first seen in a clean_stack zone (a
+       hand never comes out of a stack), otherwise unknown; numbers are never reused
 
 The one exception is bins. Orders keys bin profiles by bin-<n>, so a bowl first seen in the bin slot zone slot-<n> is
 bin-<n>, and a bowl re-acquired in slot-<n> is bin-<n> again, keeping the origin bin-<n> was first given. Bins are
@@ -104,11 +104,12 @@ class IdentityBook:
             self._person_by_track[track_id] = self._person_count
         return f"p{self._person_by_track[track_id]}"
 
-    def hand_identity(self, person_track_id: int, side: str, t_ms: int, zone: Zone | None) -> Identity:
+    def hand_identity(self, person_track_id: int, side: str, t_ms: int) -> Identity:
         """The identity of one hand of a pose track, made the first time that wrist is confidently seen.
 
         The hand's origin comes from that first sighting, not from when the person was first seen: a hand that only
-        appears after shift start has unknown history (fail closed).
+        appears after shift start has unknown history (fail closed). The hand's zone is not asked: hands never come
+        out of a clean stack, so a hand first seen reaching into one is still unknown (AGENTS.md safety rule 8).
         """
         key = (person_track_id, side)
         known = self._hands.get(key)
@@ -119,7 +120,8 @@ class IdentityBook:
             raise ValueError(f"no hand side {side!r}")
 
         person = self.person_label(person_track_id)
-        identity = Identity(f"hand-{person}-{side}", "hand", origin_for(t_ms, zone, self.shift_start_ms))
+        origin = "shift_start" if t_ms <= self.shift_start_ms else "unknown"
+        identity = Identity(f"hand-{person}-{side}", "hand", origin)
         self._hands[key] = identity
         return identity
 
