@@ -1,40 +1,56 @@
-# kitchen/lstm: LSTM interaction classifier (partner)
+# kitchen/lstm: ConvLSTM / ConvGRU interaction model (partner)
 
-**Owner:** the partner (a human). Agents never edit this folder. This README tells you what the agent teams expect from it, and what they're building around it.
+**Owner:** the partner (a human). Agents never edit this folder. This README says what the agent teams expect from it, and what they're building for it.
 
-## What this component does
+## The idea
 
-It classifies a window of one entity pair's features as `transfer.contact`, `transfer.scoop`, `transfer.wipe`, `clean.wash` or `unimportant`, each with a probability. It runs on the Pi CPU, alongside the zone rules it hopes to replace.
+The model learns **interaction**, not objects. It never sees a spoon or a fork. It sees two bounding boxes and a **change mask** over time: a gradient that's brighter where pixels moved more between frames. It also gets the elapsed time between steps. For example, if a spoon touches an omelette dish and the omelette shifts five inches, the clip is just two boxes that come together, and a bright patch of change inside the dish's box right after they overlap. The model learns whether the objects **touched**, and whether **material actually moved**. Because nothing in the input says what the objects are, it can't overfit to utensil appearance.
 
-## What the agents rely on
+## Input (contract)
 
-- **The interface:** [`InteractionClassifier`](../../contracts/apis.md#interactionclassifier): `name = "lstm"`, `version`, and `classify(window) -> list[(action, probability)]`.
-- **Input:** a time-ordered window of [`interaction_features`](../../contracts/schemas/interaction_features.schema.json) rows for one pair. The schema has `additionalProperties: false`, so no allergen information can reach the model (invariant 6).
-- **Adoption rule (invariant 7):** zone rules stay the default. The LSTM becomes the primary classifier only if it beats zone rules on the frozen held-out benchmark (`kitchen/interactions/benchmark.py`, task interactions-11), recorded in an ADR that you and the interactions Manager both sign. Even then, `kitchen/interactions/classifier.py` falls back to zone rules if the LSTM fails to load, raises or times out.
-- **Budget:** inference has to fit within the 500 ms event-end → edge budget on the Pi CPU (ONNX is fine). Weights stay out of git; list them in a `data-manifest.json` and keep the files in `data/`.
-- **Contract tests:** the classifier suite in `kitchen/shared/contract_tests/` (platform-06).
+- One clip per candidate pair: a tensor `[T, C, H, W]` with channels `box_a`, `box_b`, `change` (and optionally `others`), plus `dt_ms` per step. Spec: [`interaction_clip`](../../contracts/schemas/interaction_clip.schema.json), and [Change mask and clips](../../contracts/apis.md#change-mask-and-clips).
+- Clips are built by **one shared builder** (`kitchen/shared/clips.py`) from **one shared change-mask function** (`kitchen/shared/change_mask.py`). The same code runs on live camera frames (vision and interactions) and on sim renders, so training input and live input match.
+- No object pixels, classes, kinds or allergen data, ever (invariant 6). The schema rejects extra fields.
+- You decide the geometry (H × W, T, stride, full frame or pair crop, mask gain, blur and trail) in an ADR (OQ-20). The defaults are 128 × 128, full frame, T = 16 over about 1 s, gain 4, blur 1.5 px, no trail.
 
-## What the agents give you
+## Output (contract)
 
-- **Training input:** per-pair feature windows exported by `kitchen/interactions/features.py` (interactions-12). The window spec (length, stride, padding) is agreed with you on that issue.
-- **Labels:** the labeled clip dataset format, validator and labeling tool (interactions-09, interactions-10). Splits are by recording session, and the held-out manifest is hashed and frozen, so never train on it.
-- **The benchmark:** a cost-weighted score where missed transfers and false washes cost the most (interactions-11).
-- **Optional:** synthetic feature windows from sim, for pre-training.
+[`InteractionClassifier`](../../contracts/apis.md#interactionclassifier): `name = "lstm"`, `version`, and `classify(PairWindow) -> list[(action, probability)]`. Until OQ-19 is settled, two heads map to actions:
+- P(contact) → `transfer.contact`
+- P(material moved) → `transfer.scoop`
+
+A contact with no visible movement still counts as a possible trace transfer downstream, so trace contamination isn't dismissed just because nothing visibly moved.
+
+## What the agents build for you
+
+- **Training data (sim team).** A 2D renderer draws abstract kitchens: textured backgrounds, food blobs that shift and smear when touched, and plain shapes for tools, never realistic utensils. It runs the shared change-mask and clip code, and labels each clip from the simulated world's truth: `contact`, `transferred`, `action`, `direction`. It deliberately includes hard negatives:
+  - boxes that overlap in 2D without touching;
+  - hovering;
+  - motion without contact;
+  - contact without movement;
+  - camera noise and lighting flicker;
+  - box jitter and variable frame timing.
+
+  Datasets come with leak-free splits and a datasheet (tasks sim-12 to sim-15).
+- **Real clips (interactions team).** Clips cut from real recordings with the same builder, human-labeled, for fine-tuning and for the frozen held-out benchmark (interactions-09, -10, -12).
+- **The benchmark (interactions team).** A cost-weighted comparison against zone rules on held-out real clips, where missed transfers and false washes cost the most (interactions-11).
+- **Live plumbing.** Live `PairWindow`s, with features for zone rules and a clip for you (interactions-13), and the fallback wrapper (interactions-06).
+
+## Rules you're held to
+
+- **Invariant 7.** Zone rules stay the default. The ConvLSTM becomes primary only if it beats them on the frozen real-clip benchmark, recorded in an ADR that you and the interactions Manager both sign. If it fails to load, raises or times out, `kitchen/interactions/classifier.py` falls back to zone rules.
+- **Budget.** It must fit the 500 ms event-end → edge budget on the Pi. ONNX on the CPU is fine; running on the Hailo is optional, later.
+- **Data.** Weights and datasets stay out of git, listed in a `data-manifest.json`.
+- **Contract tests.** Your classifier must pass the classifier suite in `kitchen/shared/contract_tests/`.
 
 ## Until yours lands
 
-The agents test the fallback path with `ScriptedClassifier` (platform, in `kitchen/shared/fakes/`), which returns scripted labels or fails or hangs on cue. Nothing agent-side is blocked on you.
+Agents test the fallback path with `ScriptedClassifier` (platform), which returns scripted labels or fails or hangs on cue. Nothing agent-side waits on you.
 
 ## How to hand off
 
-- Open PRs from branches named `partner/<slug>`. CI lets those touch partner folders; agent branches can't.
-- Any internal layout is fine. `model.py`, `train.py` and `infer.py` are only suggestions.
-- The interface in `contracts/apis.md` is the deal. If you need to change it, or need a new feature column (which is a contract change), tell the Director, who will run it as an RFC.
+- Open PRs from `partner/<slug>` branches. Any internal layout is fine; `model.py`, `train.py` and `infer.py` are only suggestions.
+- Changing the clip spec or the interface is a contract change. Tell the Director, who runs it as an RFC (you ACK; sim and interactions follow).
 - Agents reach you with issues labeled `owner:partner`.
 
-## Open questions that touch you
-
-- OQ-12: who records and labels real clips.
-- OQ-9: edge direction (the interactions ADR, interactions-04).
-
-See [AGENTS.md §11](../../AGENTS.md#11-open-questions).
+Open questions that touch you: OQ-19 (outputs), OQ-20 (clip geometry), OQ-12 (real clip recording), OQ-9 (edge direction). See [AGENTS.md §11](../../AGENTS.md#11-open-questions).

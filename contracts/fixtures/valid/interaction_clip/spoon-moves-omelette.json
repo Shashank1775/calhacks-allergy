@@ -1,0 +1,70 @@
+{
+  "clip_id": "sim-s7-0042",
+  "source": "sim",
+  "builder_version": "0.1.0",
+  "generator": {
+    "version": "0.1.0",
+    "seed": 7,
+    "scenario_id": "gen-s7-omelette"
+  },
+  "a_id": "tool-spoon-3",
+  "b_id": "plate-t4",
+  "t_ms": [
+    10000,
+    10033,
+    10066,
+    10099,
+    10132,
+    10165,
+    10198,
+    10231,
+    10264,
+    10297,
+    10330,
+    10363
+  ],
+  "dt_ms": [
+    0,
+    33,
+    33,
+    33,
+    33,
+    33,
+    33,
+    33,
+    33,
+    33,
+    33,
+    33
+  ],
+  "shape": {
+    "T": 12,
+    "C": 3,
+    "H": 128,
+    "W": 128
+  },
+  "channels": [
+    "box_a",
+    "box_b",
+    "change"
+  ],
+  "view": "full",
+  "change_mask": {
+    "gain": 4.0,
+    "blur_sigma_px": 1.5,
+    "decay": 0.0
+  },
+  "tensor": {
+    "file": "sim-s7-0042.npz",
+    "key": "x",
+    "dtype": "uint8"
+  },
+  "labels": {
+    "contact": true,
+    "transferred": true,
+    "action": "transfer.contact",
+    "direction": "both",
+    "contact_t_ms": 10165,
+    "label_source": "sim_truth"
+  }
+}

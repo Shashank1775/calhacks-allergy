@@ -7,6 +7,7 @@ Idempotent: every issue carries a hidden key; existing keys are skipped.
 
   python3 tools/seed_issues.py --dry-run     # validate and print the plan; touches nothing
   python3 tools/seed_issues.py               # create issues (needs bootstrap_github.sh first)
+  python3 tools/seed_issues.py --update      # also rewrite title and body of existing task and epic issues that changed
 """
 
 from __future__ import annotations
@@ -137,13 +138,22 @@ class GitHub:
     def existing_keys(self) -> dict[str, int]:
         if self.dry_run:
             return {}
-        out = self._gh("issue", "list", "--state", "all", "--limit", "2000", "--json", "number,body")
+        out = self._gh("issue", "list", "--state", "all", "--limit", "2000", "--json", "number,title,body")
         keys = {}
+        self.current: dict[int, tuple[str, str]] = {}
         for issue in json.loads(out):
             m = KEY_RE.search(issue.get("body") or "")
             if m:
                 keys[m.group(1)] = issue["number"]
+                self.current[issue["number"]] = (issue["title"], issue["body"] or "")
         return keys
+
+    def update(self, number: int, title: str, body: str) -> None:
+        if self.dry_run or self.current.get(number) == (title, body):
+            return
+        time.sleep(self.delay)
+        self._gh("issue", "edit", str(number), "--title", title, "--body-file", "-", stdin=body)
+        print(f"  updated #{number}: {title}")
 
     def create(self, title: str, body: str, labels: list[str], milestone: str | None) -> int | str:
         if self.dry_run:
@@ -168,6 +178,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--repo", help="owner/name (default: current repo)")
     ap.add_argument("--delay", type=float, default=1.0, help="seconds between issue creations")
+    ap.add_argument("--update", action="store_true", help="rewrite existing task and epic issues whose title or body changed")
     args = ap.parse_args()
 
     tasks, epics = load_backlog()
@@ -177,9 +188,11 @@ def main() -> int:
 
     print(f"tasks: {len(tasks)} across {len(TEAMS)} teams")
     for key in order:
-        if key in numbers:
-            continue
         t = tasks[key]
+        if key in numbers:
+            if args.update:
+                gh.update(numbers[key], t["title"], task_body(t, numbers))
+            continue
         labels = [f"team:{t['team']}", f"type:{t['type']}", f"prio:{t['prio']}",
                   "status:blocked" if t.get("blocked_by") else "status:ready", *t.get("flags", [])]
         numbers[key] = gh.create(t["title"], task_body(t, numbers), labels, MILESTONES[t["milestone"]])
@@ -188,13 +201,16 @@ def main() -> int:
     for team in TEAMS:
         for epic in epics.get(team, []):
             key = f"epic-{team}-{epic['milestone'].lower()}"
-            if key in numbers:
+            if key in numbers and not args.update:
                 continue
             mine = [k for k in order if tasks[k]["team"] == team and tasks[k]["milestone"] == epic["milestone"]]
             body = [f"<!-- key: {key} -->", "## Goals"] + [f"- {g}" for g in epic.get("goals", [])]
             body += ["", "## Tasks"] + ([f"- [ ] #{numbers[k]} {tasks[k]['title']}" for k in mine] or
                                         ["_To be broken down by the Manager when this milestone starts._"])
             body += ["", "— [director]"]
+            if key in numbers:
+                gh.update(numbers[key], epic["title"], "\n".join(body))
+                continue
             numbers[key] = gh.create(epic["title"], "\n".join(body),
                                      [f"team:{team}", "type:epic", "status:backlog"], MILESTONES[epic["milestone"]])
 

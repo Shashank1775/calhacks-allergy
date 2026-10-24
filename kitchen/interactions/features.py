@@ -1,11 +1,11 @@
-"""InteractionFeatures per candidate pair per frame, plus per-pair window export for LSTM training.
+"""InteractionFeatures per candidate pair per frame: what zone rules and the benchmark's rule baseline use.
 
 Owner: interactions (agents)
 Step:  Interactions (candidate pairs, features, zone rules)
 Reads: candidate pairs, observation_frame, zone kinds
-Emits: interaction_features rows; windows JSONL (one pair per window) for the partner's LSTM and sim
+Emits: interaction_features rows
 Rules: 6 no allergen fields, zone_kind never zone ID; time-based units stable across FPS
-Tasks: interactions-03, interactions-12 (window export)
+Tasks: interactions-03
 
 Not built yet.
 """

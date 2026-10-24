@@ -11,7 +11,8 @@
         "InMemoryStateClient with failure injection, and a scenario loader that loads every golden scenario",
         "Fakes for partner parts (FakeEntityStore, FakeProvenanceGraph, ScriptedClassifier) and contract test suites the partner's real code must also pass",
         "TypeScript types generated from the schemas for web/",
-        "CI lane checks: partner-owned paths, cross-team and contract-change labels; .claude/agents kept in sync with AGENTS.md"
+        "CI lane checks: partner-owned paths, cross-team and contract-change labels; .claude/agents kept in sync with AGENTS.md",
+        "The one shared change-mask function and clip builder used live, in sim and in training (platform-12)"
       ]
     },
     {
@@ -363,6 +364,35 @@
       "contracts": [],
       "out_of_scope": [
         "Editing agent prompts or AGENTS.md (Director owns their content)"
+      ]
+    },
+    {
+      "type": "task",
+      "flags": [],
+      "blocked_by": [
+        "platform-02"
+      ],
+      "key": "platform-12",
+      "milestone": "M0",
+      "prio": "p0",
+      "title": "platform: shared change-mask function and clip builder",
+      "goal": "Write kitchen/shared/change_mask.py and kitchen/shared/clips.py exactly as contracts/apis.md#change-mask-and-clips: the one implementation that vision, interactions, sim and the partner's training all use, so training clips and live clips match.",
+      "acceptance": [
+        "change_mask() matches the spec (max over RGB of |diff|/255, Gaussian blur, gain, clip to [0,1], optional decay trail): table-driven tests on synthetic frames, including a moving square and a static scene that gives an all-zero mask",
+        "build_clip() returns interaction_clip metadata that validates against the schema and a [T, C, H, W] tensor in the declared channel order and dtype: `uv run pytest kitchen/shared -k clips`",
+        "box_a and box_b channels are 1 inside each normalized box and 0 outside, for both views (full, pair); dt_ms[0] == 0 and t_ms strictly increasing, or a ValueError",
+        "No parameter or field accepts object pixels, classes, kinds or allergen data: `safety` test that inspects the signatures and validates metadata against the schema (invariant 6)",
+        "PairWindow dataclass added to kitchen/shared/models.py or interfaces.py exactly as contracts/apis.md",
+        "Deterministic: the same inputs give byte-identical tensors"
+      ],
+      "contracts": [
+        "interaction_clip",
+        "InteractionClassifier (PairWindow)"
+      ],
+      "out_of_scope": [
+        "Rendering sim frames (sim)",
+        "Reading camera frames (vision)",
+        "Choosing final clip geometry (partner, OQ-20); use the defaults"
       ]
     }
   ]

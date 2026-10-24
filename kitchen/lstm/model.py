@@ -1,10 +1,10 @@
-"""The LSTM network over a window of one pair's InteractionFeatures.
+"""The ConvLSTM or ConvGRU network over one pair's clip: two box masks and a change mask over time, with elapsed time.
 
 Owner: partner (human). Agents never edit this file.
 Step:  LSTM classifier
-Reads: interaction_features windows
-Emits: per-action probabilities
-Rules: 6 allergen-blind input only
+Reads: interaction_clip tensors and dt_ms
+Emits: per-head probabilities (contact, material moved)
+Rules: 6 no object pixels, classes or allergen data in the input
 Tasks: partner
 
 Not built yet.

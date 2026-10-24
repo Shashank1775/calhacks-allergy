@@ -23,6 +23,8 @@ Everything the other folders import to talk to each other. Every Python folder i
 | `config.py` | Settings base class: per-folder env prefix, secrets from env only, safety constants logged at startup |
 | `fakes/` | `InMemoryStateClient` + scenario loader, `FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier` |
 | `contract_tests/` | Reusable pytest suites, one per interface, parametrized over implementations |
+| `change_mask.py` | The one change-mask function (RGB frame pair → gradient mask), used by vision on real frames and by sim on rendered frames |
+| `clips.py` | The one clip builder (boxes + change masks over time → `interaction_clip` + `[T, C, H, W]` tensor), used by interactions live, by sim and by the partner's training |
 
 TypeScript types for `web/` are generated from the same schemas (task platform-07); see `web/README.md` for where they land.
 
@@ -33,7 +35,8 @@ TypeScript types for `web/` are generated from the same schemas (task platform-0
 - **Fakes pass the same contract tests as the real thing.** If a fake and a real implementation disagree, one of them has a bug; settle it on an issue.
 - **Fakes for partner parts do no domain math.** `FakeProvenanceGraph` answers from a scenario's ground truth (`expected`), never by propagating allergens, so it never duplicates the partner's work.
 - **Fail-closed hooks.** Every fake can be told to raise its `*Unavailable` error, or to hang, so every consumer can test its HOLD path ([§3 Safety rules](../../AGENTS.md#3-safety-rules), invariant 1).
-- **Invariant 6.** Generated models reject unknown fields, so an allergen field can never sneak into `InteractionFeatures`.
+- **Invariant 6.** Generated models reject unknown fields, so an allergen field can never sneak into `InteractionFeatures` or a clip. `clips.py` has no parameter for object pixels, classes or kinds.
+- **One implementation for train and live.** Nobody else writes change-mask or clip code. A test builds the same scene through the sim path and the live path and expects identical tensors.
 - **Invariant 8.** `InMemoryStateClient` and `FakeEntityStore` never delete entities and never change `first_seen_t_ms` or `origin`.
 
 ## Tests
@@ -49,7 +52,7 @@ uv run pytest kitchen/shared -m safety
 
 ## Milestones
 
-- **M0:** project setup and CI (platform-01), generated models (platform-02), interfaces and clock (platform-03), `InMemoryStateClient` and scenario loader (platform-04), partner fakes and contract suites (platform-06), TS types.
+- **M0:** project setup and CI (platform-01), generated models (platform-02), interfaces and clock (platform-03), `InMemoryStateClient` and scenario loader (platform-04), partner fakes and contract suites (platform-06), TS types, change mask and clip builder (platform-12).
 - **M1:** end-to-end harness in [`tests/e2e/`](../../tests/e2e/README.md) (platform-05). Golden scenarios in CI. The partner's real `StateClient` and graph plugged into the same suites and harness once they exist (`needs-partner`).
 - **M2–M4:** deterministic replay check, model-evaluation CI artifacts, failure-drill harness.
 

@@ -1,4 +1,4 @@
-"""Simulated kitchens with known truth: scenario corpora, error injection, and Laya's training and evaluation data.
+"""Simulated kitchens with known truth: scenario corpora, error injection, Laya data and eval, and rendered ConvLSTM training clips.
 
 Owner: sim (agents)
 Step:  simulation (offline; not part of the live pipeline)

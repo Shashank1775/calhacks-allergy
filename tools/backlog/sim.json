@@ -9,7 +9,8 @@
         "Ground-truth and observation model ADR (truth independent of the partner's graph and the verdict policy)",
         ">= 20 generated scenarios validated (M0 exit)",
         "Event and entity JSONL export for replay",
-        "2-3 proposed golden scenarios for edge cases"
+        "2-3 proposed golden scenarios for edge cases",
+        "Clip-renderer ADR with partner review, and renderer v0 with a first labeled clip set for the ConvLSTM (sim-12, sim-13)"
       ]
     },
     {
@@ -20,7 +21,8 @@
         ">= 500-scenario corpus with manifest, plus a committed observation-complete CI subset",
         "False-pass and false-hold metrics script over verdict JSONL",
         "Laya dataset generator v0 with leak-free splits; model-agnostic eval harness v0",
-        "Long-shift stress scenario (also the partner graph's performance test) and a StateClient load generator"
+        "Long-shift stress scenario (also the partner graph's performance test) and a StateClient load generator",
+        "Hard negatives, domain randomization, and a 50k-clip dataset with leak-free splits for the partner (sim-14, sim-15)"
       ]
     },
     {
@@ -38,7 +40,7 @@
         "Laya fine-tune once OQ-5 is answered",
         "Eval gate: on held-out sim, Laya never misses an allergen ExactLaya finds; also checked on real recorded graphs",
         "Model card, eval report, artifact manifest",
-        "Synthetic allergen-blind feature windows for the partner's LSTM if requested"
+        "Refresh ConvLSTM clip datasets (new hard negatives, calibrated masks) as the partner's model needs"
       ]
     },
     {
@@ -335,6 +337,107 @@
       ],
       "out_of_scope": [
         "Running the graph or verdict on it"
+      ]
+    },
+    {
+      "type": "task",
+      "flags": [],
+      "blocked_by": [],
+      "key": "sim-12",
+      "milestone": "M0",
+      "prio": "p0",
+      "title": "sim: ADR for the 2D clip renderer (with partner review)",
+      "goal": "Decide how the simulated world becomes ConvLSTM training clips: abstract rendering (no realistic utensils), how food moves and smears on contact, what contact and transferred mean, the hard negatives and their share, domain randomization, and how sim masks are calibrated against real ones.",
+      "acceptance": [
+        "ADR PR in docs/decisions/ (Director merges) covering: world kinematics in 2D; abstract RGB rendering (randomized textures, colors, sizes, plain tool shapes, food blobs); the material motion model; label definitions for contact, transferred, action, direction and contact_t_ms; the hard-negative list with target shares; domain randomization ranges; noise and flicker models; frame-timing jitter",
+        "States that clips are built only through kitchen/shared/change_mask.py and clips.py, and that labels come from world truth",
+        "Lists the clip geometry it assumes (OQ-20 defaults) and what changes if the partner picks differently",
+        "The partner is asked to review via an owner:partner issue opened by the sim Manager, linked from the ADR PR"
+      ],
+      "contracts": [
+        "interaction_clip"
+      ],
+      "out_of_scope": [
+        "Training the model (partner)"
+      ]
+    },
+    {
+      "type": "task",
+      "flags": [],
+      "blocked_by": [
+        "sim-01",
+        "platform-12"
+      ],
+      "key": "sim-13",
+      "milestone": "M0",
+      "prio": "p0",
+      "title": "sim: clip renderer v0 and a first labeled clip set",
+      "goal": "Implement kitchen/sim/render.py: world runs drawn as abstract RGB frames, passed through the shared change mask and clip builder, and labeled from world truth, so the partner can start training the ConvLSTM.",
+      "acceptance": [
+        "`uv run python -m kitchen.sim.render --seed 7 --count 1000 --out data/clips/v0/` writes npz tensors plus interaction_clip metadata that validate: test_clips_valid",
+        "Covers positives (contact with material moved, like a spoon shifting food in a dish), contact without movement, and plain no-contact pairs; label counts reported in a manifest",
+        "Uses kitchen/shared/change_mask.py and clips.py only; no local mask or clip code: test_uses_shared_builders",
+        "No utensil sprites: the shape set is plain primitives, and a test asserts it (invariant 6)",
+        "Same (generator version, seed) gives byte-identical clips: test_render_deterministic",
+        "A short README section plus three example clips rendered as GIFs in the PR description (generated files not committed)"
+      ],
+      "contracts": [
+        "interaction_clip"
+      ],
+      "out_of_scope": [
+        "Hard-negative library and randomization (sim-14)",
+        "Large datasets and splits (sim-15)"
+      ]
+    },
+    {
+      "type": "task",
+      "flags": [],
+      "blocked_by": [
+        "sim-13",
+        "sim-12"
+      ],
+      "key": "sim-14",
+      "milestone": "M1",
+      "prio": "p0",
+      "title": "sim: hard negatives and domain randomization for clips",
+      "goal": "Make it impossible for the ConvLSTM to win by learning that box overlap means transfer: add the hard negatives and randomization from the ADR.",
+      "acceptance": [
+        "Hard negatives, each labeled with labels.hard_negative: overlap_no_contact (one object passes above another), hover, motion_no_contact (nearby stirring), contact_no_motion, camera_noise, lighting_flicker: one unit test each",
+        "Randomization of textures, colors, box sizes and aspect ratios, speeds, tracker-like box jitter, missed detections, and dt_ms jitter (15 to 60 FPS equivalents): test_randomization_ranges",
+        "A per-hard-negative breakdown in the dataset manifest",
+        "Deterministic per seed with all injectors on"
+      ],
+      "contracts": [
+        "interaction_clip"
+      ],
+      "out_of_scope": [
+        "Calibrating against real masks (M2)"
+      ]
+    },
+    {
+      "type": "task",
+      "flags": [],
+      "blocked_by": [
+        "sim-14"
+      ],
+      "key": "sim-15",
+      "milestone": "M1",
+      "prio": "p1",
+      "title": "sim: ConvLSTM clip dataset with leak-free splits for the partner",
+      "goal": "Produce the training dataset the partner uses: large, balanced, with hard negatives at their ADR shares, split so nothing leaks, with a datasheet.",
+      "acceptance": [
+        "`uv run python -m kitchen.sim.clip_data --clips <dir> --out data/clips/<version>/` writes train/val/test with a manifest (counts, label balance, hard-negative shares, sha256, generator version)",
+        "At least 50,000 clips; splits by seed range and held-out kitchen layouts; test_no_clip_leakage fails if any seed or layout appears in two splits",
+        "A datasheet (markdown, in the PR and in the dataset folder) describing the world, labels, known gaps and how to regenerate",
+        "data-manifest.json entry; nothing over 1 MB committed",
+        "Handed to the partner on an owner:partner issue opened by the sim Manager"
+      ],
+      "contracts": [
+        "interaction_clip"
+      ],
+      "out_of_scope": [
+        "Training (partner)",
+        "Real clips (interactions)"
       ]
     }
   ]

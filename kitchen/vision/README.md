@@ -13,7 +13,8 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 - Track with ByteTrack, then map each track to a stable entity ID (`bin-<slot>`, `tool-<class>-<n>`, `hand-p<k>-left|right`, `plate-<n>`) with an `origin`: `shift_start`, `clean_stack` or `unknown`.
 - Give every detection a zone from the calibration file: bin slots, plating spot, wash, clean stack, pass.
 - When the cook taps "start ticket", bind the plate at the plating spot to that ticket. Serve the Pi's HTTP API.
-- Record frames to JSONL, and replay them byte for byte.
+- Compute a **change mask** for every frame with the shared function (`kitchen/shared/change_mask.py`): a single channel that's brighter where more moved since the last frame. Hand it over in-process with each `ObservationFrame`; interactions uses it to build clips for the partner's ConvLSTM.
+- Record frames to JSONL and change masks to `change.npz`, and replay both byte for byte.
 
 ## Files
 
@@ -29,7 +30,7 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 | `identity.py` | Track → entity ID and `origin`. A track lost and re-acquired always becomes a new entity |
 | `zones.py` | Zone file format, click-to-calibrate tool, point-in-polygon assignment, `StateClient.set_zones` at startup |
 | `plates.py` | "Start ticket" binding: exactly one plate at the plating spot, or refuse |
-| `record.py` | Records frames plus a session manifest; deterministic replay |
+| `record.py` | Records frames (`frames.jsonl`), change masks (`change.npz`) and a session manifest; deterministic replay |
 | `server.py` | Vision HTTP API (`/v1/plates/start`, `/stream.mjpg`, `/v1/health`), and the scripted `FakeVisionAPI` for outputs |
 | `run.py` | Main loop: source → detect + pose → track → identity + zones → `ObservationFrame` → entity store, interactions, recorder. Also the replay CLI |
 
@@ -40,7 +41,8 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 | in | Camera frames or video files | none | Pi camera, `data/` |
 | in | Shift start, existing plate bindings | [`StateClient`](../../contracts/apis.md#stateclient) | partner database |
 | out | `ObservationFrame`, every frame, in-process | [`observation_frame`](../../contracts/schemas/observation_frame.schema.json) | partner [`EntityStore.ingest`](../../contracts/apis.md#entitystore), `kitchen/interactions` |
-| out | Frame JSONL recordings and the fixture pack | `observation_frame` | interactions, sim, partner tests |
+| out | Change mask per frame, in-process | [change mask](../../contracts/apis.md#change-mask-and-clips) | `kitchen/interactions` (clips) |
+| out | Frame JSONL plus `change.npz` recordings and the fixture pack | `observation_frame`, change mask | interactions, sim (calibration), partner tests |
 | out | Zones | `StateClient.set_zones` → `zone` table | everyone |
 | out | Plate binding | `StateClient.bind_plate` → `plate_binding` table | verdict, partner graph, outputs |
 | out | Vision HTTP API | [apis.md](../../contracts/apis.md#vision-http-api-on-the-pi) | outputs (start-ticket button, overlays, gate health watch) |
@@ -83,7 +85,7 @@ The 30 FPS budget applies on the Hailo. Locally, replay runs at whatever speed t
 
 ## Milestones
 
-- **M0:** local ONNX replay → frame JSONL (vision-01). Hailo readiness spike, desk research with no device (vision-02). Zones and calibration (vision-03). Identity rules (vision-04). Fixture pack (vision-05).
+- **M0:** local ONNX replay → frame JSONL (vision-01). Change masks per frame and in recordings (vision-13). Hailo readiness spike, desk research with no device (vision-02). Zones and calibration (vision-03). Identity rules (vision-04). Fixture pack (vision-05).
 - **M1:** feed the entity store every frame (vision-06), start-ticket binding (vision-07), health and stream (vision-08), recorder (vision-09), `FakeVisionAPI` (vision-10), Hailo backend against a mock runtime (vision-11), Hailo deploy bundle and parity script (vision-12). Nothing needs the device.
 - **M2:** connect the Hailo and upload the bundle. Owner runs the parity check and confirms ≥ 30 FPS (`hardware`). `picamera2` source. Calibration on the real counter. A recorded live session replays deterministically. A stale health endpoint drives the gate to `fault`.
 - **M3:** measure the ID-switch rate on owner recordings and reduce it. Fine-tune the detector only if COCO tools and bowls are too weak from overhead.

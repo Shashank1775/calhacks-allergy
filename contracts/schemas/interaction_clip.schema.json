@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interaction_clip.schema.json",
+  "title": "InteractionClip",
+  "description": "Metadata for one candidate pair's input to the learned interaction classifier (ConvLSTM / ConvGRU). The tensor itself is a file (npz, key `x`, shape [T, C, H, W]) next to this metadata. Channels are box masks and a change mask only: no pixels of the objects, no object class or kind, no allergen information (invariant 6), so the model learns interaction, not appearance. Built by kitchen/shared/clips.py from live data (interactions) and from rendered sim worlds (sim), so training and live input match. Consumer: partner LSTM. Labels are present only on training and benchmark clips.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "clip_id",
+    "source",
+    "builder_version",
+    "a_id",
+    "b_id",
+    "t_ms",
+    "dt_ms",
+    "shape",
+    "channels",
+    "view",
+    "change_mask",
+    "tensor"
+  ],
+  "properties": {
+    "clip_id": {
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "sim",
+        "live",
+        "recording"
+      ]
+    },
+    "builder_version": {
+      "type": "string",
+      "description": "Version of kitchen/shared/clips.py that built this clip."
+    },
+    "generator": {
+      "description": "Sim only: which world produced it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "seed"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "scenario_id": {
+          "type": "string"
+        }
+      }
+    },
+    "a_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "b_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "t_ms": {
+      "description": "Timestamp of each step, strictly increasing.",
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/t_ms"
+      },
+      "minItems": 2
+    },
+    "dt_ms": {
+      "description": "Elapsed time since the previous step (first entry 0). Given to the model so it works at any frame rate.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "minItems": 2
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "T",
+        "C",
+        "H",
+        "W"
+      ],
+      "properties": {
+        "T": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "C": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "H": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "W": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "channels": {
+      "description": "Channel order in the tensor. box_a and box_b are 1 inside each entity's box; change is the change mask; others is the union of every other entity's box (optional).",
+      "type": "array",
+      "items": {
+        "enum": [
+          "box_a",
+          "box_b",
+          "change",
+          "others"
+        ]
+      },
+      "minItems": 3,
+      "uniqueItems": true
+    },
+    "view": {
+      "description": "full: the whole frame, letterboxed to H x W (default). pair: a crop around the pair's union box.",
+      "enum": [
+        "full",
+        "pair"
+      ]
+    },
+    "change_mask": {
+      "description": "Parameters of the change-mask function (contracts/apis.md#change-mask). Same function live and in sim.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gain",
+        "blur_sigma_px",
+        "decay"
+      ],
+      "properties": {
+        "gain": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "blur_sigma_px": {
+          "type": "number",
+          "minimum": 0
+        },
+        "decay": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 1
+        }
+      }
+    },
+    "tensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "key",
+        "dtype"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "key": {
+          "const": "x"
+        },
+        "dtype": {
+          "enum": [
+            "uint8",
+            "float16",
+            "float32"
+          ]
+        }
+      }
+    },
+    "labels": {
+      "description": "Training and benchmark clips only. From sim world truth or human labels. No allergen fields.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contact",
+        "transferred",
+        "action"
+      ],
+      "properties": {
+        "contact": {
+          "type": "boolean",
+          "description": "The two objects physically touched (not just overlapping boxes in 2D)."
+        },
+        "transferred": {
+          "type": "boolean",
+          "description": "Material actually moved between them (e.g. food displaced, scooped or smeared)."
+        },
+        "action": {
+          "$ref": "common.schema.json#/$defs/action"
+        },
+        "direction": {
+          "enum": [
+            "a_to_b",
+            "b_to_a",
+            "both"
+          ]
+        },
+        "contact_t_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "label_source": {
+          "enum": [
+            "sim_truth",
+            "human"
+          ]
+        },
+        "hard_negative": {
+          "enum": [
+            "overlap_no_contact",
+            "hover",
+            "motion_no_contact",
+            "contact_no_motion",
+            "camera_noise",
+            "lighting_flicker"
+          ],
+          "description": "Sim only: which hard-negative pattern this clip was built to test."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "sim"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "generator"
+        ]
+      }
+    }
+  ]
+}

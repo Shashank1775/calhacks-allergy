@@ -7,7 +7,8 @@ Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`
 | [`StateClient`](#stateclient) | **partner** (`database/` + client) | `InMemoryStateClient` | platform |
 | [`EntityStore`](#entitystore) | **partner** (`kitchen/entities/`) | `FakeEntityStore` | platform |
 | [`ProvenanceGraph`](#provenancegraph) | **partner** (`kitchen/graph/`) | `FakeProvenanceGraph` | platform |
-| [`InteractionClassifier`](#interactionclassifier) | interactions (zone rules), **partner** (LSTM in `kitchen/lstm/`) | `ScriptedClassifier` | platform |
+| [`InteractionClassifier`](#interactionclassifier) | interactions (zone rules), **partner** (ConvLSTM / ConvGRU in `kitchen/lstm/`) | `ScriptedClassifier` | platform |
+| [Change mask and clip builder](#change-mask-and-clips) | platform (`kitchen/shared/change_mask.py`, `kitchen/shared/clips.py`) | none needed: pure functions | platform |
 | [`JevClient`](#jevclient) | orders | `FakeJev` | orders |
 | [`LayaClient`](#layaclient) | verdict (adapter), sim (the model) | `ExactLaya`, `AdversarialLaya` | verdict |
 | Verdict feed (`verdict`, `verdict_step`, `entity_risk`, `mistake_pattern` rows) | verdict, partner graph | `ScriptedVerdictSource` (replays scenario verdicts into `InMemoryStateClient`) | verdict |
@@ -102,17 +103,59 @@ class ProvenanceGraph(Protocol):
 
 ## InteractionClassifier
 
-Real: **interactions** (zone rules, always available) and **partner** (LSTM, adopted only if it beats zone rules on held-out clips, invariant 7). Fake: `ScriptedClassifier` (platform): returns scripted labels, or errors or hangs on cue.
+Real: **interactions** (zone rules, always available) and **partner** (a ConvLSTM or ConvGRU, adopted only if it beats zone rules on held-out clips, invariant 7). Fake: `ScriptedClassifier` (platform): returns scripted labels, or errors or hangs on cue.
 
 ```python
+@dataclass(frozen=True)
+class PairWindow:
+    a_id: str
+    b_id: str
+    features: Sequence[InteractionFeatures]   # vector features per step: what zone rules use
+    clip: InteractionClip                     # metadata (schema interaction_clip) ...
+    tensor: np.ndarray                        # ... and its [T, C, H, W] tensor: what the ConvLSTM uses
+
 class InteractionClassifier(Protocol):
     name: str      # "zone_rules" | "lstm"
     version: str
-    def classify(self, window: Sequence[InteractionFeatures]) -> list[tuple[Action, float]]: ...
+    def classify(self, window: PairWindow) -> list[tuple[Action, float]]: ...
 ```
 
-- Input is allergen-blind by construction (invariant 6).
+- Both inputs are allergen-blind by construction. The clip is also **object-blind**: box masks and motion only, no object pixels, classes or kinds (invariant 6).
+- The ConvLSTM's two judgments map onto actions until OQ-19 is settled: P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`. A contact with no visible movement is still a possible trace transfer; the graph and verdict decide how much it counts (OQ-8).
 - `kitchen/interactions/classifier.py` wraps both: it uses the LSTM only if adopted and healthy, and falls back to zone rules otherwise.
+
+## Change mask and clips
+
+Owner: **platform** (`kitchen/shared/`). Used by **vision** (real frames, live), **sim** (rendered frames), **interactions** (live pair windows) and the **partner** (training). One implementation, so the model sees the same thing in training and live.
+
+### Change mask
+
+Per frame, a single channel that is bright where pixels changed since the previous frame: a gradient where brighter means more movement.
+
+```python
+def change_mask(prev_rgb: np.ndarray, rgb: np.ndarray, prev_mask: np.ndarray | None, *,
+                gain: float, blur_sigma_px: float, decay: float) -> np.ndarray: ...
+    # both frames letterboxed to the same H x W first
+    # d = max over R,G,B of |rgb - prev_rgb| / 255
+    # m = clip(gain * gaussian_blur(d, blur_sigma_px), 0, 1)
+    # if decay > 0: m = max(m, decay * prev_mask)   # optional motion trail
+```
+
+- Vision computes it for every real frame and hands it over in-process alongside each `ObservationFrame`. Recordings store it next to the frame JSONL as `change.npz` (uint8, downscaled).
+- Sim renders abstract RGB frames (textured background, food blobs that move and smear, plain shapes for tools: never realistic spoons or forks), then runs the **same function**, so its masks have the same character as real ones.
+- Parameters (`gain`, `blur_sigma_px`, `decay`) are recorded in every clip's metadata.
+
+### Clip builder
+
+```python
+def build_clip(a_id: str, b_id: str, steps: Sequence[ClipStep], *, H: int = 128, W: int = 128, view: str = "full",
+               channels: Sequence[str] = ("box_a", "box_b", "change")) -> tuple[InteractionClip, np.ndarray]: ...
+    # ClipStep = (t_ms, box_a, box_b, other_boxes, change_mask)
+    # returns metadata (schema interaction_clip) and a [T, C, H, W] tensor
+```
+
+- `box_a` and `box_b` channels are 1 inside each entity's box (normalized boxes drawn at H x W). `change` is the change mask. `dt_ms` carries elapsed time per step.
+- No object class, kind or appearance goes in.
 
 ## JevClient
 

@@ -9,7 +9,8 @@
         "Hailo readiness decided without the device: model variants, HEF source, versions (vision-02 ADR)",
         "Zone calibration (bin slots, plating spot, wash, clean stack, pass) with a click tool",
         "Identity rules with safety tests: re-acquired tracks always get new IDs, origin set correctly (invariant 8)",
-        "Recorded frame JSONL fixture pack that interactions, sim and the partner test against"
+        "Recorded frame JSONL fixture pack that interactions, sim and the partner test against",
+        "Per-frame change masks, live and in recordings, from the shared function (vision-13)"
       ]
     },
     {
@@ -391,6 +392,34 @@
       "out_of_scope": [
         "Running the Hailo compiler or device (owner, once connected)",
         "Fine-tuning weights"
+      ]
+    },
+    {
+      "type": "task",
+      "flags": [],
+      "blocked_by": [
+        "vision-01",
+        "platform-12"
+      ],
+      "key": "vision-13",
+      "milestone": "M0",
+      "prio": "p1",
+      "title": "vision: per-frame change mask in the loop and in recordings",
+      "goal": "Compute a change mask for every frame with kitchen/shared/change_mask.py, hand it over in-process with each ObservationFrame, and record it as change.npz next to frames.jsonl, so interactions can build clips for the partner's ConvLSTM from live and recorded video.",
+      "acceptance": [
+        "`uv run python -m kitchen.vision.run --video <file> --out <dir>` writes frames.jsonl and change.npz (uint8, downscaled to the clip H x W, one mask per frame, keyed by t_ms): test_change_sidecar",
+        "Uses only kitchen/shared/change_mask.py with parameters from config, recorded in the session manifest; no local mask code: test_uses_shared_mask",
+        "A static stretch of the sample clip gives near-zero masks and a moving hand gives a bright region over the hand: test_mask_sanity",
+        "Replay returns the same masks byte for byte: test_mask_replay",
+        "Adds less than 5 ms per frame on a laptop at 128 x 128, reported in the PR"
+      ],
+      "contracts": [
+        "observation_frame",
+        "change mask (contracts/apis.md#change-mask-and-clips)"
+      ],
+      "out_of_scope": [
+        "Building clips (interactions)",
+        "Tuning mask parameters beyond the OQ-20 defaults"
       ]
     }
   ]
