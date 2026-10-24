@@ -2,7 +2,7 @@
 
 The running list for the web screens. When something lands, move it to **Built**. When you draw something that isn't wired up, wrap it in `<ToBeImplemented>` and add a row under **To be implemented**.
 
-Last updated: 2026-10-23.
+Last updated: 2026-10-24.
 
 ## Screens
 
@@ -18,6 +18,7 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 
 - **Scaffold** per the [web framework decision](../docs/decisions/web-framework.md): Vite 8, React 19, TypeScript, plain CSS, no router. Node 24 pinned in `.nvmrc` and `engines`.
 - **State.** `StateSource` interface; `FakeStateSource` replays any golden scenario; `state_source_for()` returns no source for anything but an exact known value (fail closed); `useTableRows()` and `useFeedStatus()`.
+- **Local runner source.** `WEB_STATE_SOURCE=local` with an `http(s)` `WEB_STATE_URL`: `LocalStateSource` polls `tools/run_local.py`'s `GET /state` every 500 ms (one poll at a time, 2 s timeout) and shows REPLAY. Any failed poll (network error, timeout, error status, a body that isn't JSON or is missing a table) means FEED LOST, keeping the last rows, until a good poll comes back.
 - **One badge function.** `plate_badge()` is the only path to PASS: live feed, latest verdict, latest ticket revision. Otherwise HOLD, RECHECKING, FEED LOST or NO VERDICT YET.
 - **Banner.** FEED LOST with no source or a dropped feed, CONNECTING, and REPLAY whenever the data is a scenario.
 - **API clients** for orders and vision that never throw: every failure comes back as a code the screen shows.
@@ -25,7 +26,7 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 - **Tablet: ticket entry.** Send stays disabled until the draft is `sendable` and every question has an answer; a `409 unanswered_questions` keeps the questions up; `409 number_in_use` says the table already has a ticket; `503 laya_unavailable` shows the error and keeps the note, never a guess.
 - **Expo.** Ticket chits with "start plate" and a distinct message for each vision 409; plate cards with stamps; held plates show every reason, the flagged allergens and the chain with per-step confidence.
 - **Home.** Video picker with local preview and a REPLAY marker; live camera card stamped 86'd.
-- **Tests.** 54 Vitest tests; the ones guarding a safety rule are named `safety: …`.
+- **Tests.** 83 Vitest tests; the ones guarding a safety rule are named `safety: …`.
 
 ## To be implemented
 
@@ -65,4 +66,5 @@ Each of these is drawn on screen with a "To be implemented" marker.
 
 - `FakeStateSource` builds verdicts from each scenario's `expected` entries, so confidence is 1 or 0, flagged probabilities are 1, and `versions.policy` is `fake-replay`. Real numbers arrive with the real database.
 - A plate with no verdict yet shows NO VERDICT YET. The web framework decision only lists HOLD, RECHECKING and FEED LOST; confirm the wording.
+- `LocalStateSource` checks the snapshot's outline (a scenario id and an array for each table), not each row. `plate_badge()` still shows PASS only for a verdict whose decision is pass for the ticket's current revision.
 - The production bundle carries the MSW browser chunk, though it only loads when `WEB_MOCK_API=1` in a dev build.
