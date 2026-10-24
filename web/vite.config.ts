@@ -16,6 +16,7 @@ export default defineConfig({
     env: {
       WEB_ORDERS_URL: "http://orders.test",
       WEB_VISION_URL: "http://vision.test",
+      WEB_SUMMARY_URL: "http://summary.test",
     },
   },
 });

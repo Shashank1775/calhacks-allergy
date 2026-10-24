@@ -7,6 +7,7 @@ interface ImportMetaEnv {
   readonly WEB_STATE_URL?: string;
   readonly WEB_ORDERS_URL?: string;
   readonly WEB_VISION_URL?: string;
+  readonly WEB_SUMMARY_URL?: string;
   readonly WEB_MOCK_API?: string;
 }
 

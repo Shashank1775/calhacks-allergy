@@ -7,12 +7,13 @@ What people see. Servers enter tickets on the tablet; expo sees which plates are
 ## What happens here
 
 - **Tablet (`/tablet`):** the server types a note (or speaks it), sees the parsed constraints, answers one-tap questions, and sends. Send stays disabled until the draft is `sendable`.
+- **Video summary (`/summary`):** upload a recorded video to the summary service and read what was on the counter, every touch, and what each tool, hand and plate could carry. It's about a recording, never the live kitchen or a verdict, and says so in a banner that's always on screen.
 - **Expo board (`/expo`):** tickets, plates and verdicts. For each held plate it shows reasons, flagged allergens and the chain step by step with per-step confidence. A "start plate" button per ticket calls vision's `POST /plates/start`. Camera overlays color entities by allergen risk.
 - We never decide anything and write no database tables. We change state only through the orders and vision HTTP APIs.
 
 ## Layout
 
-Per the [web framework decision](../docs/decisions/web-framework.md): one React + TypeScript app on Vite, Node 24 LTS, with the paths `/tablet`, `/expo` and `/`, and no router library. The look is the "ticket rail": order chits on a steel rail, rubber stamps for verdicts. What's built and what's left is tracked in [SCOPE.md](SCOPE.md).
+Per the [web framework decision](../docs/decisions/web-framework.md): one React + TypeScript app on Vite, Node 24 LTS, with the paths `/tablet`, `/expo`, `/summary` and `/`, and no router library. The look is the "ticket rail": order chits on a steel rail, rubber stamps for verdicts. What's built and what's left is tracked in [SCOPE.md](SCOPE.md).
 
 ```
 web/
@@ -21,18 +22,19 @@ web/
   src/
     main.tsx   creates the state source from WEB_STATE_SOURCE (scenario | local | spacetime;
                missing or unknown: no source, every screen shows FEED LOST) and mounts the app
-    app.tsx    screen_for_path(): /tablet, /expo, any other path the / home page
+    app.tsx    screen_for_path(): /tablet, /expo, /summary, any other path the / home page
     badge.ts   plate_badge(): the only way a plate shows PASS
     styles.css shared rules, including 44 px touch targets
     state/     StateSource interface; FakeStateSource (replays a scenario); LocalStateSource (polls the local runner);
                SpacetimeSource later (partner's TS bindings)
-    api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from kitchen/orders/fakes/http/
-               (orders) and the vision API table
+    api/       clients for the Orders, Vision and video summary HTTP APIs; MSW mocks (api/mocks/) built from
+               kitchen/orders/fakes/http/ (orders), the vision API table and the summary API (#198)
     types/     TEMPORARY.ts: hand-written contract types until platform generates src/generated/ (never hand-edit that)
     components/ chit, rail, stamp, banner, "to be implemented" marker
     home/      the / page: video source, live camera source (to be implemented)
     tablet/    ticket entry, one-tap questions, send gate, changing a sent ticket
     expo/      the gate panel, tickets, plates, hold reasons and chains, start-plate button, the live camera
+    summary/   upload a recorded video, poll its job, show the scene summary
 ```
 
 ## Run it
@@ -83,6 +85,12 @@ uv run python tools/run_local.py --live --webcam 0 --zones zones.json
 
 **With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop.
 
+**Video summary**: add `WEB_SUMMARY_URL=http://localhost:8003` and start the summary service in another terminal, then open http://localhost:5173/summary. The service must list the web origin in `SUMMARY_CORS_ORIGINS` (default `http://localhost:5173`). With `WEB_MOCK_API=1` the page uses a mock service instead, and without either it says the service isn't set up.
+
+```bash
+uv run python tools/video_summary.py --serve
+```
+
 With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION_URL`. Each service must list the web origin in its CORS setting (`ORDERS_CORS_ORIGINS`, `VISION_CORS_ORIGINS`), for example `http://localhost:5173`, or `http://<laptop-ip>:5173` for the iPad.
 
 ## In and out
@@ -91,6 +99,7 @@ With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION
 |---|---|---|---|
 | Out/In | Parse, answers, send, amend, transcribe | [Orders HTTP API](../contracts/apis.md#orders-http-api) | orders |
 | Out/In | Start plate, camera stream, health | [Vision HTTP API](../contracts/apis.md#vision-http-api-on-the-pi) | vision |
+| Out/In | Upload a recorded video, poll its scene summary | The summary service's API (#197, #198) | `tools/video_summary.py --serve` |
 | In | `ticket`, `bin_profile`, `entity`, `entity_state`, `plate_binding`, `verdict` | [state-tables.md](../contracts/state-tables.md) via SpacetimeDB TS bindings | partner's `database/` (bindings), written by orders, vision, verdict and the partner |
 | Uses | Allergen choices | [`allergen_units.json`](../contracts/allergen_units.json) | contracts (never hardcoded) |
 
