@@ -6,7 +6,7 @@ Reads: contracts/scenarios/*.json; each step's public entry point: the Orders HT
        VerdictService (kitchen.verdict.service), GateService (kitchen.gate.service), and the published fakes
        (FakeStateClient, FakeProvenanceGraph, FakeClock, FakeLayaParser, FakeTranscriber, FakeLayaCheck, FakeGate,
        FakeSpeaker)
-Emits: the `kitchen` fixture, a factory for Kitchen
+Emits: the `kitchen` fixture, a factory for Kitchen; Kitchen itself, which tools/run_local.py serves on a live clock
 Rules: the harness never reaches into a team's internals and never computes a verdict itself: it plays the scenario
        and reads what the system wrote (verdict rows, gate states, spoken lines)
 
@@ -51,6 +51,7 @@ class Kitchen:
     gate: FakeGate = field(default_factory=lambda: FakeGate(quiet=True))
     speaker: FakeSpeaker = field(default_factory=lambda: FakeSpeaker(quiet=True))
     gate_log: list = field(default_factory=list)  # (t_ms, gate state) after every tick
+    cors_origins: list = field(default_factory=list)  # browser origins the Orders API allows (tools/run_local.py)
 
     def __post_init__(self):
         self.state.set_zones([PASS_ZONE])
@@ -58,7 +59,8 @@ class Kitchen:
         self.verdict_service.start()
         self.gate_loop = GateService(self.state, self.gate, self.speaker, self.clock, read_health=self.clock.now_ms)
         desk = TicketDesk(self.parser, self.state, self.clock)
-        self.orders = TestClient(create_app(desk, FakeTranscriber(), cors_origins=[]))
+        self.app = create_app(desk, FakeTranscriber(), cors_origins=self.cors_origins)  # tools/run_local.py serves it
+        self.orders = TestClient(self.app)
 
     def at(self, t_ms: int) -> None:
         """Move the shift's clock to t_ms."""

@@ -19,12 +19,13 @@ web/
   package.json, vite.config.ts   app, build and test (vitest)
   SCOPE.md     what's built, what's drawn but not wired up, what's not started
   src/
-    main.tsx   creates the state source from WEB_STATE_SOURCE (scenario | spacetime;
+    main.tsx   creates the state source from WEB_STATE_SOURCE (scenario | local | spacetime;
                missing or unknown: no source, every screen shows FEED LOST) and mounts the app
     app.tsx    screen_for_path(): /tablet, /expo, any other path the / home page
     badge.ts   plate_badge(): the only way a plate shows PASS
     styles.css shared rules, including 44 px touch targets
-    state/     StateSource interface; FakeStateSource (replays a scenario); SpacetimeSource later (partner's TS bindings)
+    state/     StateSource interface; FakeStateSource (replays a scenario); LocalStateSource (polls the local runner);
+               SpacetimeSource later (partner's TS bindings)
     api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from kitchen/orders/fakes/http/
                (orders) and the vision API table
     types/     TEMPORARY.ts: hand-written contract types until platform generates src/generated/ (never hand-edit that)
@@ -54,6 +55,26 @@ WEB_MOCK_API=1
 npm --prefix web run dev
 ```
 
+**Against the local runner** (`tools/run_local.py`: orders, verdict and gate on fakes, replaying one golden scenario), put this in `web/.env.local`, with no `WEB_MOCK_API`:
+
+```
+WEB_STATE_SOURCE=local
+WEB_STATE_URL=http://localhost:8001
+WEB_ORDERS_URL=http://localhost:8001
+```
+
+Start the runner in one terminal and the web app in another, then open http://localhost:5173/expo:
+
+```bash
+uv run python tools/run_local.py knife-carries-peanut-to-plate
+```
+
+```bash
+npm --prefix web run dev
+```
+
+The screens poll the runner's `GET /state` twice a second and show REPLAY, since it's a scenario, not the kitchen. If the runner stops or answers badly, every screen shows FEED LOST until it's back. `WEB_STATE_URL` must be an `http://` or `https://` address, or there's no source.
+
 With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION_URL`. Each service must list the web origin in its CORS setting (`ORDERS_CORS_ORIGINS`, `VISION_CORS_ORIGINS`), for example `http://localhost:5173`, or `http://<laptop-ip>:5173` for the iPad.
 
 ## In and out
@@ -65,7 +86,7 @@ With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION
 | In | `ticket`, `bin_profile`, `entity`, `entity_state`, `plate_binding`, `verdict` | [state-tables.md](../contracts/state-tables.md) via SpacetimeDB TS bindings | partner's `database/` (bindings), written by orders, vision, verdict and the partner |
 | Uses | Allergen choices | [`allergen_units.json`](../contracts/allergen_units.json) | contracts (never hardcoded) |
 
-**Data source.** Every screen reads through one `StateSource`, picked at build time by `WEB_STATE_SOURCE`, never by the URL. Until the partner's database ships its generated TypeScript bindings, `FakeStateSource` replays any `contracts/scenarios/*.json` in the browser. The SpacetimeDB source plugs in behind the same interface (`needs-partner`).
+**Data source.** Every screen reads through one `StateSource`, picked at build time by `WEB_STATE_SOURCE`, never by the URL: `scenario` (`FakeStateSource` replays any `contracts/scenarios/*.json` in the browser) or `local` (`LocalStateSource` polls the local runner's `GET /state` at `WEB_STATE_URL`). The SpacetimeDB source plugs in behind the same interface once the partner's database ships its generated TypeScript bindings (`needs-partner`).
 
 ## Safety rules
 

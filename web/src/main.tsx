@@ -1,7 +1,8 @@
 /**
  * Creates the state source from build settings and mounts the app.
- * Rules: fail closed. A missing or unknown WEB_STATE_SOURCE means no source,
- * and every screen shows FEED LOST.
+ * Rules: fail closed. A missing or unknown WEB_STATE_SOURCE (or, for local,
+ * a missing or malformed WEB_STATE_URL) means no source, and every screen
+ * shows FEED LOST.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -14,13 +15,14 @@ import "./styles.css";
 async function main() {
   const source_name = import.meta.env.WEB_STATE_SOURCE;
   const scenario_name = import.meta.env.WEB_SCENARIO;
-  const source = state_source_for(source_name, scenario_name);
+  const state_url = import.meta.env.WEB_STATE_URL;
+  const source = state_source_for(source_name, scenario_name, state_url);
 
   if (source) {
     source.start();
   } else {
     console.error(
-      `No state source for WEB_STATE_SOURCE="${source_name}" WEB_SCENARIO="${scenario_name}". Every screen shows FEED LOST.`,
+      `No state source for WEB_STATE_SOURCE="${source_name}" WEB_SCENARIO="${scenario_name}" WEB_STATE_URL="${state_url}". Every screen shows FEED LOST.`,
     );
   }
 
