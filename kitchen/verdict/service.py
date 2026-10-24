@@ -11,7 +11,7 @@ Rules: fail closed: StateUnavailable, GraphUnavailable, LayaCheckUnavailable or 
 Triggers are table changes (contracts/apis.md): a new entity_state row that moves a plate into a zone of kind "pass"
 judges it with trigger plate_at_pass, and a ticket update to a higher revision rejudges every plate that already has
 a verdict for that ticket, with trigger ticket_amended. Every judgment reads the full history again; nothing is carried
-over from an earlier verdict.
+over from an earlier verdict. Laya's plate check reads the graph's subgraph for the plate and can only add holds.
 """
 
 import logging
@@ -49,9 +49,10 @@ class VerdictService:
     while the database was down still lands. A service loop should also call retry() now and then.
     """
 
-    def __init__(self, state, graph, clock, settings: VerdictSettings | None = None):
+    def __init__(self, state, graph, plate_check, clock, settings: VerdictSettings | None = None):
         self.state = state
         self.graph = graph
+        self.plate_check = plate_check
         self.clock = clock
         self.settings = settings or VerdictSettings()
         self.pending: list[dict] = []
@@ -128,8 +129,10 @@ class VerdictService:
             ticket=inputs["ticket"],
             reach=inputs["reach"],
             unknown_ancestors=inputs["unknown_ancestors"],
+            plate_check=inputs["plate_check"],
             problems=inputs["problems"],
             graph=inputs["graph"],
+            laya=inputs["laya"],
         )
         if verdict["decision"] == "hold":
             logger.warning("HOLD %s for %s: %s", plate_id, verdict["ticket_id"], verdict["reasons"])
@@ -147,10 +150,12 @@ class VerdictService:
             "unknown_ancestors": None,
             "problems": [],
             "graph": None,
+            "plate_check": None,
+            "laya": None,
         }
 
     def read_inputs(self, plate_id: str, now: int) -> dict:
-        """The binding, ticket, plate health and the graph's answers for one plate, as decide()'s inputs.
+        """The binding, ticket, plate health, the graph's answers and Laya's plate check, as decide()'s inputs.
 
         Fail closed: anything that can't be read stays None or adds a problem, and any exception adds an error.
         """
@@ -158,13 +163,16 @@ class VerdictService:
         try:
             binding = self.state.get_plate_binding(plate_id)
             if binding is None:
-                # Nothing to ask the graph: the missing binding alone holds the plate.
+                # Nothing to ask the graph or Laya: the missing binding alone holds the plate.
                 inputs["problems"].append({"code": "missing_input", "detail": f"{plate_id} is not bound to a ticket"})
-                inputs["reach"], inputs["unknown_ancestors"] = [], []
+                inputs["reach"], inputs["unknown_ancestors"], inputs["plate_check"] = [], [], {}
                 return inputs
             inputs["ticket_id"] = binding.ticket_id
             inputs["ticket"] = self.state.get_ticket(binding.ticket_id)
-            inputs["revision"] = inputs["ticket"]["revision"] if inputs["ticket"] else 0
+            if inputs["ticket"] is None:
+                inputs["plate_check"] = {}  # nothing forbidden to check: the missing ticket already holds
+            else:
+                inputs["revision"] = inputs["ticket"]["revision"]
 
             plate = self.state.get_entity(plate_id)
             if plate is None:
@@ -178,10 +186,26 @@ class VerdictService:
             inputs["graph"] = self.graph.version()
             inputs["reach"] = self.graph.reach(plate_id, now)
             inputs["unknown_ancestors"] = self.graph.unknown_ancestors(plate_id, now)
+            if inputs["ticket"] is not None:
+                inputs["plate_check"] = self.read_plate_check(plate_id, now, inputs["ticket"]["forbidden"])
+                if inputs["plate_check"] is not None:
+                    inputs["laya"] = getattr(self.plate_check, "version", None)  # only a checkpoint that answered
         except Exception as error:  # fail closed: StateUnavailable, GraphUnavailable or anything else holds
             logger.exception("reading verdict inputs for %s failed, holding", plate_id)
             inputs["problems"].append(error_reason(error))
         return inputs
+
+    def read_plate_check(self, plate_id: str, now: int, forbidden: list[str]) -> dict | None:
+        """Laya's P(reached) per forbidden allergen from the plate's subgraph, or None if it couldn't answer.
+
+        Asked separately from the graph's other answers, so a Laya failure costs only Laya's input: decide() then
+        holds with laya_unavailable. Without a ticket there's nothing to check, and the missing ticket already holds.
+        """
+        try:
+            return self.plate_check.check(self.graph.subgraph(plate_id, now), forbidden)
+        except Exception:  # fail closed: LayaCheckUnavailable, GraphUnavailable or anything else
+            logger.exception("Laya's plate check failed for %s, holding", plate_id)
+            return None
 
     def flush(self) -> None:
         """Write pending verdicts in order. While the database is down they stay pending for the next flush().

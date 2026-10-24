@@ -7,6 +7,7 @@ Emits: nothing
 Rules: fail closed, plain-code verdict, allergens not contacts and known-clean source (safety tests)
 """
 
+import inspect
 import json
 from pathlib import Path
 
@@ -16,7 +17,14 @@ from hypothesis import strategies as st
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from kitchen.verdict.policy import clean_confidence, decide, reach_probabilities, ticket_problem
+from kitchen.verdict.laya_check import laya_hold_reasons
+from kitchen.verdict.policy import (
+    clean_confidence,
+    decide,
+    reach_probabilities,
+    ticket_problem,
+    usable_plate_check,
+)
 
 CONTRACTS = Path(__file__).resolve().parents[3] / "contracts"
 FIXTURES = CONTRACTS / "fixtures" / "valid"
@@ -47,8 +55,14 @@ def reach(**probabilities):
     return [{"allergen_unit_id": unit, "probability": p, "chain": []} for unit, p in probabilities.items()]
 
 
-def run(ticket=TICKET, reach=(), unknown_ancestors=(), problems=(), graph="0.1.0"):
-    """decide() with the fixture's IDs; None for ticket, reach or unknown_ancestors means it couldn't be read."""
+CLEAN = "clean"  # run()'s default plate check: Laya answers 0 for every forbidden allergen
+
+
+def run(ticket=TICKET, reach=(), unknown_ancestors=(), problems=(), graph="0.1.0", plate_check=CLEAN, laya="plate-v1"):
+    """decide() with the fixture's IDs; None for ticket, reach, unknown_ancestors or plate_check means unreadable."""
+    if plate_check == CLEAN:
+        forbidden = ticket.get("forbidden") if isinstance(ticket, dict) else None
+        plate_check = {unit: 0.0 for unit in forbidden if isinstance(unit, str)} if isinstance(forbidden, list) else {}
     return decide(
         verdict_id="v-t7-1",
         plate_id="plate-t7",
@@ -58,8 +72,10 @@ def run(ticket=TICKET, reach=(), unknown_ancestors=(), problems=(), graph="0.1.0
         ticket=ticket,
         reach=None if reach is None else list(reach),
         unknown_ancestors=None if unknown_ancestors is None else list(unknown_ancestors),
+        plate_check=plate_check,
         problems=problems,
         graph=graph,
+        laya=laya,
     )
 
 
@@ -112,8 +128,20 @@ def test_fixture_hold_is_reproduced():
 
 
 def test_versions_are_recorded():
-    assert run()["versions"] == {"policy": "0.1.1", "graph": "0.1.0"}
+    assert run()["versions"] == {"policy": "0.2.0", "graph": "0.1.0", "laya": "plate-v1"}
     assert run(graph=None)["versions"]["graph"] == "unavailable"
+    assert "laya" not in run(laya=None)["versions"]
+    assert "laya" not in run(plate_check=None)["versions"]  # a checkpoint that didn't answer judged nothing
+    assert "laya" not in run(plate_check={"peanut": float("nan")})["versions"]
+
+
+@pytest.mark.safety
+def test_plate_check_has_no_default():
+    """Fail closed: a caller can't skip Laya's check by leaving the argument out."""
+    assert inspect.signature(decide).parameters["plate_check"].default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        decide(verdict_id="v", plate_id="plate-t7", trigger="plate_at_pass", decided_t_ms=0, ticket_id="t7",
+               ticket=TICKET, reach=[], unknown_ancestors=[])  # fmt: skip
 
 
 def test_same_inputs_give_byte_identical_json():
@@ -268,3 +296,82 @@ def test_every_verdict_is_schema_valid_whatever_the_ticket_holds(field, value, r
     assert not list(VALIDATOR.iter_errors(verdict))
     if verdict["decision"] == "pass":
         assert ticket_problem(bad) is None
+
+
+LAYA_CASES = {
+    "laya-silent-holds": (dict(plate_check=None), ["laya_unavailable", "low_confidence"]),
+    "laya-nan-holds": (dict(plate_check={"peanut": float("nan")}), ["laya_unavailable", "low_confidence"]),
+    "laya-missing-allergen-holds": (dict(plate_check={}), ["laya_unavailable", "low_confidence"]),
+    "laya-out-of-range-holds": (dict(plate_check={"peanut": 1.5}), ["laya_unavailable", "low_confidence"]),
+    "laya-wrong-type-holds": (dict(plate_check={"peanut": True}), ["laya_unavailable", "low_confidence"]),
+    "laya-flags-what-the-graph-missed": (dict(plate_check={"peanut": 0.4}), ["laya_flagged"]),
+    "laya-agrees-with-the-graph": (
+        dict(reach=[PEANUT_REACH], plate_check={"peanut": 0.9}),
+        ["forbidden_allergen", "laya_flagged", "low_confidence"],
+    ),
+    "laya-clean-keeps-the-pass": (dict(plate_check={"peanut": 0.001}), []),
+}
+
+
+@pytest.mark.parametrize(("inputs", "reason_codes"), LAYA_CASES.values(), ids=LAYA_CASES.keys())
+def test_decide_cases_with_laya(inputs, reason_codes):
+    verdict = run(**inputs)
+
+    assert codes(verdict) == reason_codes
+    assert verdict["decision"] == ("hold" if reason_codes else "pass")
+    assert not list(VALIDATOR.iter_errors(verdict))
+
+
+def test_laya_flags_join_the_graphs_at_the_higher_probability():
+    only_laya = run(plate_check={"peanut": 0.4})
+    laya_higher = run(reach=[PEANUT_REACH], plate_check={"peanut": 0.9})
+    graph_higher = run(reach=reach(peanut=0.9), plate_check={"peanut": 0.4})
+
+    assert only_laya["flagged"] == [{"allergen_unit_id": "peanut", "probability": 0.4}]
+    assert laya_higher["flagged"] == [{"allergen_unit_id": "peanut", "probability": 0.9}]
+    assert graph_higher["flagged"] == [{"allergen_unit_id": "peanut", "probability": 0.9}]
+    assert only_laya["confidence"] == 1.0  # Laya adds a reason; the graph's clean-confidence is its own
+
+
+def test_usable_plate_check():
+    assert usable_plate_check({"peanut": 0.0, "milk": 1}, ["peanut", "milk"])
+    assert usable_plate_check({}, [])
+    assert not usable_plate_check(None, [])
+    assert not usable_plate_check({"peanut": "0.1"}, ["peanut"])
+    assert not usable_plate_check({"peanut": -0.1}, ["peanut"])
+
+
+def reason_keys(verdict):
+    """Each reason as (code, allergen), ignoring the detail text, which carries the confidence number."""
+    return {(reason["code"], reason.get("allergen_unit_id")) for reason in verdict["reasons"]}
+
+
+laya_answers = st.none() | st.dictionaries(
+    st.sampled_from(UNITS), st.floats(allow_nan=True) | st.booleans() | st.text(max_size=2) | probability, max_size=9
+)
+
+
+@pytest.mark.safety
+@given(t=tickets, r=reaches, unknown=st.lists(st.just("tool-spoon-9"), max_size=1), answer=laya_answers)
+def test_laya_only_adds_holds(t, r, unknown, answer):
+    """Plain-code verdict: whatever Laya answers, or fails to, every reason without it is still there, confidence
+    never rises, and a HOLD stays a HOLD."""
+    without = run(ticket=t, reach=r, unknown_ancestors=unknown)
+    with_laya = run(ticket=t, reach=r, unknown_ancestors=unknown, plate_check=answer)
+
+    assert reason_keys(without) <= reason_keys(with_laya)
+    assert with_laya["confidence"] <= without["confidence"]
+    if without["decision"] == "hold":
+        assert with_laya["decision"] == "hold"
+    assert not list(VALIDATOR.iter_errors(with_laya))
+
+
+@pytest.mark.safety
+@given(t=tickets, r=reaches, answer=laya_answers)
+def test_a_pass_means_laya_answered_and_flagged_nothing(t, r, answer):
+    """Fail closed: a PASS needs a usable Laya answer that flags no forbidden allergen."""
+    verdict = run(ticket=t, reach=r, plate_check=answer)
+
+    if verdict["decision"] == "pass":
+        assert usable_plate_check(answer, t["forbidden"])
+        assert laya_hold_reasons(answer, t["forbidden"], t["pass_threshold"]) == []

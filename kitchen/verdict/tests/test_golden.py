@@ -24,6 +24,7 @@ from kitchen.shared.fakes import (
     scenario_timeline,
 )
 from kitchen.shared.models import EntityState, Zone
+from kitchen.verdict.laya_check import FakeLayaCheck
 from kitchen.verdict.service import VerdictService
 
 GRAPH = os.environ.get("VERDICT_GOLDEN_GRAPH", "fake")
@@ -44,7 +45,7 @@ def replay(path):
     state.set_zones([PASS_ZONE])
     clock = FakeClock()
     graph = make_graph(scenario)
-    VerdictService(state, graph, clock).start()
+    VerdictService(state, graph, FakeLayaCheck(), clock).start()
 
     for item in scenario_timeline(scenario):
         clock.set(item.t_ms)
