@@ -32,6 +32,7 @@ service judges each plate that reaches the pass, and the gate watches vision's h
 
     uv run python tools/run_local.py --live --webcam 0 --zones zones.json          # web/: WEB_VISION_URL=:8002 too
     uv run python tools/run_local.py --live --video data/recordings/prep.mp4 --zones zones.json
+    VISION_DETECTOR=hailo .venv/bin/python tools/run_local.py --live --picamera --zones zones.json   # on the Pi
 
 The interactions step plugs in by name (--interactions, default kitchen.interactions.events:live_consumer): a
 factory called with (state, clock) that returns a frame consumer writing edges with StateClient.record_interaction.
@@ -476,11 +477,13 @@ class LiveRunner:
 
 def live_source(args, clock):
     """The camera or video the live runner reads, played like a live camera."""
-    from kitchen.vision.camera import VideoSource, WebcamSource
+    from kitchen.vision.camera import PiCameraSource, VideoSource, WebcamSource
     from kitchen.vision.run import as_live
 
     if args.video:
         return as_live(VideoSource(args.video, clock), clock)
+    if args.picamera:
+        return PiCameraSource(clock)
     return WebcamSource(args.webcam, clock)
 
 
@@ -550,8 +553,9 @@ def main_live(args, origins: list[str], parser, plate_check) -> int:
     source = live_source(args, clock)
     threading.Thread(target=run_live_frames, args=(runner, source), daemon=True, name="frames").start()
     threading.Thread(target=run_live_gate, args=(runner,), daemon=True, name="gate").start()
+    source_name = args.video or ("the Pi camera" if args.picamera else f"webcam {args.webcam}")
     print(
-        f"run_local: LIVE from {args.video or f'webcam {args.webcam}'}, Orders API and GET /state on "
+        f"run_local: LIVE from {source_name}, Orders API and GET /state on "
         f"http://localhost:{args.port}, Vision API on http://localhost:{settings.port}",
         flush=True,
     )
@@ -590,11 +594,12 @@ def main(argv: list[str] | None = None) -> int:
     source = cli.add_mutually_exclusive_group()
     source.add_argument("--webcam", type=int, help="live: a webcam index, e.g. 0")
     source.add_argument("--video", type=Path, help="live: a video file, played like a live camera")
+    source.add_argument("--picamera", action="store_true", help="live: the Raspberry Pi camera (on the Pi)")
     cli.add_argument("--zones", type=Path, help="live: zones.json (kitchen/vision/zones.py)")
     cli.add_argument("--interactions", default=INTERACTIONS_STEP, help="live: the interactions step's factory")
     args = cli.parse_args(argv)
-    if args.live and (args.zones is None or (args.webcam is None and args.video is None)):
-        cli.error("--live needs --zones and one of --webcam or --video")
+    if args.live and (args.zones is None or (args.webcam is None and args.video is None and not args.picamera)):
+        cli.error("--live needs --zones and one of --webcam, --video or --picamera")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # the scenario's own Orders API calls, one line each

@@ -10,6 +10,7 @@ Rules: fail closed (a detector error stops the loop, never an empty frame; a con
 
 import json
 import signal
+import sys
 import time
 from types import SimpleNamespace
 
@@ -250,3 +251,39 @@ def test_the_change_mask_letterbox_keeps_the_clip_layout_at_any_frame_size():
     assert (square[top : top + content_height, left : left + content_width] == 200).all()
     assert (square[:top] == LETTERBOX_PAD).all()
     assert (square[top + content_height :] == LETTERBOX_PAD).all()
+
+
+class FakePiCamera:
+    """Stands in for picamera2.Picamera2: an endless stream of gray B, G, R frames."""
+
+    camera_controls = {}
+
+    def create_video_configuration(self, main):
+        return {"main": main}
+
+    def configure(self, config):
+        pass
+
+    def start(self):
+        pass
+
+    def capture_array(self):
+        return np.full((96, 128, 3), 128, dtype=np.uint8)
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_the_cli_records_from_the_pi_camera(tmp_path, monkeypatch):
+    from kitchen.vision.record import read_recording
+
+    monkeypatch.setitem(sys.modules, "picamera2", SimpleNamespace(Picamera2=FakePiCamera))
+    monkeypatch.setattr("kitchen.vision.detect.open_detector", lambda settings: FakeDetector())
+
+    assert vision_run.main(["--picamera", "--max-frames", "3", "--record", str(tmp_path / "rec")]) == 0
+
+    assert json.loads((tmp_path / "rec" / "manifest.json").read_text())["source"] == "picamera"
+    assert [output.observation["frame_id"] for output in read_recording(tmp_path / "rec")] == [0, 1, 2]

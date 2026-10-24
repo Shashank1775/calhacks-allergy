@@ -10,6 +10,7 @@ Rules: fail closed: with the interactions step missing, broken or behind, every 
 """
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -254,3 +255,28 @@ def test_state_is_marked_live_and_the_vision_api_binds_through_the_shift():
     assert response.status_code == 200, response.json()
     assert response.json() == {"plate_id": "plate-1"}
     assert vision.get("/health").json()["last_frame_t_ms"] == shift.clock.now_ms()
+
+
+def test_live_mode_reads_the_pi_camera_when_asked(monkeypatch):
+    """--picamera gives the live runner vision's PiCameraSource (picamera2 stands in here; it exists only on the Pi)."""
+    from argparse import Namespace
+    from types import SimpleNamespace
+
+    from kitchen.vision.camera import PiCameraSource
+
+    class Camera:
+        camera_controls = {}
+
+        def create_video_configuration(self, main):
+            return {"main": main}
+
+        def configure(self, config):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "picamera2", SimpleNamespace(Picamera2=Camera))
+    args = Namespace(video=None, webcam=None, picamera=True)
+
+    assert isinstance(run_local.live_source(args, FakeClock(0)), PiCameraSource)
