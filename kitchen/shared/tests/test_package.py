@@ -23,4 +23,4 @@ def test_kitchen_imports_from_this_checkout():
     shared_dir = Path(kitchen.shared.__file__).resolve().parent
 
     assert kitchen_dir == REPO_ROOT / "kitchen"
-    assert shared_dir == kitchen_dir / "shared"
+    assert shared_dir == kitchen_dir / "deliberately_wrong"
