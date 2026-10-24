@@ -88,14 +88,14 @@ All agents share one GitHub account, so **sign everything** (issue comments, PR 
 | Role | Signature | Job |
 |---|---|---|
 | **Owner** (human) | — | Approves phase gates and milestone exits. Answers `status:needs-human`. Runs hardware tests. Holds keys and money |
-| **Director** (one) | `— [director]` | Keeps six teams pointed at one working system. Owns this file, contracts approval, the roadmap, ADRs, the Program board, and the relationship with the partner. Writes no product code |
-| **Manager** (one per team) | `— [manager/<team>]` | Owns the team's backlog and Team board. Writes ready issues, dispatches Workers, reviews and merges team PRs, and represents the team in RFCs |
+| **Director** (one) | `— [director]` | Keeps six teams pointed at one working system. Owns this file, contracts approval, the roadmap, ADRs, the Program board, and the relationship with the partner. Hands the owner each wave's `ready-to-merge` list. Writes no product code |
+| **Manager** (one per team) | `— [manager/<team>]` | Owns the team's backlog and Team board. Writes ready issues, dispatches Workers, reviews team PRs and labels them `ready-to-merge`, and represents the team in RFCs |
 | **Worker** | `— [worker/<team>/w<N>]` | One issue at a time, in its own worktree, proven with commands and output. Never merges |
 | **Safety reviewer** | `— [reviewer/safety]` | Required on every `safety-critical` PR. Not on the team being reviewed. Read-only |
 
 ### Director: each cycle (every 30–60 min, or on escalation)
 1. Is `main` green (`gh run list --branch main --limit 5`)? If not, stop the line: no merges except the fix.
-2. Merge RFC PRs whose affected Managers (and the partner, if touched) have all ACKed. Announce the new contract version on each affected Team board.
+2. Label RFC PRs `ready-to-merge` once their affected Managers (and the partner, if touched) have all ACKed, and announce the new contract version on each affected Team board after the owner merges.
 3. Clear cross-team blockers. Decide disputes on the issue in one sentence; write an ADR if the decision outlives the milestone.
 4. Check the milestone's exit criteria (§10) and update the Program board: done, on track, or at risk, with evidence.
 5. Move Worker capacity to the critical path, within the owner's cap.
@@ -135,7 +135,7 @@ Use a stronger model for `safety-critical` issues and anything with tricky concu
 - [ ] Hardware status is honest.
 - [ ] It's no bigger than the task.
 
-Approve with a signed `APPROVED` comment and the `review:approved` label, then `gh pr merge <n> --squash --delete-branch`, then confirm `main` is still green. To request changes, label `review:changes-requested` and post a numbered list.
+Approve with a signed `APPROVED` comment and the `review:approved` label. When every required review has passed and CI is green, add the `ready-to-merge` label. **The owner merges** (squash); agents never run `gh pr merge`. To request changes, label `review:changes-requested` and post a numbered list.
 
 ### Worker: steps
 1. Read this file, the README of each folder you'll touch, the issue with all comments (`gh issue view <n> --comments`), and every contract it names.
@@ -201,16 +201,15 @@ Add whatever co-author trailer your harness requires after the `Agent:` line.
 
 **Pull requests.** Open a draft early. Fill in the template: `Closes #N`, what changed, **how you verified it** (exact commands and output), contract impact, safety impact, and hardware status (`not hardware`, `fake only`, or `verified on device by owner (link)`). CI must be green.
 
-| PR touches | Needs before merge | Merged by |
-|---|---|---|
-| One team's folders | `review:approved` from that team's Manager | That Manager |
-| Anything `safety-critical` | Plus `review:safety-approved` | The owning Manager |
-| Another team's folders | Plus that Manager's signed approval, and the `cross-team` label | The owning Manager |
-| `contracts/` | An RFC issue with every affected Manager's ACK (and the partner's, if a partner interface changes) | The Director |
-| `AGENTS.md`, `README.md`, `OWNERS`, `docs/` | The Director's review | The Director |
-| Partner folders | Partner PRs only | The partner |
+| PR touches | Needs before `ready-to-merge` |
+|---|---|
+| One team's folders | `review:approved` from that team's Manager |
+| Anything `safety-critical` | Plus `review:safety-approved` |
+| Another team's folders | Plus that Manager's signed approval, and the `cross-team` label |
+| `contracts/` | Every affected Manager's ACK (on the RFC issue or the PR) and the Director's review (and the partner's ACK, if a partner interface changes) |
+| `AGENTS.md`, `README.md`, `OWNERS`, `docs/` | The Director's review |
 
-Merge with squash only. GitHub won't let one account approve its own PR, so approvals are a signed comment plus a label.
+**The owner merges every PR** (squash), except partner PRs, which the partner merges. Every agent shares one GitHub account, so no PR can carry a formal GitHub approval, and Claude Code's auto mode won't let agents merge without one. Approvals are signed comments plus `review:*` labels, and the last one adds `ready-to-merge`. Work that depends on a PR waits until the owner merges it, so the build runs in waves: each wave builds everything whose dependencies are merged, and ends with a list of `ready-to-merge` PRs for the owner.
 
 **Keeping main green.** `main` must always pass CI and run the current demo path on fakes. Whoever sees it break opens a `type:bug` `prio:p0` issue. The team that broke it reverts first and fixes second, and nothing else merges until it's green.
 
@@ -311,7 +310,7 @@ Stop, comment on your issue, and wait if:
 - commit secrets, `.env`, weights or video;
 - write `@claude` in GitHub text (it can trigger automation);
 - skip or weaken a test to get green;
-- merge your own PR unless you're the owning Manager (or the Director, for `contracts/` and docs);
+- run `gh pr merge`: the owner merges every PR;
 - make the verdict depend on a model being right.
 
 ## 10. Roadmap
