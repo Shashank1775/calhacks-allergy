@@ -9,16 +9,18 @@ Emits: Detector.detect(frame) -> (list[Detection], list[Person]), boxes and keyp
 Rules: fail closed: a missing or broken bundle or bad class names raise at startup and a wrong-shaped output or one with
        NaN or inf values raises per frame, so there is never a detector that silently returns nothing; detections and
        keypoints are only ever decoded, never invented or interpolated, and a class with no entity kind never
-       competes for an anchor, so it is never relabeled as one we track; backends only run the network and one
-       post-processing path serves both, so local results predict Hailo results; onnxruntime and hailo_platform are
-       imported only when a detector is opened
+       competes for an anchor, so it is never relabeled as one we track; known-clean source: an anchor where a person
+       or a hand scores at least as high as every class we track is dropped, so a hand covering a knife can't keep the
+       knife's track matched; backends only run the network and one post-processing path serves both, so local results
+       predict Hailo results; onnxruntime and hailo_platform are imported only when a detector is opened
 
 The class map comes from the bundle manifest's networks.det. A stock bundle has no class_names: its detector is
 Ultralytics' 80 COCO classes, of which vision tracks fork, knife, spoon and bowl (common.COCO_OBJECTS). A custom
 bundle lists its detector's classes in output order in class_names (bundle.py --class-names), and vision tracks those
 with an entity kind (identity.OBJECT_CLASSES: plate, bowl, knife, spoon, fork). Either way only the tracked classes
-compete in decode_objects, on the ONNX output and on the Hailo's, which hailo.py rebuilds in the same layout with
-one column per box HailoRT kept for each class.
+compete in decode_objects, except that a person (COCO) or a hand (a custom class) scoring at least as high drops the
+anchor. On the Hailo, hailo.py rebuilds the same layout with one column per box HailoRT kept for each class, so each
+class's box stands alone there: a person box can't drop a knife box at the same anchor, as before this rule.
 
 The letterbox geometry is kitchen/shared/clips.py's (letterbox_layout at settings.input_size, gray 114), so the
 detector, the change mask and the clip builder all place a frame inside its square the same way. The detector resizes
@@ -48,17 +50,23 @@ POSE_CHANNELS = 4 + 1 + 3 * POSE_KEYPOINTS
 BACKENDS = ("onnx", "hailo")
 
 
+# A detector class that is a person or a hand. Hands come from pose wrists, so an anchor one of these tops is dropped.
+PEOPLE_CLASSES = ("person", "hand")
+COCO_PERSON = 0
+
+
 @dataclass(frozen=True)
 class DetectorClasses:
-    """The detection network's classes: how many it scores (one output row each, after the four box rows) and
-    {class index: name} for the ones vision tracks."""
+    """The detection network's classes: how many it scores (one output row each, after the four box rows),
+    {class index: name} for the ones vision tracks, and the indices of its person or hand classes."""
 
     count: int
     tracked: dict[int, str]
+    people: frozenset[int] = frozenset()
 
 
 # Every stock bundle's detector: the 80 COCO classes, of which vision tracks fork, knife, spoon and bowl.
-COCO_DETECTOR = DetectorClasses(COCO_CLASSES, COCO_OBJECTS)
+COCO_DETECTOR = DetectorClasses(COCO_CLASSES, COCO_OBJECTS, frozenset({COCO_PERSON}))
 
 
 def detector_classes(det_network: dict) -> DetectorClasses:
@@ -89,7 +97,8 @@ def detector_classes(det_network: dict) -> DetectorClasses:
         raise ValueError(
             f"the bundle's det class_names {names} name none of {list(OBJECT_CLASSES)}, so it sees nothing"
         )
-    return DetectorClasses(len(names), tracked)
+    people = frozenset(index for index, name in enumerate(names) if name in PEOPLE_CLASSES)
+    return DetectorClasses(len(names), tracked, people)
 
 
 @dataclass(frozen=True)
@@ -203,21 +212,25 @@ def decode_objects(
     """Turn the detection network's [1, 4 + classes, anchors] output ([1, 84, anchors] for COCO) into the tracked
     objects in one frame: knives, spoons, forks and bowls, and plates for a detector that has them.
 
-    Only the classes vision tracks compete: each anchor takes the best of those, on that class's own score, and every
-    other class's score is never read. So a flat plate COCO calls pizza is still a bowl on its bowl score, and a
-    person, a cup or a fine-tune's hand never wins an anchor or lends one its score. Then the score floor, per-class
-    NMS, and the boxes mapped back through the letterbox to the original frame (frame_size is its (width, height)).
-    Best confidence first.
+    Each anchor takes the best of the classes vision tracks, on that class's own score, so a bowl COCO scores higher
+    as a cup or a pizza still counts as a bowl. An anchor where a person (COCO) or a hand (a custom class) scores at
+    least as high is dropped. Then the score floor, per-class NMS, and the boxes mapped back through the letterbox to
+    the original frame (frame_size is its (width, height)). Best confidence first.
     """
     columns = _columns(output, 4 + classes.count, "detection")
-    # Leaning toward seeing too much: a sieve or a jar lid taken for a bowl or a fork only adds an entity and edges,
-    # which can only add holds, while a bin the detector misses is an allergen source with no edges (the PASS
-    # direction). Untracked classes competing hid real bins: a flat plate COCO calls pizza had a bowl score of 0.32.
     tracked_ids = np.array(sorted(classes.tracked))
     tracked_scores = columns[:, 4 + tracked_ids]
     scores = tracked_scores.max(axis=1)
     class_ids = tracked_ids[tracked_scores.argmax(axis=1)]
-    wanted = scores >= settings.object_min_score
+    # Known-clean source: a hand over a knife scores knife too, weakly. Weak detections can't start a track, but they
+    # do keep one matched (tracking.py), so a dirty knife carried into the rack under a hand would never go missing,
+    # and uncovered there it would start clean. Hands come from pose, so an anchor a person or a hand scores at least
+    # as high as on our best class is dropped, even when some third class tops them both.
+    people_ids = np.array(sorted(classes.people), dtype=int)
+    on_a_person = columns[:, 4 + people_ids].max(axis=1, initial=-np.inf) >= scores
+    # Not always the safe direction: a false bowl (a jar lid COCO scores higher as a cup) can start a track, and one
+    # first seen in a free bin slot at shift start takes that bin's ID, leaving the real bin a clean plate (identity.py).
+    wanted = (scores >= settings.object_min_score) & ~on_a_person
     boxes, scores, class_ids = _corner_boxes(columns[wanted]), scores[wanted], class_ids[wanted]
 
     layout = letterbox_for(*frame_size, settings.input_size)

@@ -194,22 +194,22 @@ def test_a_custom_hef_reports_its_classes_in_class_names_order():
 
 @pytest.mark.safety
 def test_a_stock_hef_decodes_only_fork_knife_spoon_and_bowl():
-    """HailoRT's NMS lists each class's boxes on their own, one column each, so only the tracked classes compete on the
-    Hailo too: a flat plate the HEF calls pizza still comes through on its bowl score, and a person never does."""
+    """HailoRT's NMS lists each class's boxes on their own, one column each, so each class's box stands alone on the
+    Hailo: a flat plate the HEF calls pizza still comes through on its bowl score, and a person never does."""
     pizza, bowl, person, knife = 53, 45, 0, 43
     plate = [0.25, 0.25, 0.75, 0.75]
     per_class = [np.zeros((0, 5))] * 80
     per_class[pizza] = np.array([[*plate, 0.8]])
-    per_class[bowl] = np.array([[*plate, 0.32]])
+    per_class[bowl] = np.array([[*plate, 0.4]])
     per_class[person] = np.array([[0.0, 0.0, 1.0, 0.5, 0.95]])
-    per_class[knife] = np.array([[0.0, 0.0, 1.0, 0.5, 0.2]])  # below the 0.25 floor
+    per_class[knife] = np.array([[0.0, 0.0, 1.0, 0.5, 0.2]])  # below the 0.35 floor
     session = HailoSession(FakeNetwork({"nms": per_class}, is_nms=True, num_classes=80))
     check_detection_classes(session, 80)
 
     (out,) = session.run(None, {"images": np.zeros((1, 3, SIZE, SIZE), dtype=np.float32)})
     found = decode_objects(out, (SIZE, SIZE), VisionSettings(input_size=SIZE), detector_classes({"classes": 80}))
 
-    assert [(d.class_name, round(d.confidence, 2)) for d in found] == [("bowl", 0.32)]
+    assert [(d.class_name, round(d.confidence, 2)) for d in found] == [("bowl", 0.4)]
     assert found[0].box == pytest.approx((0.25, 0.25, 0.75, 0.75), abs=1e-6)
 
 
@@ -218,14 +218,14 @@ def test_a_custom_hef_never_yields_its_hand_class():
     names = ["plate", "bowl", "knife", "spoon", "fork", "hand"]
     per_class = [np.zeros((0, 5))] * len(names)
     per_class[5] = np.array([[0.0, 0.0, 0.5, 0.5, 0.95]])  # a hand
-    per_class[4] = np.array([[0.0, 0.0, 0.5, 0.5, 0.4]])  # the fork it holds
+    per_class[2] = np.array([[0.5, 0.5, 1.0, 1.0, 0.8]])  # a knife on its own
     session = HailoSession(FakeNetwork({"nms": per_class}, is_nms=True, num_classes=len(names)))
 
     (out,) = session.run(None, {"images": np.zeros((1, 3, SIZE, SIZE), dtype=np.float32)})
     classes = detector_classes({"classes": len(names), "class_names": names})
     found = decode_objects(out, (SIZE, SIZE), VisionSettings(input_size=SIZE), classes)
 
-    assert [(d.class_name, round(d.confidence, 2)) for d in found] == [("fork", 0.4)]
+    assert [(d.class_name, round(d.confidence, 2)) for d in found] == [("knife", 0.8)]
 
 
 @pytest.mark.safety
