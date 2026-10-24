@@ -45,7 +45,7 @@ include = ["*.py", "*.pyi", "**/pyproject.toml"]
 select = ["E4", "E7", "E9", "F", "W", "I", "N", "B", "UP"]
 
 [tool.pytest.ini_options]
-testpaths = ["kitchen", "tests"]
+testpaths = ["kitchen", "tests", "database"]
 # importlib lets every kitchen/<step>/tests/ folder reuse test file names without __init__.py files.
 # --strict-markers makes a misspelled marker an error, so a `safety` test can't silently lose its marker.
 addopts = ["--import-mode=importlib", "--strict-markers"]

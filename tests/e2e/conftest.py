@@ -15,6 +15,7 @@ Rules: the harness never reaches into a team's internals and never computes a ve
     plate reaches the pass ──▶ VerdictService (graph + Laya's plate check) ──▶ verdict ──▶ GateService ──▶ gate, voice
 """
 
+import os
 from dataclasses import dataclass, field
 
 import pytest
@@ -121,12 +122,18 @@ class Kitchen:
 
 
 def make_state(config):
-    """The StateClient for this run: FakeStateClient, or the partner's once it's wired in here.
+    """The StateClient for this run: FakeStateClient, or with `--state real` the partner's SpacetimeStateClient on
+    the local test database (SPACETIMEDB_TEST_DB, default allergen-yhz81-test), emptied first.
 
-    `real` fails rather than skips until then, so a run that never touched the partner's code can't look green.
+    A real run with no database errors rather than skips, so a run that never touched the partner's code can't look
+    green. Publish the test database as database/tests/conftest.py says.
     """
     if config.getoption("--state", default="fake") == "real":
-        pytest.fail("--state real: the partner's StateClient isn't wired in yet (database/ has no Python client)")
+        from database.state_client import SpacetimeStateClient
+
+        client = SpacetimeStateClient(database=os.environ.get("SPACETIMEDB_TEST_DB", "allergen-yhz81-test"))
+        client.start_shift()
+        return client
     return FakeStateClient()
 
 
@@ -149,14 +156,20 @@ def kitchen(request):
     the Orders API, for a test that needs Laya to misread something. `graph` is a factory taking the state, for a test
     that needs a graph built from the edges actually recorded (e.g. kitchen.graph.ProvenanceGraph).
     """
+    states = []
 
     def build(scenario, with_tickets=True, parser=None, graph=None):
         scenario = read_scenario(scenario)
         if not with_tickets:
             scenario = dict(scenario, tickets=[], amendments=[])
         state = make_state(request.config)
+        states.append(state)
         load_scenario(state, scenario)
         graph = graph(state) if graph is not None else make_graph(request.config, scenario, state)
         return Kitchen(state=state, graph=graph, scenario=scenario, parser=parser or FakeLayaParser())
 
-    return build
+    yield build
+    # A real client keeps polling after the test; closed, its subscribers can't react to the next test's writes.
+    for state in states:
+        if hasattr(state, "close"):
+            state.close()
