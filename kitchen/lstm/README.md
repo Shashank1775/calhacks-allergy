@@ -40,7 +40,7 @@ The interactions step itself is yours too (`kitchen/interactions/`): candidate p
 ## Rules you're held to
 
 - **Invariant 7.** Zone rules stay the default. The ConvLSTM becomes primary only if it beats them on the frozen real-clip benchmark, recorded in an ADR that you and the interactions Manager both sign. If it fails to load, raises or times out, `kitchen/interactions/classifier.py` falls back to zone rules.
-- **Budget.** It must fit the 500 ms event-end → edge budget on the Pi. ONNX on the CPU is fine; running on the Hailo is optional, later.
+- **Budget.** Each call must answer within the interactions wrapper's primary timeout (`primary_timeout_ms`, 100 ms) on the Pi; a slower call is skipped for zone rules. That timeout sits inside the 500 ms event-end → edge budget. ONNX on the CPU is fine; running on the Hailo is optional, later.
 - **Data.** Weights and datasets stay out of git, listed in a `data-manifest.json`.
 - **Contract tests.** Your classifier must pass the classifier suite in `kitchen/shared/contract_tests/`.
 
@@ -48,7 +48,7 @@ The interactions step itself is yours too (`kitchen/interactions/`): candidate p
 
 Built: `infer.py` (`LstmClassifier`) runs the trained network as ONNX with onnxruntime on the CPU (the `ml` extra), so the kitchen never needs torch. **It is not the default anywhere.** Zone rules stay primary until the LSTM beats them on the frozen real-clip benchmark (safety rule 7).
 
-**Export** (once per trained checkpoint; torch and onnx are pulled in for this one command, not added to the project). It scripts the network so the loop over steps stays an ONNX `Loop`, compares ONNX with torch on the example clip and random clips of 2, 12, 16 and 24 steps, refuses (and deletes) a file that disagrees by more than 1e-3 in a logit, and adds `model.onnx` (name, size, sha256, source) to the folder's `data-manifest.json`:
+**Export** (once per trained checkpoint; torch and onnx are pulled in for this one command, not added to the project). It scripts the network so the loop over steps stays an ONNX `Loop`, compares ONNX with torch on the example clip and random clips of 2, 12, 16 and 24 steps, refuses (and deletes) a file that disagrees by more than 1e-3 in a logit or gives a non-finite logit on either side, and adds `model.onnx` (name, size, sha256, source) to the folder's `data-manifest.json`:
 
 ```bash
 uv run --with torch==2.14.1 --with onnx==1.23.2 python -m kitchen.lstm.export_onnx \
@@ -66,11 +66,12 @@ The ONNX model takes `clip` (float32 `[batch, steps, 3, 128, 128]`, 0 to 1) and 
 |---|---|
 | ONNX vs torch, max logit difference | 2.4e-6 (example clip and random clips of 2 to 24 steps) |
 | Example clip, `p_contact` / `p_moved` | 0.99948910 / 0.99952169, vs 0.99948907 / 0.99952173 from training |
-| Latency per 16-step clip, CPU | 47 ms median (55 ms p95) with onnxruntime's default threads; 103 ms on one thread |
+| Clips made from the example, logits (contact / moved) | change channel blanked (touch without movement): 3.7519 / -7.0128; boxes held apart and still: -13.1163 / -17.2835 |
+| Latency per 16-step clip, CPU | 47 ms median (55 ms p95) with onnxruntime's default threads; 103 ms on one thread. With the laptop busy with other work, p95 rose to 230 to 360 ms |
 
-Not yet measured on the Pi 5. Expect it several times slower than the laptop, so time it there before adoption, and remember every candidate pair in an event is one clip.
+Not yet measured on the Pi 5. Expect it several times slower than the laptop, which puts it past the 100 ms primary timeout (every such call loses its label to zone rules), so time it there before adoption, and remember every candidate pair in an event is one clip.
 
-**Tests** (`uv run pytest kitchen/lstm`): the shared InteractionClassifier contract suite against `LstmClassifier`, the example clip's known scores (within 1e-3), probabilities in [0, 1], wrong windows raising, the scores ignoring ids and features (a `safety` test), and one clip under 500 ms. Load and input-check tests run everywhere; the rest need the exported model and skip without it (CI has none). In a git worktree, point them at the main checkout's data:
+**Tests** (`uv run pytest kitchen/lstm`): the shared InteractionClassifier contract suite against `LstmClassifier`, the example clip's known scores and two clips made from it on which the outputs disagree (logits pinned within 1e-3, so swapped outputs or a constant answer fail), probabilities in [0, 1], wrong windows and non-finite outputs raising, the scores ignoring ids and features (`safety` tests), and a 16-step clip's p95 under the 100 ms primary timeout. The export's parity check (NaN refused) is in `test_export_onnx.py`, which needs torch and skips without it: `uv run --with torch==2.14.1 python -m pytest kitchen/lstm/tests/test_export_onnx.py`. Load and input-check tests run everywhere; the rest need the exported model and skip without it (CI has none). In a git worktree, point them at the main checkout's data:
 
 ```bash
 LSTM_MODEL_DIR=<main checkout>/data/models/lstm/boxpooled-v1 \

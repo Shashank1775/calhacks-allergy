@@ -10,9 +10,12 @@ Loading and input checks run anywhere, CI included. Tests that score clips need 
 """
 
 import json
+import math
 import time
+from types import SimpleNamespace
 
 import numpy as np
+import onnxruntime
 import pytest
 
 from kitchen.lstm.infer import MODEL_FILE, LstmClassifier, LstmModelError, file_sha256, model_inputs
@@ -20,6 +23,21 @@ from kitchen.shared.contract_tests import contract_fixture
 from kitchen.shared.interfaces import PairWindow
 
 FRAME_SHAPE = (3, 128, 128)  # what the exported model takes per step: box_a, box_b, change at 128 x 128
+LOGIT_TOLERANCE = 1e-3  # the export's torch-vs-ONNX parity tolerance; near p = 1 a probability tolerance hides a lot
+
+# Logits measured once on clips made from the example clip, with this model (onnxruntime 1.31; 1, 2 and 4 threads gave
+# the same values). The two heads disagree on the first, so swapped outputs, a constant answer or other weights fail.
+# After a re-export or retraining, measure the new model on the same clips and update both; never widen the tolerance.
+PINNED_MODEL = "boxpooled-v1+152b93cf"
+PINNED_LOGITS = {
+    "touch without movement": (3.7519, -7.0128),  # P(contact) 0.977, P(moved) 0.0009
+    "boxes apart and still": (-13.1163, -17.2835),  # both near 0
+}
+
+# The interactions wrapper's primary_timeout_ms (InteractionSettings in kitchen/interactions/settings.py; import it
+# from there once that file is on main): a primary that takes longer is skipped for zone rules, so the LSTM's labels
+# only count if it answers inside this.
+PRIMARY_TIMEOUT_MS = 100
 
 
 def make_window(tensor: np.ndarray, **clip_fields) -> PairWindow:
@@ -33,6 +51,45 @@ def make_window(tensor: np.ndarray, **clip_fields) -> PairWindow:
 def random_tensor(steps: int, seed: int = 0) -> np.ndarray:
     """A uint8 [steps, 3, 128, 128] clip of random pixels."""
     return np.random.default_rng(seed).integers(0, 256, size=(steps, *FRAME_SHAPE), dtype=np.uint8)
+
+
+def logit(probability: float) -> float:
+    """The logit behind a probability, so scores near 0 or 1 can be compared closely."""
+    return math.log(probability / (1 - probability))
+
+
+def touch_without_movement(tensor: np.ndarray) -> np.ndarray:
+    """The clip with its change channel blanked: the boxes still meet, but nothing in the frame moves."""
+    clip = tensor.copy()
+    clip[:, 2] = 0
+    return clip
+
+
+def boxes_apart_and_still(tensor: np.ndarray) -> np.ndarray:
+    """Both boxes held where the clip starts (near each other, not touching) and nothing moving."""
+    clip = tensor.copy()
+    clip[:, 0] = tensor[0, 0]
+    clip[:, 1] = tensor[0, 1]
+    clip[:, 2] = 0
+    return clip
+
+
+DERIVED_CLIPS = {"touch without movement": touch_without_movement, "boxes apart and still": boxes_apart_and_still}
+
+
+class FixedLogitsSession:
+    """Stands in for onnxruntime.InferenceSession: takes 128 x 128 clips and answers every one with the same logits."""
+
+    def __init__(self, logits: list[float]) -> None:
+        self.logits = np.array([logits], dtype=np.float32)
+
+    def get_inputs(self):
+        """The clip input's shape, as the exported model reports it."""
+        return [SimpleNamespace(shape=["batch", "steps", *FRAME_SHAPE])]
+
+    def run(self, output_names, inputs):
+        """The fixed logits, shaped like the real model's output ([batch, 2])."""
+        return [self.logits]
 
 
 # ------------------------------------------------------------------------------------- loading (no model needed)
@@ -100,6 +157,22 @@ def test_model_inputs_are_scaled_like_training():
     assert dt_ms.shape == (1, 12) and dt_ms[0, 0] == 0 and dt_ms[0, 1] == 62
 
 
+@pytest.mark.safety
+@pytest.mark.parametrize("logits", [[np.nan, 0.0], [0.0, np.inf], [-np.inf, 0.0]], ids=["NaN", "inf", "-inf"])
+def test_non_finite_logits_raise_instead_of_scoring(tmp_path, monkeypatch, logits):
+    # Rules fallback: a NaN compares false against every threshold and would read as "no contact", so the classifier
+    # must raise (the wrapper then uses zone rules), never hand back a probability.
+    model_path = tmp_path / MODEL_FILE
+    model_path.write_bytes(b"stands in for model.onnx")
+    manifest = {"files": [{"name": MODEL_FILE, "size": 24, "sha256": file_sha256(model_path)}]}
+    (tmp_path / "data-manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(onnxruntime, "InferenceSession", lambda *args, **kwargs: FixedLogitsSession(logits))
+    classifier = LstmClassifier(tmp_path)
+
+    with pytest.raises(ValueError, match="non-finite logits"):
+        classifier.classify(make_window(random_tensor(16)))
+
+
 # ---------------------------------------------------------------------------- scoring (needs the exported model)
 
 
@@ -110,8 +183,26 @@ def test_example_clip_scores_match_the_trained_model(lstm, example_clip):
     labels = dict(lstm.classify(window))
 
     assert list(labels) == ["transfer.contact", "transfer.scoop"]
-    assert labels["transfer.contact"] == pytest.approx(example_clip["p_contact"], abs=1e-3)
-    assert labels["transfer.scoop"] == pytest.approx(example_clip["p_moved"], abs=1e-3)
+    assert logit(labels["transfer.contact"]) == pytest.approx(logit(example_clip["p_contact"]), abs=LOGIT_TOLERANCE)
+    assert logit(labels["transfer.scoop"]) == pytest.approx(logit(example_clip["p_moved"]), abs=LOGIT_TOLERANCE)
+
+
+@pytest.mark.parametrize("clip_name", list(DERIVED_CLIPS))
+def test_each_output_keeps_its_pinned_score(lstm, example_clip, clip_name):
+    # The example clip is a scoop, where both outputs are near 1, so it can't tell them apart. On a touch without
+    # movement P(contact) is high and P(moved) low: swapping them would turn a dirty tool's touch on a bin into a
+    # bin-to-tool scoop, and the tool's allergens would never reach the bin.
+    assert lstm.version == PINNED_MODEL, "the pinned logits were measured on another model: re-measure them"
+    record = example_clip["record"]
+    tensor = DERIVED_CLIPS[clip_name](example_clip["tensor"])
+    window = PairWindow(record["a_id"], record["b_id"], [], record, tensor)
+
+    labels = dict(lstm.classify(window))
+
+    contact_logit, moved_logit = PINNED_LOGITS[clip_name]
+    assert list(labels) == ["transfer.contact", "transfer.scoop"]
+    assert logit(labels["transfer.contact"]) == pytest.approx(contact_logit, abs=LOGIT_TOLERANCE)
+    assert logit(labels["transfer.scoop"]) == pytest.approx(moved_logit, abs=LOGIT_TOLERANCE)
 
 
 @pytest.mark.parametrize("steps", [2, 12, 16, 24])
@@ -149,13 +240,15 @@ def test_version_names_the_run_and_pins_the_file(lstm, model_dir):
     assert lstm.version == f"{model_dir.name}+{file_sha256(model_dir / MODEL_FILE)[:8]}"
 
 
-def test_one_clip_fits_the_edge_budget(lstm):
+def test_one_clip_fits_the_wrappers_primary_timeout(lstm):
+    # p95, not the median: every call over the timeout loses its label to zone rules. This machine only; the Pi is
+    # slower, so time it there before adoption (README).
     window = make_window(random_tensor(16))
     lstm.classify(window)  # the first run sets up onnxruntime's buffers
-    seconds = []
-    for _ in range(5):
+    milliseconds = []
+    for _ in range(20):
         start = time.perf_counter()
         lstm.classify(window)
-        seconds.append(time.perf_counter() - start)
+        milliseconds.append((time.perf_counter() - start) * 1000)
 
-    assert np.median(seconds) < 0.5  # the whole event-end to edge budget; the Pi is slower than a laptop
+    assert np.percentile(milliseconds, 95) < PRIMARY_TIMEOUT_MS

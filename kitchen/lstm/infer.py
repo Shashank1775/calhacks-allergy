@@ -11,7 +11,9 @@ Rules: 6 blind classifier: the model sees box masks, the change mask and elapsed
        built for, a non-finite output) raises, and kitchen/interactions/classifier.py then uses zone rules. Nothing here
        makes the LSTM the default; adoption is the benchmark's call
 
-Runs with onnxruntime on the CPU (the ml extra): about 50 ms per 16-step clip on a laptop, inside the 500 ms budget.
+Runs with onnxruntime on the CPU (the ml extra): about 50 ms per 16-step clip on an idle laptop. A call's budget is the
+interactions wrapper's primary timeout (primary_timeout_ms, 100 ms): a slower call is skipped for zone rules, so the
+LSTM labels nothing. The Pi is slower than a laptop, so time it there before adoption.
 """
 
 import hashlib

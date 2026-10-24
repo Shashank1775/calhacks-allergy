@@ -80,7 +80,10 @@ def parity_clips(example_path: Path | None, seed: int) -> list[tuple[str, np.nda
 
 
 def check_parity(network: torch.nn.Module, onnx_path: Path, clips: list) -> float:
-    """Print torch and ONNX logits for each clip, and return the largest absolute difference."""
+    """Print torch and ONNX logits for each clip, and return the largest absolute difference.
+
+    The difference is infinite when either side gives a non-finite logit, so main() refuses that file.
+    """
     session = onnxruntime.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     worst = 0.0
     for name, clip, dt_ms in clips:
@@ -89,7 +92,11 @@ def check_parity(network: torch.nn.Module, onnx_path: Path, clips: list) -> floa
         with torch.no_grad():
             expected = network(torch.from_numpy(x), torch.from_numpy(dt)).numpy()
         got = session.run(["logits"], {"clip": x, "dt_ms": dt})[0]
-        difference = float(np.abs(expected - got).max())
+        if np.isfinite(expected).all() and np.isfinite(got).all():
+            difference = float(np.abs(expected - got).max())
+        else:
+            # A NaN difference compares false against the tolerance and max() drops it, so it would pass the check.
+            difference = float("inf")
         worst = max(worst, difference)
         print(f"{name:>20}: torch {expected[0]}  onnx {got[0]}  p {sigmoid(got[0])}  max |diff| {difference:.2e}")
     return worst
