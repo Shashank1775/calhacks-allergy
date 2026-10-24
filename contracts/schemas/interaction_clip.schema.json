@@ -187,7 +187,7 @@
       "properties": {
         "contact": {
           "type": "boolean",
-          "description": "The two objects physically touched (not just overlapping boxes in 2D)."
+          "description": "The two objects touched, or one came to rest over the other in a way an overhead camera can't tell from touching (a tool resting over the food in a bin). Not just boxes overlapping in 2D: passing over or stopping short is not contact."
         },
         "transferred": {
           "type": "boolean",
