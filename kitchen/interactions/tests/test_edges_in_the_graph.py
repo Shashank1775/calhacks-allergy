@@ -108,8 +108,8 @@ def test_a_washed_knife_resting_on_a_plate_is_one_touch_so_an_allergy_plate_can_
 @pytest.mark.safety
 def test_a_wash_never_erases_a_touch_that_came_during_the_soak():
     """A knife soaks in the sink from 0. At 2.0-2.4 s a hand that just touched the peanut bin grabs it there; the knife
-    leaves the sink at 3.1 s and is laid on a plate. It spent under a second in the sink after the dirty touch, so no
-    wash may come between that touch and the plate."""
+    leaves the sink at 5.2 s and is laid on a plate. It spent 2.8 s in the sink after the dirty touch, under the 3 s a
+    wash needs, so no wash may come between that touch and the plate."""
     hand = Track(
         HAND,
         "hand",
@@ -119,16 +119,24 @@ def test_a_wash_never_erases_a_touch_that_came_during_the_soak():
             (2000, (0.19, 0.82)),
             (2400, (0.19, 0.82)),
             (2600, (0.6, 0.85)),
-            (6000, (0.6, 0.85)),
+            (8000, (0.6, 0.85)),
         ),
     )
+    leave = 2400 + SETTINGS.wash_min_dwell_ms - 200
     knife = Track(
         KNIFE,
         "tool",
-        ((0, WASH_AT), (3100, WASH_AT), (3500, PLATE_AT), (4200, PLATE_AT), (4500, (0.8, 0.5)), (6000, (0.8, 0.5))),
+        (
+            (0, WASH_AT),
+            (leave, WASH_AT),
+            (leave + 400, PLATE_AT),
+            (leave + 1100, PLATE_AT),
+            (leave + 1400, (0.8, 0.5)),
+            (8000, (0.8, 0.5)),
+        ),
     )
     frames = render(
-        [still("bin-1", "bin", BIN_AT, 6000), still("plate-t1", "plate", PLATE_AT, 6000), hand, knife], 6000
+        [still("bin-1", "bin", BIN_AT, 8000), still("plate-t1", "plate", PLATE_AT, 8000), hand, knife], 8000
     )
 
     events = replay(frames, ZONES, SETTINGS)
@@ -143,12 +151,13 @@ def test_a_wash_never_erases_a_touch_that_came_during_the_soak():
 @pytest.mark.safety
 @pytest.mark.parametrize("fps", [15, 30, 60])
 @pytest.mark.parametrize("soaking", [KNIFE, HAND])
-def test_a_wash_that_comes_due_while_a_touch_is_being_confirmed_never_erases_it(soaking, fps):
-    """Something dirty soaks in the sink; something clean starts touching it 70 ms before its 3 s dwell is up, and is
-    then laid on (or lays it on) a plate. The touch is confirmed only 200 ms into the overlap, after the wash label
+@pytest.mark.parametrize("early_ms", [0, 30, 70])
+def test_a_wash_that_comes_due_while_a_touch_is_being_confirmed_never_erases_it(early_ms, soaking, fps):
+    """Something dirty soaks in the sink; something clean starts touching it early_ms before its 3 s dwell is up, and
+    is then laid on (or lays it on) a plate. The touch is confirmed only 200 ms into the overlap, after the wash label
     comes, but it began before. The wash must not be stamped before the touch: the plate keeps the peanut."""
     end = 9000
-    grab = 933 + 3000 - 70  # the soaker's first frame in the sink is 933 at 15, 30 and 60 FPS
+    grab = 933 + 3000 - early_ms  # the soaker's first frame in the sink is 933 at 15, 30 and 60 FPS
     if soaking == KNIFE:  # a peanut knife soaks; a clean hand takes it, then rests on the plate
         knife = Track(KNIFE, "tool", ((0, BIN_AT), (600, BIN_AT), (1000, WASH_AT), (end, WASH_AT)))
         hand = Track(
@@ -191,6 +200,116 @@ def test_a_wash_that_comes_due_while_a_touch_is_being_confirmed_never_erases_it(
     washes = [event for event in events if event["action"] == "clean.wash" and event["a_id"] == soaking]
     assert all(wash["t_start_ms"] > grabbed for wash in washes)
     assert peanut_after(events, "plate-t1") >= 0.5
+
+
+@pytest.mark.safety
+def test_a_wash_never_comes_due_while_a_hand_the_detector_then_loses_is_on_the_knife():
+    """At 15 FPS a clean hand is on a soaking peanut knife at 3800 and 3867, 70 to 130 ms before its wash comes due,
+    then the detector misses the hand for 333 ms, longer than pair_gap_ms, so the pair's window starts over and the
+    touch is confirmed only at about 4333. Anything overlapping the knife restarts its wash dwell, so no wash comes due
+    under the hand, and the hand, then the plate, keep the peanut."""
+    end = 9000
+    grab = 3933 - 130
+    knife = Track(KNIFE, "tool", ((0, BIN_AT), (600, BIN_AT), (1000, WASH_AT), (end, WASH_AT)))
+    hand = Track(
+        HAND,
+        "hand",
+        (
+            (0, (0.6, 0.85)),
+            (grab - 200, (0.6, 0.85)),
+            (grab, (0.19, 0.82)),
+            (grab + 800, (0.19, 0.82)),
+            (grab + 1100, (0.5, 0.55)),
+            (grab + 1350, (0.5, 0.55)),
+            (grab + 1650, (0.5, 0.8)),
+            (end, (0.5, 0.8)),
+        ),
+        unseen=((3900, 4180),),
+    )
+    frames = render(
+        [still("bin-1", "bin", BIN_AT, end), still("plate-t1", "plate", PLATE_AT, end), knife, hand], end, 15
+    )
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    grabbed = min(event["t_start_ms"] for event in events if {event["a_id"], event["b_id"]} == {HAND, KNIFE})
+    washes = [event for event in events if event["action"] == "clean.wash" and event["a_id"] == KNIFE]
+    assert all(wash["t_start_ms"] > grabbed for wash in washes)
+    assert peanut_after(events, "plate-t1") >= 0.5
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [30, 60])
+def test_a_wash_that_comes_due_while_a_hand_on_the_knife_is_unseen_never_erases_the_touch(fps):
+    """A clean hand takes a soaking peanut knife 70 ms before its wash comes due, then is unseen for 283 ms. Zone
+    rules bridge the dropout and confirm the touch only when the hand is back, counting its overlap from before the
+    wash came due, so the wash must not be stamped before it: the hand and then the plate keep the peanut."""
+    end = 9000
+    grab = 933 + 3000 - 70
+    knife = Track(KNIFE, "tool", ((0, BIN_AT), (600, BIN_AT), (1000, WASH_AT), (end, WASH_AT)))
+    hand = Track(
+        HAND,
+        "hand",
+        (
+            (0, (0.6, 0.85)),
+            (grab - 200, (0.6, 0.85)),
+            (grab, (0.19, 0.82)),
+            (grab + 600, (0.19, 0.82)),
+            (grab + 900, (0.5, 0.55)),
+            (grab + 1150, (0.5, 0.55)),
+            (grab + 1450, (0.5, 0.8)),
+            (end, (0.5, 0.8)),
+        ),
+        unseen=((3950, 4233),),
+    )
+    frames = render(
+        [still("bin-1", "bin", BIN_AT, end), still("plate-t1", "plate", PLATE_AT, end), knife, hand], end, fps
+    )
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    grabbed = min(event["t_start_ms"] for event in events if {event["a_id"], event["b_id"]} == {HAND, KNIFE})
+    washes = [event for event in events if event["action"] == "clean.wash" and event["a_id"] == KNIFE]
+    assert all(wash["t_start_ms"] > grabbed for wash in washes)
+    assert peanut_after(events, "plate-t1") >= 0.5
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("fps", [30, 60])
+@pytest.mark.parametrize("unseen", ["tool-spoon-1", HAND])
+def test_a_spoon_lifted_as_it_is_grabbed_then_unseen_still_carries_the_hand_onto_the_plate(unseen, fps):
+    """A hand that touched the peanut bin grabs a spoon resting on a plate and lifts it at once; then the spoon (or the
+    hand) is unseen for 283 ms. Zone rules bridge the dropout and confirm the grab only afterwards, counting it from
+    before the lift, when the spoon was still on the plate: the plate gets the peanut."""
+    lift = 1400
+    gone = ((1450, 1733),)
+    spoon = Track(
+        "tool-spoon-1",
+        "tool",
+        ((0, (0.58, 0.5)), (lift, (0.58, 0.5)), (lift + 300, (0.8, 0.5)), (3000, (0.8, 0.5))),
+        unseen=gone if unseen == "tool-spoon-1" else (),
+    )
+    hand = Track(
+        HAND,
+        "hand",
+        (
+            (0, BIN_AT),
+            (600, BIN_AT),
+            (1000, (0.62, 0.2)),
+            (1400, (0.62, 0.5)),
+            (lift + 300, (0.84, 0.5)),
+            (3000, (0.84, 0.5)),
+        ),
+        unseen=gone if unseen == HAND else (),
+    )
+    frames = render(
+        [still("bin-1", "bin", BIN_AT, 3000), still("plate-t1", "plate", PLATE_AT, 3000), spoon, hand], 3000, fps
+    )
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    assert not any(event["a_id"] == HAND and event["b_id"] == "plate-t1" for event in events)  # never touched it
+    assert peanut_after(events, "plate-t1") >= ALLERGY_FLAG
 
 
 @pytest.mark.safety

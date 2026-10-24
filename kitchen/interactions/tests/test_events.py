@@ -160,6 +160,23 @@ def test_a_wash_is_a_self_loop_and_nothing_else_is():
     assert (wash["a_id"], wash["b_id"], wash["action"]) == (KNIFE, KNIFE, "clean.wash")
 
 
+@pytest.mark.safety
+@pytest.mark.parametrize(("began_ms", "washed"), [(-50, False), (50, True)])
+def test_a_wash_that_opened_after_a_touch_began_is_dropped(began_ms, washed):
+    """A knife's wash opens at 0. At 99 a hand's touch on it is confirmed, its window saying the touch may have begun
+    at began_ms. If that is before the wash opened, the touch may have come first, so the wash is dropped rather than
+    stamped before it; if after, the knife was washed first and the wash stands."""
+    segmenter = Segmenter(SETTINGS)
+    knife_self = {"a_id": KNIFE, "b_id": KNIFE, "b_kind": "tool"}
+    events = segmenter.add_frame(0, [judged_at(0, [("clean.wash", 0.97)], **knife_self)])
+    events += segmenter.add_frame(66, [judged_at(66, [("clean.wash", 0.97)], **knife_self)])
+    hand_knife = {"a_id": HAND, "b_id": KNIFE, "b_kind": "tool"}
+    events += segmenter.add_frame(99, [(*judged_at(99, CONTACT, **hand_knife), began_ms)])
+    events += segmenter.close_all()
+
+    assert [event["action"] for event in events] == (["clean.wash"] if washed else []) + ["transfer.contact"]
+
+
 def test_unimportant_and_weak_transfers_make_no_edge():
     segmenter = Segmenter(SETTINGS)
 
@@ -283,6 +300,31 @@ def test_touches_starting_in_the_same_frame_carry_each_others_news_whatever_thei
         ("tool-spoon-1", 0, 0, "both"),
         (HAND, 0, 1, "b_to_a"),  # spoon -> hand
         ("tool-spoon-1", 0, 1, "a_to_b"),  # spoon -> plate
+    ]
+
+
+@pytest.mark.safety
+def test_a_touch_seen_again_after_news_carries_it_then():
+    """A spoon rests on a plate, last seen there at 297. A hand grabs the spoon at 561; its window says the grab may
+    have begun at 361, after the spoon was last seen, so the spoon-plate touch doesn't carry the hand's news then. At
+    594 the spoon is seen on the plate again, 297 ms after its last hit, so it is the same touch, and it was touching
+    after the grab began: it carries the news then, spoon to plate."""
+    segmenter = Segmenter(SETTINGS)
+    spoon_plate = {"a_id": "tool-spoon-1", "b_id": "plate-t1", "b_kind": "plate"}
+    hand_spoon = {"a_id": HAND, "b_id": "tool-spoon-1", "b_kind": "tool"}
+    events = []
+    for t_ms in [*range(0, 330, 33), 561, 594, 627]:
+        frame = []
+        if t_ms <= 297 or t_ms >= 594:
+            frame.append(judged_at(t_ms, CONTACT, **spoon_plate))
+        if t_ms >= 561:
+            frame.append((*judged_at(t_ms, CONTACT, **hand_spoon), 361))
+        events += segmenter.add_frame(t_ms, frame)
+
+    assert [(e["a_id"], e["b_id"], e["t_start_ms"], e["t_end_ms"], e["direction"]) for e in events] == [
+        ("tool-spoon-1", "plate-t1", 0, 0, "both"),
+        (HAND, "tool-spoon-1", 561, 561, "both"),
+        ("tool-spoon-1", "plate-t1", 594, 595, "a_to_b"),
     ]
 
 

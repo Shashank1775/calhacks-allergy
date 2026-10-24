@@ -40,7 +40,7 @@ from kitchen.interactions.classifier import FallbackClassifier, Labels
 from kitchen.interactions.features import FeatureTracker
 from kitchen.interactions.settings import InteractionSettings, load_interaction_settings
 from kitchen.interactions.windows import WindowBuilder
-from kitchen.interactions.zone_rules import ZoneRules
+from kitchen.interactions.zone_rules import ZoneRules, frame_interval_ms
 from kitchen.shared.change_mask import DEFAULT_BLUR_SIGMA_PX, DEFAULT_DECAY, DEFAULT_GAIN
 from kitchen.shared.interfaces import Clock, StateClient, StateUnavailable
 from kitchen.shared.models import InteractionEvent, InteractionFeatures, ObservationFrame, Zone, validate
@@ -62,13 +62,26 @@ def direction_for(action: str, b_kind: str) -> str:
     return "both"
 
 
+def touch_began_ms(rows: list[InteractionFeatures], min_overlap: float) -> int:
+    """The earliest the touch a window's rows show may have begun, for news and washes to look back to.
+
+    Zone rules count a touch's overlap from the window's first overlapping row, across short dropouts, so it may have
+    begun up to a frame before that row; one more frame allows for a late one. With no overlapping row (a primary
+    that judged the whole window), the window's first row.
+    """
+    overlapping = [row for row in rows if row["overlap"] >= min_overlap]
+    first_ms = (overlapping or rows)[0]["t_ms"]
+    return first_ms - 2 * frame_interval_ms(rows)
+
+
 # A touch is keyed by pair and action, whichever classifier answered each frame.
 Key = tuple[str, str, str]
 
 
 @dataclass(frozen=True)
 class Hit:
-    """One frame's label on one pair that can become an edge, and the classifier that gave it."""
+    """One frame's label on one pair that can become an edge, the classifier that gave it, and the earliest its touch
+    may have begun."""
 
     a_id: str
     b_id: str
@@ -78,6 +91,7 @@ class Hit:
     frame_id: int
     probability: float
     classifier: dict
+    began_ms: int
 
     @property
     def key(self) -> Key:
@@ -175,11 +189,23 @@ def receivers(key: Key, direction: str) -> list[str]:
 Arrival = tuple[str, int, Key]
 
 
+@dataclass(frozen=True)
+class News:
+    """Where a piece of news began: the two entities whose touch made it, the earliest that touch may have begun, and
+    the frame it happened in."""
+
+    entities: frozenset[str]
+    began_ms: int
+    t_ms: int
+
+
 @dataclass
 class Touch:
-    """A transfer going on: hits of one action on one pair, less than merge_gap_ms apart. `last_hit` is when it was
-    last seen, `probability` its strongest hit so far and `classifier` the one that gave it."""
+    """A transfer going on: hits of one action on one pair, less than merge_gap_ms apart. `started_ms` is its first
+    hit, `last_hit` when it was last seen, `probability` its strongest hit so far and `classifier` the one that gave
+    it."""
 
+    started_ms: int
     last_hit: Hit
     probability: float
     classifier: dict
@@ -199,38 +225,55 @@ class Segmenter:
     - A touch is a transfer's hits on one pair and action less than merge_gap_ms apart. It is one edge: its first hit,
       written at once as a one-hit event, so a plate carried to the pass by a dirty hand has its edge when it arrives.
     - News. A touch's first hit is news to the entities it can move allergens into. Once all of a frame's hits are
-      in, the news crosses at once every other touch seen on such an entity within lead_ms (on another pair): each
+      in, the news crosses at once every other touch seen on such an entity since the new touch may have begun (on
+      another pair): each
       writes one edge in this frame, ending a millisecond after the edge that brought the news, so the graph applies
       it after, and only from the side the news came in on, so it adds nothing the touch already moved. That edge is
       news to the far side in turn, the next wave, so news carries on along a chain of things all touching: a dirty
-      hand that grabs a spoon resting on a plate dirties the plate. lead_ms looks back because a first hit
-      comes only once the overlap has lasted contact_min_ms (scoop_min_ms for a scoop), so a touch that ended in
-      that time may have been touching when the new one began. A touch carries each piece of news once per side and
-      per touch it came through, so news from parallel paths all gets across, whatever the entities are called. It
+      hand that grabs a spoon resting on a plate dirties the plate. It looks back because a first hit comes only once
+      the overlap has lasted contact_min_ms (scoop_min_ms for a scoop), counted from the window's first overlapping
+      row across short dropouts, so a touch that ended in that time may have been touching when the new one began.
+      InteractionStep passes when that was (touch_began_ms); a caller that can't say gets lead_ms before the hit. A
+      touch that was going on but not seen since then carries the news if it is seen again within merge_gap_ms, as
+      the same touch. A touch carries each piece of news once per side and per touch it came through, so news from
+      parallel paths all gets across, whatever the entities are called. It
       never carries news back into the two entities whose touch made it, so a ring of touching things can't echo it.
       Transfers on the same pair carry nothing new to each other.
     - A later hit surer than the touch's strongest so far (a primary and zone rules answering in turn) writes an edge
       for the difference, (p - p_before) / (1 - p_before), so the touch's edges add up to its surest hit under
       noisy-OR. It is news like a first hit.
     - A wash is one event per rinse, bridged across a loss of up to wash_gap_ms. It counts only once no transfer has
-      touched the entity for wash_min_dwell_ms, so it never comes before a touch during the soak, and a transfer on
-      the entity ends its open wash. A wash that opened less than lead_ms before that transfer's hit is dropped
-      instead, since the touch may have begun first. A new wash on an entity no transfer has touched since its last
+      touched the entity for wash_min_dwell_ms, nor anything overlapped it (a touch the detector loses before it is
+      confirmed), so it never comes before a touch during the soak, and a transfer or overlap ends its open wash. A wash that opened after that transfer's touch may have begun is dropped
+      instead, since the touch may have come first. A new wash on an entity no transfer has touched since its last
       one is dropped: it can't make it cleaner than the safe reading, and two washes from one rinse would clean twice.
     """
 
     def __init__(self, settings: InteractionSettings) -> None:
         self.settings = settings
-        # A touch may have begun this long before its first hit: zone rules confirm it only after this much overlap.
+        # How long before its first hit a touch may have begun, when the caller can't say: zone rules confirm a touch
+        # only after this much overlap.
         self.lead_ms = max(settings.contact_min_ms, settings.scoop_min_ms)
-        self._touches: dict[Key, Touch] = {}  # transfers seen within max(merge_gap_ms, lead_ms)
+        # Keep touches this long after they were last seen: news may look back a whole window, and a touch may resume.
+        self.keep_ms = max(settings.merge_gap_ms, settings.window_ms + self.lead_ms)
+        self._touches: dict[Key, Touch] = {}  # transfers seen within keep_ms
         self._news_count = 0  # news IDs, numbered in the order the news happened
+        self._news: dict[int, News] = {}  # news from the last merge_gap_ms, which a touch seen again may still owe
+        self._carried: dict[Arrival, set[Key]] = {}  # each of that news's arrivals -> the touches that carried it
         self._washes: dict[str, Segment] = {}  # open washes, by entity
-        self._last_transfer_ms: dict[str, int] = {}  # entity -> its last transfer hit, within wash_min_dwell_ms
+        self._last_touched_ms: dict[str, int] = {}  # entity -> when something last overlapped it, within the dwell
         self._washed: set[str] = set()  # entities washed, and touched by no transfer since
 
-    def edge_hits(self, latest: InteractionFeatures, labels: Labels, classifier: dict) -> list[Hit]:
-        """The labels that can become edges, one hit per action.
+    def with_began(self, judgement: tuple) -> tuple:
+        """A judged window as (newest feature row, labels, classifier, the earliest its touch may have begun): as given,
+        or lead_ms before the newest row when the caller can't say."""
+        if len(judgement) == 4:
+            return judgement
+        latest, labels, classifier = judgement
+        return (latest, labels, classifier, latest["t_ms"] - self.lead_ms)
+
+    def edge_hits(self, latest: InteractionFeatures, labels: Labels, classifier: dict, began_ms: int) -> list[Hit]:
+        """The labels that can become edges, one hit per action, each with the earliest its touch may have begun.
 
         A wash only on a self pair and only at wash_floor or above; a transfer only between two entities and only at
         event_floor or above. A transfer on a self pair means nothing and a wash between two entities would clean
@@ -249,40 +292,42 @@ class Segmenter:
                 pick = min if action == "clean.wash" else max
                 kept[action] = pick(kept.get(action, probability), probability)
         a_id, b_id, b_kind, t_ms, frame_id = (latest[name] for name in ("a_id", "b_id", "b_kind", "t_ms", "frame_id"))
-        return [Hit(a_id, b_id, b_kind, action, t_ms, frame_id, p, classifier) for action, p in kept.items()]
+        return [Hit(a_id, b_id, b_kind, action, t_ms, frame_id, p, classifier, began_ms) for action, p in kept.items()]
 
-    def add_frame(self, t_ms: int, judged: list[tuple[InteractionFeatures, Labels, dict]]) -> list[InteractionEvent]:
-        """Add one frame's judged windows, each (newest feature row, labels, classifier). Returns the events to write
-        now, in edge order: transfer edges and the news they carry across, then finished washes.
+    def add_frame(self, t_ms: int, judged: list[tuple]) -> list[InteractionEvent]:
+        """Add one frame's judged windows, each (newest feature row, labels, classifier) and optionally the earliest its
+        touch may have begun. Returns the events to write now, in edge order: transfer edges and the news they carry
+        across, then finished washes.
 
         Transfers go first, so a transfer on an entity this frame already stops its wash this frame. News spreads once
         all of this frame's hits are in, so touches first seen in the same frame carry each other's news whatever the
         order of their event IDs.
         """
-        hits = [hit for latest, labels, classifier in judged for hit in self.edge_hits(latest, labels, classifier)]
+        judged = [self.with_began(judgement) for judgement in judged]
+        hits = [hit for judgement in judged for hit in self.edge_hits(*judgement)]
         written = []
-        arrivals: list[Arrival] = []
-        origins: dict[int, set[str]] = {}
+        for latest, _, _, began_ms in judged:
+            written += self.note_overlap(latest, began_ms)
         for hit in hits:
             if hit.action != "clean.wash":
-                written += self.add_transfer(hit, arrivals, origins)
-        written += self.spread_news(t_ms, arrivals, origins)
+                written += self.add_transfer(hit)
+        written += self.spread_news(t_ms)
         for hit in hits:
             if hit.action == "clean.wash":
                 written += self.add_wash(hit)
         written += self.close_stale(t_ms)
         return sorted(written, key=event_order)
 
-    def add_transfer(self, hit: Hit, arrivals: list[Arrival], origins: dict[int, set[str]]) -> list[InteractionEvent]:
+    def add_transfer(self, hit: Hit) -> list[InteractionEvent]:
         """One transfer hit: start a touch, add a surer hit to a going one, or nothing. Returns the edge to write now,
-        if any, and adds the news it brings to `arrivals` (and where that news began to `origins`)."""
+        if any, and records the news it brings, for spread_news."""
         written = []
         for entity_id in (hit.a_id, hit.b_id):
-            written += self.note_transfer(entity_id, hit.t_ms)
+            written += self.note_transfer(entity_id, hit.t_ms, hit.began_ms)
 
         touch = self._touches.get(hit.key)
         if touch is None or hit.t_ms - touch.last_hit.t_ms > self.settings.merge_gap_ms:
-            touch = self._touches[hit.key] = Touch(hit, hit.probability, hit.classifier)
+            touch = self._touches[hit.key] = Touch(hit.t_ms, hit, hit.probability, hit.classifier)
             probability = hit.probability
         elif hit.probability > touch.probability:
             # Only the difference crosses, so the touch's edges add up to this hit's probability under noisy-OR
@@ -294,8 +339,9 @@ class Segmenter:
             return written  # the touch goes on: its edge is already written
 
         news = self.next_news()
-        origins[news] = {hit.a_id, hit.b_id}
-        arrivals += [(entity_id, news, hit.key) for entity_id in receivers(hit.key, touch.direction)]
+        self._news[news] = News(frozenset((hit.a_id, hit.b_id)), hit.began_ms, hit.t_ms)
+        for entity_id in receivers(hit.key, touch.direction):
+            self._carried[(entity_id, news, hit.key)] = set()
         return written + [one_hit_event(hit, probability, hit.classifier)]
 
     def next_news(self) -> int:
@@ -303,51 +349,81 @@ class Segmenter:
         self._news_count += 1
         return self._news_count
 
-    def spread_news(self, t_ms: int, arrivals: list[Arrival], origins: dict[int, set[str]]) -> list[InteractionEvent]:
-        """Carry this frame's news across every touch seen within lead_ms on an entity it reached, in waves. Returns
-        the edges that carry it.
+    def spread_news(self, t_ms: int) -> list[InteractionEvent]:
+        """Carry news across every touch on an entity it reached that owes it, in waves. Returns the edges that carry
+        it.
 
-        Wave n's edges end n ms after the frame, so the graph applies a chain in order. A touch carries news only
-        from the side it came in on, the way the touch can move allergens, and never into the entities whose touch
-        made the news. Each touch carries each (side, news, touch it came through) once, so the waves end.
+        A touch owes news if it was going on when the news came (first seen no later), has been seen since the touch
+        that made the news may have begun, carries the way the news goes, and doesn't lead back into the entities whose
+        touch made it. That takes this frame's news, and news from the last merge_gap_ms for a touch seen again. Wave
+        n's edges end n ms after the frame, so the graph applies a chain in order. Each touch carries each (side, news,
+        touch it came through) once, so the waves end.
         """
         written = []
-        carried: set[tuple[Key, Arrival]] = set()
+        offered = list(self._carried)
         wave = 0
-        while arrivals:
+        while offered:
             wave += 1
             carrying: dict[Key, list[Arrival]] = {}
-            for arrival in arrivals:
-                entity_id, news, via = arrival
-                for key, touch in self._touches.items():
-                    if key[:2] == via[:2] or entity_id not in key[:2] or (key, arrival) in carried:
-                        continue
-                    far = key[1] if entity_id == key[0] else key[0]
-                    seen_lately = t_ms - touch.last_hit.t_ms <= self.lead_ms
-                    if seen_lately and far in receivers(key, touch.direction) and far not in origins[news]:
-                        carried.add((key, arrival))
-                        carrying.setdefault(key, []).append(arrival)
-            arrivals = []
+            for arrival in offered:
+                for key in self.owing(arrival):
+                    self._carried[arrival].add(key)
+                    carrying.setdefault(key, []).append(arrival)
+            offered = []
             for key, items in carrying.items():
                 touch = self._touches[key]
                 sides = {entity_id for entity_id, _, _ in items}
                 direction = "both" if len(sides) == 2 else ("a_to_b" if key[0] in sides else "b_to_a")
                 written.append(carry_event(touch, t_ms, wave, direction))
                 for entity_id, news, _ in items:
-                    arrivals.append((key[1] if entity_id == key[0] else key[0], news, key))
+                    arrival = (key[1] if entity_id == key[0] else key[0], news, key)
+                    self._carried.setdefault(arrival, set())
+                    offered.append(arrival)
         return written
 
-    def note_transfer(self, entity_id: str, t_ms: int) -> list[InteractionEvent]:
-        """A transfer touched the entity: its wash dwell starts over, it may be washed again, and an open wash on it
-        ends here, so no wash spans a transfer. Returns that wash's event, if any.
+    def owing(self, arrival: Arrival) -> list[Key]:
+        """The touches that owe this arrival of news and haven't carried it: see spread_news."""
+        entity_id, news_id, via = arrival
+        news = self._news[news_id]
+        owing = []
+        for key, touch in self._touches.items():
+            if key[:2] == via[:2] or entity_id not in key[:2] or key in self._carried[arrival]:
+                continue
+            far = key[1] if entity_id == key[0] else key[0]
+            going_then = touch.started_ms <= news.t_ms and touch.last_hit.t_ms >= news.began_ms
+            if going_then and far in receivers(key, touch.direction) and far not in news.entities:
+                owing.append(key)
+        return owing
 
-        A wash that opened less than lead_ms before this hit is dropped, not written: the touch may have begun before
-        the wash's dwell was up, and a wash stamped before it would clean what it brought.
-        """
-        self._last_transfer_ms[entity_id] = t_ms
+    def note_overlap(self, latest: InteractionFeatures, began_ms: int) -> list[InteractionEvent]:
+        """Two entities overlapping, a touch or not yet one: each one's wash dwell starts over and its open wash ends
+        here, so a wash never comes due, or goes on, while something is on the entity, even one the detector loses
+        before its touch is confirmed. Returns any wash written. A row without an overlap (a hand-written one) counts
+        as none."""
+        overlapping = latest.get("overlap", 0.0) >= self.settings.contact_min_overlap
+        if latest["a_id"] == latest["b_id"] or not overlapping:
+            return []
+        written = []
+        for entity_id in (latest["a_id"], latest["b_id"]):
+            written += self.end_wash(entity_id, latest["t_ms"], began_ms)
+        return written
+
+    def note_transfer(self, entity_id: str, t_ms: int, began_ms: int) -> list[InteractionEvent]:
+        """A transfer touched the entity at t_ms (its touch may have begun at began_ms): as for an overlap, and it may be
+        washed again, since a transfer may have dirtied it. Returns any wash written."""
         self._washed.discard(entity_id)
+        return self.end_wash(entity_id, t_ms, began_ms)
+
+    def end_wash(self, entity_id: str, t_ms: int, began_ms: int) -> list[InteractionEvent]:
+        """Something is on the entity at t_ms, since began_ms as far as its window shows: its wash dwell starts over
+        and an open wash on it ends here, so no wash spans a touch. Returns that wash's event, if any.
+
+        A wash that opened at or after began_ms is dropped, not written: the touch may have begun before the wash's
+        dwell was up, and a wash stamped before it would clean what it brought.
+        """
+        self._last_touched_ms[entity_id] = t_ms
         wash = self._washes.pop(entity_id, None)
-        if wash is None or t_ms - wash.t_start_ms < self.lead_ms:
+        if wash is None or wash.t_start_ms >= began_ms:
             return []
         return [wash.event()]
 
@@ -355,13 +431,13 @@ class Segmenter:
         """One wash hit on a self pair: extend the entity's open wash, start one, or drop it. Returns any event to
         write now.
 
-        Dropped while a transfer touched the entity less than wash_min_dwell_ms ago, so the dwell counts from the
-        later of zone entry (zone rules) and that touch; and dropped when nothing touched the entity since its last
+        Dropped while something overlapped the entity less than wash_min_dwell_ms ago, so the dwell counts from the
+        later of zone entry (zone rules) and that; and dropped when no transfer touched the entity since its last
         wash.
         """
         entity_id = hit.a_id
-        last_transfer_ms = self._last_transfer_ms.get(entity_id)
-        if last_transfer_ms is not None and hit.t_ms - last_transfer_ms < self.settings.wash_min_dwell_ms:
+        last_touched_ms = self._last_touched_ms.get(entity_id)
+        if last_touched_ms is not None and hit.t_ms - last_touched_ms < self.settings.wash_min_dwell_ms:
             return []
 
         written = []
@@ -377,28 +453,34 @@ class Segmenter:
         return written
 
     def close_stale(self, t_ms: int) -> list[InteractionEvent]:
-        """Forget every touch seen neither within merge_gap_ms (it ended) nor within lead_ms (news can't reach it),
-        close every wash with no hit for wash_gap_ms, and forget what can no longer matter. A touch's edges are
-        already written, so only washes are written here."""
+        """Forget every touch not seen within keep_ms (it ended, and no news can reach back to it), close every wash
+        with no hit for wash_gap_ms, and forget what can no longer matter. A touch's edges are already written, so only
+        washes are written here."""
         s = self.settings
-        keep_ms = max(s.merge_gap_ms, self.lead_ms)
-        ended = [key for key, touch in self._touches.items() if t_ms - touch.last_hit.t_ms > keep_ms]
+        ended = [key for key, touch in self._touches.items() if t_ms - touch.last_hit.t_ms > self.keep_ms]
         for key in ended:
             del self._touches[key]
         rinsed = [entity_id for entity_id, wash in self._washes.items() if t_ms - wash.t_end_ms > s.wash_gap_ms]
         written = [self._washes.pop(entity_id).event() for entity_id in rinsed]
 
-        settled = [
-            entity for entity, last_ms in self._last_transfer_ms.items() if t_ms - last_ms >= s.wash_min_dwell_ms
-        ]
+        # A touch going on when news came, if it is seen again at all, is seen within merge_gap_ms of it.
+        old = {news_id for news_id, news in self._news.items() if t_ms - news.t_ms > s.merge_gap_ms}
+        for news_id in old:
+            del self._news[news_id]
+        for arrival in [arrival for arrival in self._carried if arrival[1] in old]:
+            del self._carried[arrival]
+
+        settled = [entity for entity, last_ms in self._last_touched_ms.items() if t_ms - last_ms >= s.wash_min_dwell_ms]
         for entity_id in settled:
-            del self._last_transfer_ms[entity_id]
+            del self._last_touched_ms[entity_id]
         return written
 
     def close_all(self) -> list[InteractionEvent]:
         """Close every open wash (the stream ended), in edge order. Every touch's edges are already written."""
         events = [wash.event() for wash in self._washes.values()]
         self._touches.clear()
+        self._news.clear()
+        self._carried.clear()
         self._washes.clear()
         return sorted(events, key=event_order)
 
@@ -495,7 +577,8 @@ class InteractionStep:
         judged = []
         for window in self.windows.update(frame, rows, change_mask):
             labels, classifier = self.classifier.classify_window(window)
-            judged.append((window.features[-1], labels, classifier))
+            began_ms = touch_began_ms(window.features, self.settings.contact_min_overlap)
+            judged.append((window.features[-1], labels, classifier, began_ms))
         return self.segmenter.add_frame(t_ms, judged)
 
     def finish(self) -> list[InteractionEvent]:
