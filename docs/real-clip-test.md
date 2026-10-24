@@ -8,8 +8,8 @@ model trained on) and score them. About an afternoon, most of it recording and l
 ## 1. Recording checklist
 
 **Camera**
-- [ ] Mounted **overhead, looking straight down**, as the real system will be (Pi Camera Module 3, a webcam or a phone on a stand). Nothing on the mount should wobble.
-- [ ] The whole station in view: two or three containers, a plate, and room for hands to come in.
+- [ ] Mounted **where it will really go: high, looking down at the station at a slight angle**, like a camera on a wall or shelf in a restaurant (about 2–2.5 m up, tilted roughly 20–40° from straight down). Pi Camera Module 3, a webcam or a phone on a stand all work. Nothing on the mount should wobble. Record from that same spot every take: the angle is part of what's being tested.
+- [ ] The whole station in view: two or three containers, a plate, and room for hands to come in. From an angle, things nearer the camera can hide what's behind them, so place containers so the ones you use aren't blocked by your own arm.
 - [ ] Landscape, 720p or 1080p, **30 fps** (anything 15 fps or more works). Note the frame rate.
 - [ ] Normal kitchen lighting. Don't add special lights; a little steam or a shadow is good, it's what the real thing sees.
 - [ ] Record in takes of 2–3 minutes, so a mistake costs one take. Name them `take1.mp4`, `take2.mp4`, ...
@@ -28,7 +28,7 @@ model trained on) and score them. About an afternoon, most of it recording and l
 | `deposit` | 10 | Carry food on a spoon and leave it in a container or on the plate |
 | `wipe` | 10 | Spread or stir food inside a container with a tool |
 | `touch` | 15 | Tap a container's rim or side with a tool; no food moves |
-| `hover` | 10 | Hold a tool 1–2 cm over the food for a second without touching, then leave |
+| `hover` | 10 | Hold a tool 1–2 cm over the food for a second without touching, then leave (from an angle a small gap may be visible; that's what this tests) |
 | `pass_over` | 15 | Move a tool across over a container without stopping |
 | `motion_nearby` | 10 | Rest your tool next to a container while someone else stirs inside it |
 | `approach_leave` | 15 | Bring a tool close to a container (not over it) and take it away |

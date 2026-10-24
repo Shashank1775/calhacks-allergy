@@ -338,7 +338,7 @@ def overlap_rule(tensor: np.ndarray) -> tuple[bool, bool]:
 
 
 def score_clips(weights: Path, tensors: list[np.ndarray], dt_ms: list[list[int]]) -> np.ndarray:
-    """P(touched) and P(moved) for every clip, from a checkpoint made by tools/train_lstm.py."""
+    """P(touched) and P(moved) for every clip, from a checkpoint made by kitchen/lstm/train.py."""
     import torch
 
     from kitchen.lstm import model as models
