@@ -3,8 +3,8 @@
  *
  * Reads: GET <base_url>/state → {scenario_id, t_ms, tables}, the runner's
  * snapshot of the tables in state-tables.md.
- * Emits: the seven tables the screens use, as the runner sent them. The extra
- * tables (allergen, zone) are ignored.
+ * Emits: the tables the screens use, as the runner sent them. The allergen
+ * table is ignored; zone may be missing, which leaves the gate panel closed.
  * Rules: fail closed. Any failed poll (network error, timeout, an error status,
  * a body that isn't JSON or is missing a table) sets the feed to `lost`, so
  * every screen shows FEED LOST and no badge can show PASS. The last rows stay on
@@ -20,6 +20,9 @@ export const POLL_MS = 500;
 export const POLL_TIMEOUT_MS = 2000;
 
 const TABLE_NAMES = Object.keys(empty_tables()) as TableName[];
+
+// A missing optional table reads as empty. Without zones nothing is at the pass, so the gate stays closed.
+const OPTIONAL_TABLES: TableName[] = ["zone"];
 
 type Snapshot = { scenario_id: string; tables: Tables };
 
@@ -134,8 +137,8 @@ async function fetch_snapshot(base_url: string): Promise<Snapshot | null> {
 }
 
 /**
- * Checks the snapshot's outline: a scenario id and an array for each of the
- * seven tables. Rows are passed on as sent: the runner writes every ticket and
+ * Checks the snapshot's outline: a scenario id and an array for each table
+ * (zone may be left out). Rows are passed on as sent: the runner writes every ticket and
  * verdict through FakeStateClient, which checks each against its contract
  * schema, and keeps one row per primary key.
  */
@@ -146,8 +149,10 @@ function parse_snapshot(body: unknown): Snapshot | null {
   if (typeof scenario_id !== "string") return null;
   if (typeof tables !== "object" || tables === null) return null;
 
+  const checked = { ...(tables as Record<string, unknown>) };
   for (const name of TABLE_NAMES) {
-    if (!Array.isArray((tables as Record<string, unknown>)[name])) return null;
+    if (checked[name] === undefined && OPTIONAL_TABLES.includes(name)) checked[name] = [];
+    if (!Array.isArray(checked[name])) return null;
   }
-  return { scenario_id, tables: tables as Tables };
+  return { scenario_id, tables: checked as Tables };
 }

@@ -31,8 +31,8 @@ web/
     types/     TEMPORARY.ts: hand-written contract types until platform generates src/generated/ (never hand-edit that)
     components/ chit, rail, stamp, banner, "to be implemented" marker
     home/      the / page: video source, live camera source (to be implemented)
-    tablet/    ticket entry, one-tap questions, send gate
-    expo/      tickets, plates, hold reasons and chains, start-plate button, camera panel
+    tablet/    ticket entry, one-tap questions, send gate, changing a sent ticket
+    expo/      the gate panel, tickets, plates, hold reasons and chains, start-plate button, the live camera
 ```
 
 ## Run it
@@ -74,6 +74,8 @@ npm --prefix web run dev
 ```
 
 The screens poll the runner's `GET /state` twice a second and show REPLAY, since it's a scenario, not the kitchen. If the runner stops or answers badly, every screen shows FEED LOST until it's back. `WEB_STATE_URL` must be an `http://` or `https://` address, or there's no source.
+
+**With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop.
 
 With real services, drop `WEB_MOCK_API` and set `WEB_ORDERS_URL` and `WEB_VISION_URL`. Each service must list the web origin in its CORS setting (`ORDERS_CORS_ORIGINS`, `VISION_CORS_ORIGINS`), for example `http://localhost:5173`, or `http://<laptop-ip>:5173` for the iPad.
 

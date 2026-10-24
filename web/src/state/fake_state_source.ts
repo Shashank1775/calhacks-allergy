@@ -7,7 +7,7 @@
  * banner. Verdicts come straight from the scenario's `expected` entries; this
  * file never decides one.
  */
-import type { Entity, Interaction, Scenario, Verdict } from "../types/TEMPORARY";
+import type { Entity, EntityState, Interaction, Scenario, Verdict, Zone } from "../types/TEMPORARY";
 import { empty_tables, type FeedStatus, type StateSource, type TableName, type Tables } from "./state_source";
 
 /** How long an amended ticket shows RECHECKING before its new verdict lands. */
@@ -99,6 +99,7 @@ const KEY_FIELDS: Record<TableName, string | null> = {
   entity: "entity_id",
   entity_state: null,
   plate_binding: "plate_id",
+  zone: "zone_id",
   interaction: "event_id",
   verdict: "verdict_id",
 };
@@ -108,6 +109,9 @@ export function build_timeline(scenario: Scenario): Step[] {
   const steps: Step[] = [];
   const add = (t_ms: number, table: TableName, key: string | null, row: unknown) =>
     steps.push({ t_ms, table, key, row });
+
+  // Scenarios carry no calibration, so the replay has just the two zones the screens need.
+  for (const zone of REPLAY_ZONES) add(0, "zone", zone.zone_id, zone);
 
   for (const bin of scenario.bins ?? []) {
     add(0, "entity", bin.entity_id, entity_row(bin.entity_id, bin.label, "shift_start", 0));
@@ -137,6 +141,11 @@ export function build_timeline(scenario: Scenario): Step[] {
       entity_row(binding.plate_id, `plate for ${binding.ticket_id}`, "shift_start", binding.t_ms),
     );
     add(binding.t_ms, "plate_binding", binding.plate_id, binding);
+    add(binding.t_ms, "entity_state", null, plate_state(binding.plate_id, binding.t_ms, PLATING_ZONE_ID));
+  }
+
+  for (const plate of scenario.plates_at_pass) {
+    add(plate.t_ms, "entity_state", null, plate_state(plate.plate_id, plate.t_ms, PASS_ZONE_ID));
   }
 
   const known = new Set([
@@ -160,6 +169,29 @@ export function build_timeline(scenario: Scenario): Step[] {
   }
 
   return steps.sort((a, b) => a.t_ms - b.t_ms);
+}
+
+const PLATING_ZONE_ID = "plating-spot";
+const PASS_ZONE_ID = "pass";
+
+const REPLAY_ZONES: Zone[] = [
+  { zone_id: PLATING_ZONE_ID, kind: "plating_spot", polygon: [] },
+  { zone_id: PASS_ZONE_ID, kind: "pass", polygon: [] },
+];
+
+/** Where a plate is at `t_ms`. A replay has no camera, so no box and no allergen readings. */
+function plate_state(plate_id: string, t_ms: number, zone: string): EntityState {
+  return {
+    state_id: `${plate_id}@${t_ms}`,
+    entity_id: plate_id,
+    version: t_ms,
+    t_ms,
+    zone,
+    box: null,
+    probabilities: {},
+    unknown: false,
+    caused_by: null,
+  };
 }
 
 function entity_row(entity_id: string, label: string, origin: Entity["origin"], t_ms: number): Entity {
