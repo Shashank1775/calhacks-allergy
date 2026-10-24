@@ -27,7 +27,9 @@ install() {
   # hailo_platform (and picamera2) exist only for the system Python 3.13, so the venv sees system packages.
   # pip, not `uv sync`: uv follows .python-version and would swap this venv for one without hailo_platform.
   python3 -m venv --system-site-packages .venv
-  .venv/bin/pip install -e .
+  # The server extra (FastAPI, uvicorn) runs the Vision API and the local runner's live mode; the ml extra brings
+  # OpenCV (frames, the MJPEG stream) and ONNX Runtime (the parity check's reference).
+  .venv/bin/pip install -e '.[server,ml]'
   echo "Installed. Reboot (sudo reboot), copy the bundle to data/models/<name>, then:"
   echo "  bash kitchen/vision/pi_setup.sh check data/models/<name>"
 }

@@ -13,6 +13,7 @@ still reaches the other consumers and the status, so one broken consumer can't f
 
     uv run python -m kitchen.vision.run --video data/recordings/prep.mp4 --zones zones.json --out frames.jsonl
     uv run python -m kitchen.vision.run --webcam 0 --zones zones.json --serve       # live, with the Vision HTTP API
+    .venv/bin/python -m kitchen.vision.run --picamera --zones zones.json --serve    # on the Pi, from its camera
 
 In-process (the local runner's live mode): build a FrameLoop with build_frame_loop() and pass consumers such as
 entity_store_consumer(store); the loop needs nothing else from this module.
@@ -241,12 +242,22 @@ def serve_in_background(app, port: int):
     return server
 
 
+def source_name(args) -> str:
+    """The frame source as the recording manifest names it: the video's path, webcam:<index> or picamera."""
+    if args.video:
+        return str(args.video)
+    if args.picamera:
+        return "picamera"
+    return f"webcam:{args.webcam}"
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI; see the module docstring. Exits 1 if the frame loop stops on an error."""
-    parser = argparse.ArgumentParser(description="Run vision: a video or webcam to ObservationFrames.")
+    parser = argparse.ArgumentParser(description="Run vision: a video, webcam or the Pi camera to ObservationFrames.")
     source_group = parser.add_mutually_exclusive_group(required=True)
     source_group.add_argument("--video", type=Path, help="a video file")
     source_group.add_argument("--webcam", type=int, help="a webcam index, e.g. 0")
+    source_group.add_argument("--picamera", action="store_true", help="the Raspberry Pi camera (picamera2, on the Pi)")
     parser.add_argument("--zones", type=Path, help="zones.json (see kitchen/vision/zones.py)")
     parser.add_argument("--out", type=Path, help="write every ObservationFrame to this JSONL file")
     parser.add_argument(
@@ -258,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from kitchen.shared.fakes import FakeStateClient
-    from kitchen.vision.camera import VideoSource, WebcamSource
+    from kitchen.vision.camera import PiCameraSource, VideoSource, WebcamSource
     from kitchen.vision.plates import start_plate
     from kitchen.vision.record import Recorder, change_mask_params
     from kitchen.vision.server import VisionStatus, create_app, parse_cors_origins
@@ -279,8 +290,8 @@ def main(argv: list[str] | None = None) -> int:
     loop = build_frame_loop(settings, zones, consumers=[])
     # The clock starts once the detector has loaded, which can take seconds: load time must not decide which objects
     # are seen by shift_start_ms. An offline video keeps its own time from 0 instead, so one file always gives the same
-    # output. Live (a webcam, --serve or --live), frames are stamped as they are processed.
-    live = args.webcam is not None or args.serve or args.live
+    # output. Live (a webcam, the Pi camera, --serve or --live), frames are stamped as they are processed.
+    live = args.webcam is not None or args.picamera or args.serve or args.live
     clock = SystemClock() if live else FakeClock(0)
     status = VisionStatus(loop.detector.backend, settings.track_lost_ms) if args.serve else None
     loop.status = status
@@ -291,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         closers.append(writer.close)
     if args.record:
         manifest = {
-            "source": str(args.video) if args.video else f"webcam:{args.webcam}",
+            "source": source_name(args),
             "zones_sha256": file_sha256(args.zones) if args.zones else None,
             "shift_start_ms": settings.shift_start_ms,
             "detector": loop.detector.backend,
@@ -324,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
         source = VideoSource(args.video, clock)
         if args.serve or args.live:
             source = as_live(source, clock)
+    elif args.picamera:
+        source = PiCameraSource(clock)
     else:
         source = WebcamSource(args.webcam, clock)
     if args.max_frames is not None:

@@ -2,10 +2,13 @@
 
 Owner: vision (agents)
 Step:  vision
-Reads: kitchen.vision.camera, a tiny MJPG video written by OpenCV, FakeClock
+Reads: kitchen.vision.camera, a tiny MJPG video written by OpenCV, a stand-in picamera2 module, FakeClock
 Emits: nothing
 Rules: time runs forward (strictly increasing t_ms, even across source restarts); a source that can't open fails
 """
+
+import sys
+import types
 
 import cv2
 import numpy as np
@@ -15,7 +18,7 @@ from hypothesis import strategies as st
 
 from kitchen.shared.fakes import FakeClock
 from kitchen.vision import camera
-from kitchen.vision.camera import VideoSource, WebcamSource, forward_t_ms
+from kitchen.vision.camera import PI_CAMERA_SIZE, PiCameraSource, VideoSource, WebcamSource, forward_t_ms
 
 FPS = 25
 FRAME_COUNT = 6
@@ -170,3 +173,103 @@ def test_forward_t_ms_never_repeats_or_reverses(raw_t_values, after_t_ms):
     previous_values = [after_t_ms, *stamped][: len(stamped)]
     for t, raw, previous in zip(stamped, raw_t_values, previous_values, strict=True):
         assert t == raw if raw > previous else t == previous + 1
+
+
+class FakePicamera2:
+    """Stands in for picamera2.Picamera2: `frames` B, G, R frames, then a failed capture. Records what it was asked."""
+
+    def __init__(self, clock=None, steps_ms=(), frames=3, fail_to_open=False):
+        if fail_to_open:
+            raise IndexError("list index out of range")  # what picamera2 raises when no camera is attached
+        self.clock = clock
+        self.steps_ms = list(steps_ms)
+        self.frames = frames
+        self.camera_controls = {"AfMode": (0, 2, 0)}
+        self.config = None
+        self.controls = {}
+        self.started = self.closed = False
+
+    def create_video_configuration(self, main):
+        return {"main": main}
+
+    def configure(self, config):
+        self.config = config
+
+    def set_controls(self, controls):
+        self.controls.update(controls)
+
+    def start(self):
+        self.started = True
+
+    def capture_array(self):
+        if self.frames == 0:
+            raise RuntimeError("camera frontend has timed out")
+        self.frames -= 1
+        if self.steps_ms:
+            self.clock.advance(self.steps_ms.pop(0))
+        bgr = np.zeros((4, 6, 3), dtype=np.uint8)
+        bgr[..., 2] = 200  # red, in B, G, R order
+        return bgr
+
+    def stop(self):
+        self.started = False
+
+    def close(self):
+        self.closed = True
+
+
+def fake_picamera2(monkeypatch, **camera_args):
+    """Install a stand-in picamera2 module; returns a list that collects every camera it makes."""
+    made = []
+
+    def make():
+        made.append(FakePicamera2(**camera_args))
+        return made[-1]
+
+    monkeypatch.setitem(sys.modules, "picamera2", types.SimpleNamespace(Picamera2=make))
+    return made
+
+
+@pytest.mark.safety
+def test_pi_camera_stamps_frames_as_they_arrive_and_never_repeats_a_t_ms(monkeypatch):
+    clock = FakeClock(start_ms=100)
+    fake_picamera2(monkeypatch, clock=clock, steps_ms=[33, 0, 34])
+
+    source = PiCameraSource(clock, after_t_ms=120)
+    frames = []
+    with pytest.raises(RuntimeError, match="timed out"):  # the fourth capture fails, and the stream stops
+        for frame in source:
+            frames.append(frame)
+
+    assert [frame.frame_id for frame in frames] == [0, 1, 2]
+    assert [frame.t_ms for frame in frames] == [133, 134, 167]  # the stalled reading moves to last + 1
+    assert_strictly_increasing([120] + [frame.t_ms for frame in frames])
+
+
+def test_pi_camera_frames_are_rgb_and_the_camera_is_set_up_and_closed(monkeypatch):
+    made = fake_picamera2(monkeypatch, frames=1)
+
+    source = PiCameraSource(FakeClock())
+    frames = []
+    with pytest.raises(RuntimeError):
+        for frame in source:
+            frames.append(frame)
+
+    (camera_made,) = made
+    assert camera_made.config == {"main": {"size": PI_CAMERA_SIZE, "format": "RGB888"}}
+    assert camera_made.controls == {"AfMode": 2}  # continuous autofocus
+    assert frames[0].rgb.dtype == np.uint8
+    assert frames[0].rgb[0, 0].tolist() == [200, 0, 0]  # B, G, R from the camera, R, G, B out
+    assert camera_made.closed and not camera_made.started
+
+
+def test_pi_camera_without_picamera2_raises_a_clear_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "picamera2", None)  # a None entry makes the import raise ImportError
+    with pytest.raises(OSError, match="picamera2 isn't available"):
+        PiCameraSource(FakeClock())
+
+
+def test_pi_camera_that_isnt_attached_raises(monkeypatch):
+    fake_picamera2(monkeypatch, fail_to_open=True)
+    with pytest.raises(OSError, match="can't open the Pi camera"):
+        PiCameraSource(FakeClock())

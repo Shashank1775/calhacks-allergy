@@ -9,6 +9,7 @@ Turns camera frames into tracked, stably identified bins, tools, hands and plate
 ```bash
 uv run python -m kitchen.vision.run --video data/recordings/prep.mp4 --zones zones.json --out frames.jsonl
 uv run python -m kitchen.vision.run --webcam 0 --zones zones.json --serve        # live, with the Vision HTTP API
+.venv/bin/python -m kitchen.vision.run --picamera --zones zones.json --serve     # on the Pi, from its camera
 uv run python -m kitchen.vision.record --source camera:0 --zones zones.json --out data/recordings/run1
 uv run python -m kitchen.vision.zones calibrate --image still.jpg --out zones.json  # click each zone's corners
 uv run python -m kitchen.vision.server --fake --port 8002                          # the API on a test pattern
@@ -26,7 +27,7 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 
 ## What happens here
 
-- Read frames from a video file or webcam now, and from the Pi camera later. Each frame gets `t_ms` from the injected `Clock`.
+- Read frames from a video file, a webcam or the Pi camera (picamera2, since OpenCV can't open it on a Pi 5). Each frame gets `t_ms` from the injected `Clock`.
 - Detect knives, spoons, forks and bowls with YOLOv8s, and wrists with YOLOv8s-pose. Today this runs with ONNX Runtime; later the same model runs on the Hailo-8, sharing the same pre- and post-processing code.
 - Track with ByteTrack, then map each track to a stable entity ID (`bin-<slot>`, `tool-<class>-<n>`, `hand-p<k>-left|right`, `plate-<n>`) with an `origin`: `shift_start`, `clean_stack` or `unknown`.
 - Give every detection a zone from the zones file: bin slots, plating spot, wash, clean stack, pass.
@@ -38,7 +39,7 @@ YOLOv8 (Ultralytics) is AGPL-3.0, which is fine for a non-distributed demo (AGEN
 
 | File | What it does |
 |---|---|
-| `camera.py` | Frame sources: video file, webcam, JSONL replay, and later the Pi camera |
+| `camera.py` | Frame sources: video file, webcam, and the Pi camera (`PiCameraSource`: picamera2 at 1280×720, continuous autofocus); JSONL replay is in `record.py` |
 | `detect.py` | YOLOv8s detection and pose with ONNX Runtime, plus the pre- and post-processing every backend shares. `VISION_DETECTOR=onnx\|hailo` picks the backend (default `onnx`) |
 | `hailo.py` | `HailoSession`: a drop-in for `onnxruntime.InferenceSession` that runs a HEF with HailoRT on the Pi and returns the same ONNX-shaped output, so `detect.py` keeps one post-processing path. Also the on-Pi device check. Imports `hailo_platform` only when the device is opened |
 | `bundle.py` | Builds the deploy bundle on the laptop: ONNX copies, calibration frames, parity frames, manifest, and the HEFs (precompiled for stock weights) or `compile.sh` (custom weights) |
@@ -119,7 +120,7 @@ uv run python -m kitchen.vision.bundle --name kitchen-v1 --weights stock \
 uv run python -m kitchen.vision.parity run --bundle data/models/kitchen-v1 --backend onnx
 ```
 
-**3. Set up the Pi (owner, once).** Raspberry Pi OS 64-bit Trixie. `install` puts on `hailo-all` (HailoRT 4.23.0), holds it, and makes a venv that can see the system's `hailo_platform`:
+**3. Set up the Pi (owner, once).** Raspberry Pi OS 64-bit Trixie. `install` puts on `hailo-all` (HailoRT 4.23.0), holds it, and makes a venv that can see the system's `hailo_platform` and `picamera2`, with the `server` and `ml` extras (the Vision API and the local runner's live mode need them):
 
 ```bash
 bash kitchen/vision/pi_setup.sh install && sudo reboot
@@ -136,7 +137,18 @@ uv run python -m kitchen.vision.parity compare data/models/kitchen-v1/parity/onn
 
 `compare` exits 1 unless the HEF finds at least 90% of the ONNX boxes (and vice versa) with mean IoU 0.8 or more and mean score difference 0.1 or less. Then set `VISION_DETECTOR=hailo` and check `/health` reports `detector: hailo`.
 
-Unverified until the device is connected: the HailoRT calls in `HailoNetwork` (written against HailoRT 4.23's `InferModel` API and tested only on a mock), and that the pose HEF applies the score sigmoid on the chip, as Hailo's own decoder assumes. The device check and parity run settle both.
+**5. Run the kitchen live (owner).** Calibrate the zones on a still from the mounted camera (the calibration tool needs a screen, so click on the laptop), then run the local runner's live mode on the Pi. The web app on the laptop points `WEB_STATE_URL` and `WEB_ORDERS_URL` at `http://<pi-ip>:8001` and `WEB_VISION_URL` at `http://<pi-ip>:8002`; both CORS settings list the address the browser opens the web app on.
+
+```bash
+rpicam-still -o still.jpg                                                   # on the Pi: 16:9, the same view as the frames
+scp <user>@raspberrypi.local:<repo>/still.jpg . && uv run python -m kitchen.vision.zones calibrate --image still.jpg --out zones.json
+scp zones.json <user>@raspberrypi.local:<repo>/
+VISION_DETECTOR=hailo VISION_BUNDLE_DIR=data/models/kitchen-v1 \
+  ORDERS_CORS_ORIGINS=http://localhost:5173 VISION_CORS_ORIGINS=http://localhost:5173 \
+  .venv/bin/python tools/run_local.py --live --picamera --zones zones.json      # on the Pi
+```
+
+Unverified until the device is connected: `PiCameraSource` (tested against a stand-in `picamera2`), the HailoRT calls in `HailoNetwork` (written against HailoRT 4.23's `InferModel` API and tested only on a mock), and that the pose HEF applies the score sigmoid on the chip, as Hailo's own decoder assumes. The device check and parity run settle the HailoRT parts; step 5 settles the camera.
 
 ## Watch out for
 
