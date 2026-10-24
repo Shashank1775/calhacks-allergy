@@ -27,7 +27,9 @@ clock itself.
 
 Live mode (--live) drives the same services from a camera instead of a scenario: vision's frame loop feeds the
 partner's EntityStore and the interactions step, the partner's ProvenanceGraph reads what they write, the verdict
-service judges each plate that reaches the pass, and the gate watches vision's health. It serves the Vision API
+service judges each plate that reaches the pass, and the gate watches vision's health. The partner's LiveRisk writes
+each tool, hand and plate's propagated allergens into entity_state, so the camera overlays on /expo color a knife that
+just scooped satay (display only: verdicts ask the graph directly). It serves the Vision API
 (stream, health, start plate) on VISION_PORT next to the Orders API and GET /state:
 
     uv run python tools/run_local.py --live --webcam 0 --zones zones.json          # web/: WEB_VISION_URL=:8002 too
@@ -372,7 +374,8 @@ class LiveRunner:
     FakeStateClient, with the Orders API and GET /state in `app` and the Vision API in `vision_app`.
 
     Feed frames with run_frames() (a source until it ends) or step_frame() (one frame; tests). Call sync() to write the
-    entity store to the database (start() does it at 5 Hz) and tick() a few times a second for the gate.
+    entity store to the database and update_risk() to write the entities' live allergens (start() does both in the
+    background), and tick() a few times a second for the gate.
     """
 
     def __init__(
@@ -391,7 +394,7 @@ class LiveRunner:
         from kitchen.gate.driver import FakeGate
         from kitchen.gate.service import GateService
         from kitchen.gate.voice import FakeSpeaker
-        from kitchen.graph import ProvenanceGraph
+        from kitchen.graph import LiveRisk, ProvenanceGraph
         from kitchen.orders.api import create_app
         from kitchen.orders.bins import save_bins
         from kitchen.orders.tickets import TicketDesk
@@ -416,6 +419,7 @@ class LiveRunner:
         self.verdict_service.start()
 
         self.store = EntityStore(clock)
+        self.risk = LiveRisk(self.state, clock)  # the overlays' allergens; the verdict doesn't read what it writes
         self.status = None
         self.loop = build_frame_loop(
             self.settings, zones, [entity_store_consumer(self.store), self.interactions], detector=detector
@@ -451,8 +455,10 @@ class LiveRunner:
         )
 
     def start(self) -> None:
-        """Sync the entity store to the database at 5 Hz, in the background."""
+        """Sync the entity store to the database at 5 Hz, and keep the entities' live allergens current, in the
+        background."""
         self.store.start_sync(self.state, hz=5.0)
+        self.risk.start(hz=5.0)
 
     def step_frame(self, frame):
         """Run one frame through vision and its consumers."""
@@ -465,6 +471,10 @@ class LiveRunner:
     def sync(self) -> None:
         """Write the entity store to the database once (what start() does at 5 Hz)."""
         self.store.sync_once(self.state)
+
+    def update_risk(self) -> None:
+        """Write the entities' live allergens to the database once (what start() does in the background)."""
+        self.risk.update_once()
 
     def tick(self) -> str:
         """One gate loop tick; returns the state shown."""

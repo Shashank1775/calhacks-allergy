@@ -1,16 +1,18 @@
 """The local runner's live mode: frames through vision, the entity store, the interactions slot, the real graph,
-verdict and the gate, on one FakeStateClient and a FakeClock.
+LiveRisk, verdict and the gate, on one FakeStateClient and a FakeClock.
 
 Owner: platform (agents)
 Step:  end-to-end harness
 Reads: tools/run_local.py (LiveRunner, InteractionsSlot, loaded by path); a scripted detector instead of a camera
 Emits: nothing
 Rules: fail closed: with the interactions step missing, broken or behind, every plate holds, and when frames stop the
-       gate faults; plain-code verdict: what passes or holds comes from kitchen.verdict on the partner's graph
+       gate faults; plain-code verdict: what passes or holds comes from kitchen.verdict on the partner's graph, and the
+       allergens LiveRisk writes for the camera overlays change neither the verdict nor the gate
 """
 
 import importlib.util
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -133,7 +135,8 @@ class Shift:
         self._frame_id = 0
 
     def frames(self, count: int, objects: list) -> None:
-        """`count` frames of `objects`, FRAME_MS apart, each synced to the database and followed by a gate tick."""
+        """`count` frames of `objects`, FRAME_MS apart, each synced to the database (entity rows, then live risk) and
+        followed by a gate tick."""
         self.detector.objects = objects
         for _ in range(count):
             self.clock.advance(FRAME_MS)
@@ -141,6 +144,7 @@ class Shift:
             self.runner.step_frame(SourceFrame(self._frame_id, self.clock.now_ms(), rgb))
             self._frame_id += 1
             self.runner.sync()
+            self.runner.update_risk()
             self.runner.tick()
 
     def send_ticket(self, note: str, number: int) -> dict:
@@ -168,6 +172,16 @@ class Shift:
         verdicts = [v for v in self.runner.state.list_verdicts() if v["plate_id"] == plate_id]
         assert verdicts, "no verdict was recorded for the plate at the pass"
         return max(verdicts, key=lambda v: v["decided_t_ms"])
+
+    def rows_of(self, entity_id: str) -> list[dict]:
+        """The entity's entity_state rows in GET /state, in the order they were written."""
+        rows = self.orders.get("/state").json()["tables"]["entity_state"]
+        return [row for row in rows if row["entity_id"] == entity_id]
+
+    def overlay_row(self, entity_id: str) -> dict:
+        """What /expo draws the entity from: its latest row, the highest t_ms and the one written last on a tie
+        (web/src/gate.ts latest_states)."""
+        return max(enumerate(self.rows_of(entity_id)), key=lambda numbered: (numbered[1]["t_ms"], numbered[0]))[1]
 
 
 # ---------- tests ----------
@@ -205,6 +219,64 @@ def test_a_knife_that_scooped_satay_holds_the_peanut_plate():
         {k: r[k] for k in ("code", "allergen_unit_id") if k in r} for r in verdict["reasons"]
     ]
     assert [step["from_id"] for step in verdict["chain"]][:1] == ["bin-1"]
+    assert shift.runner.tick() == "hold"
+
+
+def test_the_knife_that_scooped_satay_shows_peanut_on_the_overlay_and_a_wash_lowers_it():
+    shift = Shift(interactions=peanut_knife_step)
+    plate_id = shift.plate_to_pass()
+
+    knife = shift.overlay_row("tool-knife-1")
+    assert knife["probabilities"]["peanut"] >= 0.5  # /expo colors a box red from this
+    assert knife["unknown"] is False and knife["box"] is not None  # still drawn where the camera sees it
+    assert shift.runner.state.get_entity("tool-knife-1")["allergen_profile"]["probabilities"]["peanut"] >= 0.5
+
+    shift.runner.state.record_interaction(
+        {
+            "event_id": "e-rinse",
+            "t_start_ms": 3000,
+            "t_end_ms": 3050,
+            "a_id": "tool-knife-1",
+            "b_id": "tool-knife-1",
+            "action": "clean.wash",
+            "probability": 0.98,
+            "direction": "a_to_b",
+            "classifier": {"name": "zone_rules", "version": "test"},
+        }
+    )
+    shift.frames(2, [BIN, KNIFE, plate_at(0.88)])
+
+    assert shift.overlay_row("tool-knife-1")["probabilities"]["peanut"] < 0.5
+    assert shift.overlay_row("plate-1")["probabilities"]["peanut"] >= 0.5  # the plate keeps what the knife gave it
+    assert shift.verdict(plate_id)["decision"] == "hold"
+
+
+def test_start_keeps_the_overlay_current_in_the_background(monkeypatch):
+    shift = Shift(interactions=peanut_knife_step)
+    monkeypatch.setattr(shift.runner, "update_risk", lambda: None)  # nothing writes live risk by hand
+    shift.plate_to_pass()
+    assert "peanut" not in shift.overlay_row("tool-knife-1")["probabilities"]
+
+    shift.runner.start()
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and "peanut" not in shift.overlay_row("tool-knife-1")["probabilities"]:
+            time.sleep(0.02)
+        assert shift.overlay_row("tool-knife-1")["probabilities"]["peanut"] >= 0.5
+    finally:
+        shift.runner.risk.stop()
+        shift.runner.store.stop_sync()
+
+
+@pytest.mark.safety
+def test_risk_rows_change_neither_the_gate_nor_the_verdicts():
+    """LiveRisk's rows copy the plate's zone and time, so the plate is judged once, where it was, and the gate holds."""
+    shift = Shift(interactions=peanut_knife_step)
+    plate_id = shift.plate_to_pass()
+
+    assert [row["caused_by"] for row in shift.rows_of(plate_id) if row["caused_by"]] == ["e-touch"]  # a risk row landed
+    assert shift.runner.state.get_entity(plate_id)["zone"] == "pass"
+    assert [v["trigger"] for v in shift.runner.state.list_verdicts() if v["plate_id"] == plate_id] == ["plate_at_pass"]
     assert shift.runner.tick() == "hold"
 
 
