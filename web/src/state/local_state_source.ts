@@ -1,15 +1,16 @@
 /**
  * LocalStateSource: polls the local runner (tools/run_local.py) for every table.
  *
- * Reads: GET <base_url>/state → {scenario_id, t_ms, tables}, the runner's
+ * Reads: GET <base_url>/state → {scenario_id, mode, t_ms, tables}, the runner's
  * snapshot of the tables in state-tables.md.
  * Emits: the tables the screens use, as the runner sent them. The allergen
  * table is ignored; zone may be missing, which leaves the gate panel closed.
  * Rules: fail closed. Any failed poll (network error, timeout, an error status,
  * a body that isn't JSON or is missing a table) sets the feed to `lost`, so
  * every screen shows FEED LOST and no badge can show PASS. The last rows stay on
- * screen until a good poll brings the feed back. The runner replays a golden
- * scenario on fakes, so `is_replay` is true and the banner says REPLAY.
+ * screen until a good poll brings the feed back. The banner says REPLAY unless
+ * the runner says `mode: "live"` (camera frames, not a golden scenario); any
+ * other or missing mode counts as a replay, so a scenario never passes for the kitchen.
  */
 import { empty_tables, type FeedStatus, type StateSource, type TableName, type Tables } from "./state_source";
 
@@ -24,7 +25,7 @@ const TABLE_NAMES = Object.keys(empty_tables()) as TableName[];
 // A missing optional table reads as empty. Without zones nothing is at the pass, so the gate stays closed.
 const OPTIONAL_TABLES: TableName[] = ["zone"];
 
-type Snapshot = { scenario_id: string; tables: Tables };
+type Snapshot = { scenario_id: string; is_replay: boolean; tables: Tables };
 
 export class LocalStateSource implements StateSource {
   label = "local runner";
@@ -96,8 +97,9 @@ export class LocalStateSource implements StateSource {
     this.status = "live";
 
     const label = `local runner · ${snapshot.scenario_id}`;
-    if (label !== this.label) {
+    if (label !== this.label || snapshot.is_replay !== this.is_replay) {
       this.label = label;
+      this.is_replay = snapshot.is_replay;
       changed = true;
     }
 
@@ -145,7 +147,7 @@ async function fetch_snapshot(base_url: string): Promise<Snapshot | null> {
 function parse_snapshot(body: unknown): Snapshot | null {
   if (typeof body !== "object" || body === null) return null;
 
-  const { scenario_id, tables } = body as { scenario_id?: unknown; tables?: unknown };
+  const { scenario_id, mode, tables } = body as { scenario_id?: unknown; mode?: unknown; tables?: unknown };
   if (typeof scenario_id !== "string") return null;
   if (typeof tables !== "object" || tables === null) return null;
 
@@ -154,5 +156,5 @@ function parse_snapshot(body: unknown): Snapshot | null {
     if (checked[name] === undefined && OPTIONAL_TABLES.includes(name)) checked[name] = [];
     if (!Array.isArray(checked[name])) return null;
   }
-  return { scenario_id, tables: checked as Tables };
+  return { scenario_id, is_replay: mode !== "live", tables: checked as Tables };
 }
