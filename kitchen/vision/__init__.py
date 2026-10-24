@@ -7,5 +7,5 @@ Emits: observation_frame (to the partner EntityStore and kitchen/interactions), 
 Rules: 1 fail closed, never guess a binding; 5 strictly increasing t_ms; 8 new ID on re-acquire
 Tasks: vision-01 .. vision-11
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

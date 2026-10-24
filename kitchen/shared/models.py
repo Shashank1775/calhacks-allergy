@@ -11,5 +11,5 @@ Rules: every valid fixture parses and every invalid fixture is rejected (invaria
        InteractionFeatures); CI fails if this file differs from a fresh regeneration
 Tasks: platform-02
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

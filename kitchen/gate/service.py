@@ -7,5 +7,5 @@ Emits: GateDriver.show, Speaker.say
 Rules: 1 closed by default, fault on silence/stale health/exception; 2 renders decisions only; 9 only a current-revision PASS opens
 Tasks: outputs-03 (state machine), outputs-05 (service)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

@@ -26,5 +26,5 @@ How the partner runs a suite against real code:
   their real implementation, then runs e.g. `uv run pytest kitchen/graph -m contract`. Platform never edits partner
   folders; the partner never edits these suites (ask platform with a type:request issue).
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

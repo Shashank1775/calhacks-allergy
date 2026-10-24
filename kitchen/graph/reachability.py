@@ -7,5 +7,5 @@ Emits: allergen_reach (ProvenanceGraph.reach), laya_request (subgraph), unknown 
 Rules: 1 failures raise GraphUnavailable; 5 chains strictly increasing in t_ms; 8 unwashed unknown ancestors always reported
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

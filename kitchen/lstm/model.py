@@ -7,5 +7,5 @@ Emits: per-action probabilities
 Rules: 6 allergen-blind input only
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

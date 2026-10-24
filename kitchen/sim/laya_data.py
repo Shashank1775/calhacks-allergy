@@ -7,5 +7,5 @@ Emits: laya_request and laya_response JSONL per split, plus a manifest with sha2
 Rules: no seed, scenario or kitchen/recipe family in two splits
 Tasks: sim-08
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

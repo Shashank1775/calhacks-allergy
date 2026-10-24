@@ -7,5 +7,5 @@ Emits: transcript text (the server confirms it before parsing)
 Rules: none (a transcript is only ever a note; it still goes through parse and questions)
 Tasks: orders-04 (Cartesia Ink spike), orders-11
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

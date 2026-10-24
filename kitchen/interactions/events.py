@@ -7,5 +7,5 @@ Emits: interaction_event via StateClient.record_interactions (interaction table)
 Rules: 5 t_start <= t_end, ordered per pair; 1 buffer and retry, never drop; wash is a self-loop
 Tasks: interactions-01 (segmenter + CLI), interactions-05 (event pack), interactions-07 (streaming)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

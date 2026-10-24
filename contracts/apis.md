@@ -208,6 +208,6 @@ Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start ti
 |---|---|---|---|
 | `POST /v1/plates/start` | `{"ticket_id": str}` | `{"plate_id": str}` | Binds the plate at the plating spot. Otherwise `409 no_plate_at_spot`, `409 multiple_plates_at_spot` or `409 plate_already_bound`; never guesses |
 | `GET /stream.mjpg` | — | MJPEG | Raw camera stream |
-| `GET /v1/health` | — | `{"fps": float, "hailo": bool, "last_frame_t_ms": int}` | The gate goes to `fault` if this goes stale |
+| `GET /v1/health` | — | `{"fps": float, "detector": "onnx"\|"hailo", "last_frame_t_ms": int}` | `detector` is `onnx` until the Hailo is connected. The gate goes to `fault` if this goes stale |
 
 Overlays are drawn client-side from `entity.box` plus `entity_risk` (OQ-6).

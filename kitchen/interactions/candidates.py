@@ -7,5 +7,5 @@ Emits: candidate (a_id, b_id) pairs for features.py
 Rules: 6 pairs come from geometry and kind only
 Tasks: interactions-03
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

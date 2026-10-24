@@ -7,5 +7,5 @@ Emits: labels.jsonl per session; held-out manifest with content hash
 Rules: 7 split by session, never by clip, so the benchmark cannot leak
 Tasks: interactions-09, interactions-10
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

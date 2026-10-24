@@ -7,5 +7,5 @@ Emits: ParseResult, AllergenProfile
 Rules: 1 JevUnavailable never becomes a guess
 Tasks: orders-01 (FakeJev), orders-03 (Jev spike, OQ-5)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

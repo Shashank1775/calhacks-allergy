@@ -7,5 +7,5 @@ Emits: StateClient.bind_plate -> plate_binding table
 Rules: 1 never guess: 0 plates, 2+ plates or an already-bound plate -> 409
 Tasks: vision-07
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

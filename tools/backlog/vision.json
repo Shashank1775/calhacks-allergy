@@ -5,8 +5,8 @@
       "milestone": "M0",
       "title": "vision: M0 Foundations",
       "goals": [
-        "Replay a video file on a laptop CPU into valid ObservationFrame JSONL (vision-01)",
-        "Answer, with owner-measured numbers, whether the Hailo-8 runs YOLOv8 detection plus pose at 30 FPS",
+        "Replay a video file locally (ONNX Runtime, no Hailo) into valid ObservationFrame JSONL (vision-01)",
+        "Hailo readiness decided without the device: model variants, HEF source, versions (vision-02 ADR)",
         "Zone calibration (bin slots, plating spot, wash, clean stack, pass) with a click tool",
         "Identity rules with safety tests: re-acquired tracks always get new IDs, origin set correctly (invariant 8)",
         "Recorded frame JSONL fixture pack that interactions, sim and the partner test against"
@@ -21,14 +21,14 @@
         "GET /v1/health and GET /stream.mjpg",
         "Frame recorder with byte-identical replay",
         "FakeVisionAPI so outputs can build the start-ticket button, gate fault handling and overlays",
-        "Hailo detector backend behind the Detector interface, owner-verified"
+        "Hailo backend tested on a mock runtime, plus the deploy bundle and parity script, so upload is one config change"
       ]
     },
     {
       "milestone": "M2",
       "title": "vision: M2 Live on Pi",
       "goals": [
-        "Hailo backend live at 30+ FPS with tracking, verified by the owner on the device",
+        "Connect the Hailo, upload the bundle, owner runs the parity check and confirms 30+ FPS with tracking",
         "picamera2 source and calibration on the real counter",
         "A recorded live session replays deterministically through the whole pipeline",
         "A stale health endpoint drives the pass gate to fault"
@@ -55,7 +55,7 @@
     {
       "key": "vision-01",
       "milestone": "M0",
-      "title": "vision: replay a video on CPU into ObservationFrame JSONL",
+      "title": "vision: replay a video locally (ONNX Runtime) into ObservationFrame JSONL",
       "type": "task",
       "prio": "p0",
       "flags": [],
@@ -64,17 +64,19 @@
         "platform-02",
         "platform-03"
       ],
-      "goal": "A laptop with no Pi can turn a kitchen video into tracked ObservationFrame JSONL, so every downstream team has realistic input from day one. The Detector and Tracker interfaces introduced here are what the Hailo backend plugs into later.",
+      "goal": "Run the vision pipeline on a laptop with no Hailo: a video file goes through YOLOv8 det+pose exported to ONNX and run with ONNX Runtime, shared post-processing, and ByteTrack, and comes out as valid ObservationFrame JSONL. This is the default backend until the Hailo is connected.",
       "acceptance": [
         "`uv run python -m kitchen.vision.run --video <file> --out frames.jsonl` writes one ObservationFrame per processed frame (kitchen/vision/run.py, camera.py)",
-        "A Detector interface (kitchen/vision/detect.py) with a CPU backend using pretrained YOLOv8 detection (knife, spoon, fork, bowl), plus YOLOv8 pose wrists (kitchen/vision/pose.py). ByteTrack runs behind a Tracker interface (kitchen/vision/track.py)",
+        "A Detector interface (kitchen/vision/detect.py) with an `onnx` backend: pretrained YOLOv8 detection (knife, spoon, fork, bowl) and YOLOv8 pose, exported once to fixed-shape ONNX (ultralytics is only the exporter) and run with ONNX Runtime. Pose wrists go through kitchen/vision/pose.py. ByteTrack runs behind a Tracker interface (kitchen/vision/track.py)",
         "Hands are emitted as kind=hand, class_name=wrist, with person_id and wrist [x, y, conf]. Bowls are emitted as kind=plate, tools as kind=tool",
         "A provisional identity gives each track an entity_id and origin (shift_start in the first second, unknown after). vision-04 replaces it",
         "Every line validates against observation_frame (including the required per-detection origin): `uv run pytest kitchen/vision -k replay_contract`",
         "Frame t_ms comes from the injected Clock (video timestamps) and is strictly increasing: a `safety` test",
         "Running the replay twice on the same input gives identical JSONL: `uv run pytest kitchen/vision -k deterministic`",
         "The sample clip is listed in kitchen/vision/data-manifest.json, not committed. A fixture of 50 KB or less is committed under kitchen/vision/tests/fixtures/",
-        "The README documents the command and the AGPL-3.0 note for ultralytics (OQ-16)"
+        "The README documents the command and the AGPL-3.0 note for ultralytics (OQ-16)",
+        "VISION_DETECTOR defaults to onnx; letterbox, decoding and NMS live in kitchen/vision/postprocess.py, not inside the backend: test_backend_has_no_postprocessing passes",
+        "Runs on macOS and Linux without any Hailo package installed: the CI job imports kitchen.vision with only the default extras"
       ],
       "contracts": [
         "observation_frame",
@@ -90,24 +92,22 @@
     {
       "key": "vision-02",
       "milestone": "M0",
-      "title": "vision: spike Hailo-8 YOLOv8 det+pose feasibility and FPS",
+      "title": "vision: Hailo readiness spike (no device): variants, HEF path, versions",
       "type": "spike",
       "prio": "p0",
-      "flags": [
-        "hardware"
-      ],
+      "flags": [],
       "blocked_by": [],
-      "goal": "Find out, with measurements, whether compiled HEFs exist for YOLOv8 detection and YOLOv8 pose on the Hailo-8, and what FPS both reach together on one Hailo-8 with the Pi camera.",
+      "goal": "Without the device, decide how vision will be uploaded to the Hailo-8: which YOLOv8 det and pose variants and input size the Hailo Model Zoo supports, whether precompiled HEFs exist for them, what the Dataflow Compiler needs if we compile ourselves (OQ-18), and which HailoRT and Pi OS versions to install. Written up as an ADR.",
       "acceptance": [
-        "The issue has a written answer: HEF names and sources, and the exact Pi OS, HailoRT and Python versions (OQ-11)",
-        "A benchmark script at kitchen/vision/scripts/hailo_bench.py, plus step-by-step owner instructions posted on the issue",
-        "Owner-posted FPS for detection alone, pose alone, and both together, at two or more input resolutions",
-        "A recommendation (both every frame, pose every Nth frame, smaller models, or CPU fallback), with an ADR in docs/decisions/ if the plan deviates from AGENTS.md"
+        "ADR in docs/decisions/ naming the det and pose variants, input size, and HEF source (Model Zoo or compile), with links to the sources checked",
+        "The chosen variants run locally through vision-01's ONNX path (variant names match)",
+        "A list of what the owner must install on the Pi when the Hailo is connected, with versions, posted on the issue",
+        "Any unverified claim is marked unverified in the ADR"
       ],
       "contracts": [],
       "out_of_scope": [
-        "Production Hailo backend code (vision-11)",
-        "Tracking integration"
+        "Running anything on a Hailo device",
+        "Fine-tuning"
       ]
     },
     {
@@ -340,22 +340,22 @@
     {
       "key": "vision-11",
       "milestone": "M1",
-      "title": "vision: Hailo detector backend behind the Detector interface",
+      "title": "vision: Hailo backend behind Detector, tested on a mock runtime",
       "type": "task",
       "prio": "p2",
       "flags": [
         "hardware"
       ],
       "blocked_by": [
-        "vision-02",
-        "vision-01"
+        "vision-01",
+        "vision-02"
       ],
-      "goal": "Implement the Hailo-8 backend chosen by the vision-02 spike behind the same Detector interface as the CPU backend, so M2 only has to flip a config switch.",
+      "goal": "Implement kitchen/vision/hailo.py so switching VISION_DETECTOR=hailo is the only change needed once the device is connected. Test locally against a mock HailoRT; device verification waits for the owner.",
       "acceptance": [
-        "A Hailo backend in kitchen/vision/detect.py implements Detector. CPU and Hailo outputs share one contract test on a recorded image set (the Hailo half is skipped in CI by the `hardware` marker)",
-        "The backend is chosen by config only (VISION_DETECTOR=cpu|hailo)",
-        "An owner test script on the issue: exact commands to run on the Pi, and the expected FPS and output",
-        "The issue moves to status:needs-human until the owner posts results"
+        "hailo.py feeds raw outputs to the same postprocess.py as the ONNX backend: a mock-runtime test returns detections identical to the ONNX backend on the same fixture tensors",
+        "Importing kitchen.vision never imports HailoRT unless VISION_DETECTOR=hailo: test_no_hailo_import_by_default passes",
+        "A device error stops frames (health goes stale) instead of producing detections: `safety` test with a failing mock runtime",
+        "Hardware test script posted on the issue for the owner to run once the Hailo is connected; the issue then moves to status:needs-human"
       ],
       "contracts": [
         "observation_frame"
@@ -363,6 +363,34 @@
       "out_of_scope": [
         "picamera2 source (M2)",
         "Performance tuning beyond the spike's recommendation"
+      ]
+    },
+    {
+      "key": "vision-12",
+      "milestone": "M1",
+      "title": "vision: Hailo deploy bundle and ONNX-vs-HEF parity script",
+      "type": "task",
+      "prio": "p1",
+      "flags": [],
+      "blocked_by": [
+        "vision-01",
+        "vision-02",
+        "vision-09"
+      ],
+      "goal": "Make vision ready to upload: export.py builds data/models/<name>/ with fixed-shape ONNX, calibration frames from our recordings, manifest.json and the HEF step chosen in vision-02, plus a parity script the owner runs on the Pi once the Hailo is connected.",
+      "acceptance": [
+        "`uv run python -m kitchen.vision.export --weights <w> --calib <recording> --out data/models/<name>` produces model.onnx, calib/ and manifest.json; the manifest validates against a schema test",
+        "The bundle's model.onnx is the exact file the local ONNX backend loads (same sha256 recorded in the manifest)",
+        "A parity script compares detections from two backends on one recording (box IoU and score tolerances from config), demonstrated locally as ONNX vs ONNX",
+        "data-manifest.json entry for the bundle; nothing over 1 MB committed",
+        "README section 'Local now, Hailo later' updated with the exact commands"
+      ],
+      "contracts": [
+        "observation_frame"
+      ],
+      "out_of_scope": [
+        "Running the Hailo compiler or device (owner, once connected)",
+        "Fine-tuning weights"
       ]
     }
   ]

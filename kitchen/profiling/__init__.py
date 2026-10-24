@@ -7,5 +7,5 @@ Emits: AllergenProfile via StateClient.put_bin_profile; chef confirmations
 Rules: 1 unclear never means clean; 4 profiles are allergen units
 Tasks: orders-09, orders-04 (Apify spike)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

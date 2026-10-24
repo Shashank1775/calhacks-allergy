@@ -7,5 +7,5 @@ Emits: entity_risk via StateClient.put_entity_risk (single writer)
 Rules: 8 unknown-history entities publish unknown: true until washed
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

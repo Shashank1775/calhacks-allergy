@@ -7,5 +7,5 @@ Emits: ParseResult with questions, answers and the sendable flag
 Rules: 3 no send with an open question
 Tasks: orders-01 (question builder), orders-06 (answers and send gate)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

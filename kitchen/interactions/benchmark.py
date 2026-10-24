@@ -7,5 +7,5 @@ Emits: report.json + report.md (per-action precision/recall, cost-weighted score
 Rules: 7 decides LSTM adoption; missed transfers and false washes weigh most
 Tasks: interactions-11
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

@@ -7,5 +7,5 @@ Emits: weights in data/ listed in data-manifest.json (never in git)
 Rules: 6 allergen-blind; 7 never trains on the frozen held-out set
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

@@ -7,5 +7,5 @@ Emits: ParseResult, Ticket, AllergenProfile as JSON; standard error body; CORS f
 Rules: 3 /send returns 409 unanswered_questions; 1 jev_unavailable is an error, not a result
 Tasks: orders-01 (skeleton), orders-06, orders-07, orders-08, orders-09, orders-11
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

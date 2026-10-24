@@ -7,5 +7,5 @@ Emits: StateClient.upsert_entities -> entity table
 Rules: 1 failures surface as StateUnavailable or lag, never fake freshness; 8 never deletes
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

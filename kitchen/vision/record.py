@@ -7,5 +7,5 @@ Emits: frames.jsonl + manifest.json under data/; a replay source; the fixture pa
 Rules: 5 replay keeps the recorded t_ms
 Tasks: vision-05, vision-09
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

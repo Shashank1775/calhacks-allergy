@@ -7,5 +7,5 @@ Emits: a zone (or null) for each detection; StateClient.set_zones -> zone table
 Rules: 1 no zone guessed; deterministic tie-break for overlapping zones
 Tasks: vision-03, vision-06 (set_zones at startup)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

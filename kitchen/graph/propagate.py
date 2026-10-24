@@ -7,5 +7,5 @@ Emits: allergen probabilities per entity at any t_ms
 Rules: 5 time order, strict tie rule (OQ-17); 8 unknown origin starts saturated (OQ-13); wash is a self-loop
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

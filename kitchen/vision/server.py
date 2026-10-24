@@ -7,5 +7,5 @@ Emits: Vision HTTP API (contracts/apis.md#vision-http-api-on-the-pi)
 Rules: 1 health last_frame_t_ms stops when frames stop; endpoints never block the frame loop
 Tasks: vision-07, vision-08, vision-10
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

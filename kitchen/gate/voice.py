@@ -7,5 +7,5 @@ Emits: audio out (Speaker)
 Rules: none (voice is never on the critical path to HOLD)
 Tasks: outputs-04 (ConsoleSpeaker), outputs-11 (Sonic spike)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

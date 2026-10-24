@@ -7,5 +7,5 @@ Emits: list of (action, probability) plus the name and version of the classifier
 Rules: 7 zone rules are always the fallback; LSTM only after the benchmark ADR
 Tasks: interactions-06
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

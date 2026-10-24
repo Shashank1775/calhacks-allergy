@@ -7,5 +7,5 @@ Emits: hand detections (kind=hand, class_name=wrist, person_id, wrist [x, y, con
 Rules: 8 a person re-acquired gets new hand IDs (enforced in identity.py)
 Tasks: vision-01
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

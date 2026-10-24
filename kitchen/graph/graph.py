@@ -7,5 +7,5 @@ Emits: in-memory graph used by propagate.py, reachability.py and risk.py
 Rules: 5 edges kept in time order; 8 entity origin recorded and never changed
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

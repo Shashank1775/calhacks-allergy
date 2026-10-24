@@ -7,5 +7,5 @@ Emits: StateClient.open_chef_confirmation / answer_chef_confirmation; updated Al
 Rules: 1 'none of these' is an explicit answer, never a default
 Tasks: orders-09
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

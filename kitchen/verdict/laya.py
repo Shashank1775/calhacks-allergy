@@ -7,5 +7,5 @@ Emits: laya_response, or LayaUnavailable
 Rules: 1 timeout or malformed means unavailable; 2 output can only add flags
 Tasks: verdict-03, verdict-04
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

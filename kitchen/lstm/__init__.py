@@ -7,5 +7,5 @@ Emits: list of (action, probability)
 Rules: 6 allergen-blind input only; 7 adopted only after winning the benchmark, rules stay fallback
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

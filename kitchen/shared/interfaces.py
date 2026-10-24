@@ -9,5 +9,5 @@ Rules: signatures match contracts/apis.md exactly (a test checks method names); 
        a missing method is an RFC, not a local addition
 Tasks: platform-03
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

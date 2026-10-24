@@ -1,6 +1,6 @@
 # kitchen/vision: Camera, detection and tracking
 
-**Owner:** team `vision` (agents). Runs on the Pi with the Hailo-8, and everything here also runs on a laptop from a video file.
+**Owner:** team `vision` (agents). **The Hailo-8 isn't connected yet.** Everything runs locally on a laptop (video file or webcam, ONNX Runtime), and is built so the same model and code can be uploaded to the Hailo later (see [Local now, Hailo later](#local-now-hailo-later)).
 
 ## Pipeline step
 
@@ -8,8 +8,8 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 
 ## What happens here
 
-- Read frames from the Pi camera (`picamera2`) or a video file. Each frame is stamped with `t_ms` from the injected `Clock`.
-- Detect knives, spoons, forks and bowls with pretrained YOLOv8, and wrists with YOLOv8 pose. This runs on the Hailo-8, with a CPU backend for laptops.
+- Read frames from a video file or laptop webcam now, and from the Pi camera (`picamera2`) later. Each frame is stamped with `t_ms` from the injected `Clock`.
+- Detect knives, spoons, forks and bowls with pretrained YOLOv8, and wrists with YOLOv8 pose. Today this runs locally with ONNX Runtime. Later the same model runs on the Hailo-8 as a HEF, sharing the same pre- and post-processing code.
 - Track with ByteTrack, then map each track to a stable entity ID (`bin-<slot>`, `tool-<class>-<n>`, `hand-p<k>-left|right`, `plate-<n>`) with an `origin`: `shift_start`, `clean_stack` or `unknown`.
 - Give every detection a zone from the calibration file: bin slots, plating spot, wash, clean stack, pass.
 - When the cook taps "start ticket", bind the plate at the plating spot to that ticket. Serve the Pi's HTTP API.
@@ -19,8 +19,11 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 
 | File | What it does |
 |---|---|
-| `camera.py` | Frame sources: Pi camera, video file, JSONL replay. Stamps `t_ms` from the `Clock` |
-| `detect.py` | `Detector` interface with a CPU backend (`ultralytics`) and a Hailo-8 backend, picked by `VISION_DETECTOR=cpu\|hailo` |
+| `camera.py` | Frame sources: video file, laptop webcam, JSONL replay, and later the Pi camera. Stamps `t_ms` from the `Clock` |
+| `detect.py` | `Detector` interface; picks a backend with `VISION_DETECTOR=onnx\|hailo` (default `onnx`). Backends only run the network; everything around it is in `postprocess.py` |
+| `postprocess.py` | Shared by every backend: letterbox resize, output decoding, NMS, keypoint decoding, class mapping. Local results predict Hailo results because this code is identical |
+| `export.py` | Builds the **Hailo deploy bundle** from the chosen YOLOv8 weights: fixed-shape ONNX, calibration frames from our kitchen footage, `manifest.json`, and the HEF fetch or compile step |
+| `hailo.py` | Hailo-8 backend: loads the bundle's HEF with HailoRT on the Pi. Imported only when `VISION_DETECTOR=hailo`; tests use a mock runtime locally (`hardware` for the real device) |
 | `pose.py` | YOLOv8 pose wrists → hand detections with `person_id` and `wrist` |
 | `track.py` | ByteTrack behind a `Tracker` interface |
 | `identity.py` | Track → entity ID and `origin`. A track lost and re-acquired always becomes a new entity |
@@ -57,13 +60,32 @@ See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). Every test below is marked 
 
 ## Tests
 
-Tests live in `kitchen/vision/tests/`; run them with `uv run pytest kitchen/vision`. Hailo tests carry the `hardware` marker and skip in CI. Fixtures stay at 100 KB or less. Videos, HEFs and weights live in `data/`, with a `data-manifest.json` entry, never in git.
+Tests live in `kitchen/vision/tests/`; run them with `uv run pytest kitchen/vision`. Real-device Hailo tests carry the `hardware` marker and skip in CI. The Hailo backend's logic is tested locally against a mock runtime. Fixtures stay at 100 KB or less. Videos, ONNX files, HEFs and weights live in `data/`, with a `data-manifest.json` entry, never in git.
+
+## Local now, Hailo later
+
+The Hailo-8 isn't connected yet, so nothing in vision waits on it. Being ready to upload means:
+
+1. **One model artifact.** Pick YOLOv8 detection and pose variants and an input size that the Hailo Model Zoo supports (vision-02 confirms which). Export them once to fixed-shape ONNX (`export.py`). Run that exact ONNX locally with ONNX Runtime.
+2. **One processing path.** Letterbox, decoding, NMS and keypoints live in `postprocess.py`, used by both backends. The Hailo backend only replaces "run the network".
+3. **A deploy bundle** in `data/models/<name>/`:
+   - `model.onnx`;
+   - `calib/`: a few hundred frames from our own kitchen recordings, for quantization;
+   - `manifest.json`: classes, input size, normalization, thresholds, weight hashes, tool versions;
+   - `model.hef`, once produced.
+4. **Getting a HEF**, either way:
+   - (a) use the precompiled Hailo Model Zoo HEF for the same variant, if one exists and COCO classes are enough;
+   - (b) compile our ONNX with the Hailo Dataflow Compiler, which needs an x86-64 Linux machine, not the Mac (OQ-18).
+5. **Parity check.** When the device is connected, the owner runs one recorded clip through ONNX (laptop) and HEF (Pi) and compares detections within a tolerance. Quantization drift shows up here, not in the demo.
+6. **Upload.** Copy the bundle to the Pi, set `VISION_DETECTOR=hailo`, and check `/v1/health` reports `detector: hailo` and ≥ 30 FPS.
+
+The 30 FPS budget applies on the Hailo. Locally, replay runs at whatever speed the laptop manages, and timing comes from recorded `t_ms`, so results don't depend on speed.
 
 ## Milestones
 
-- **M0:** CPU replay → frame JSONL (vision-01). Hailo det+pose feasibility measured (vision-02, `hardware`). Zones and calibration (vision-03). Identity rules (vision-04). Fixture pack (vision-05).
-- **M1:** feed the entity store every frame (vision-06), start-ticket binding (vision-07), health and stream (vision-08), recorder (vision-09), `FakeVisionAPI` (vision-10), Hailo backend behind `Detector` (vision-11, `hardware`).
-- **M2:** Hailo live at ≥ 30 FPS, verified by the owner (`hardware`). `picamera2` source. Calibration on the real counter. A recorded live session replays deterministically. A stale health endpoint drives the gate to `fault`.
+- **M0:** local ONNX replay → frame JSONL (vision-01). Hailo readiness spike, desk research with no device (vision-02). Zones and calibration (vision-03). Identity rules (vision-04). Fixture pack (vision-05).
+- **M1:** feed the entity store every frame (vision-06), start-ticket binding (vision-07), health and stream (vision-08), recorder (vision-09), `FakeVisionAPI` (vision-10), Hailo backend against a mock runtime (vision-11), Hailo deploy bundle and parity script (vision-12). Nothing needs the device.
+- **M2:** connect the Hailo and upload the bundle. Owner runs the parity check and confirms ≥ 30 FPS (`hardware`). `picamera2` source. Calibration on the real counter. A recorded live session replays deterministically. A stale health endpoint drives the gate to `fault`.
 - **M3:** measure the ID-switch rate on owner recordings and reduce it. Fine-tune the detector only if COCO tools and bowls are too weak from overhead.
 - **M4:** failure drills: camera unplugged, Hailo crash, network loss. Each ends in stale health and a gate `fault`, never a PASS. Lighting robustness. Offline operation.
 
@@ -71,12 +93,14 @@ Tests live in `kitchen/vision/tests/`; run them with `uv run pytest kitchen/visi
 
 | Risk | Mitigation |
 |---|---|
-| Unverified whether the Hailo-8 can run det+pose together at 30 FPS, or whether a pose HEF exists | vision-02 first. Fallbacks in order: `n` models, lower resolution, pose every Nth frame (flagged), CPU |
+| Hailo not connected yet; unverified whether det+pose run together at 30 FPS, or whether Model Zoo HEFs exist for our variants | Local-first path never waits on it. vision-02 picks Model Zoo–supported variants. Fallbacks once connected: `n` models, lower resolution, pose every Nth frame (flagged) |
+| Quantization changes detections on the Hailo | Calibration frames from our own footage; owner runs the ONNX-vs-HEF parity check before relying on the device |
+| No x86-64 Linux machine for the Dataflow Compiler (OQ-18) | Prefer precompiled Model Zoo HEFs; compile only if we fine-tune |
 | Hands occlude tools, so ByteTrack switches IDs and causes unknown-history holds | Safe, but it hurts the demo. Overhead mount, tune the track buffer, measure in M3 |
 | A wrist is not the contact point | The hand box extends from the wrist toward the forearm. Calibrate on recordings |
 | COCO `knife`, `spoon` and `fork` are weak from overhead | Camera angle first; fine-tune in M3 with weights outside git |
 | A bin is swapped between slots mid-shift | Bins are identified by slot. Swaps are unsupported, and the README says so |
-| Pi OS, Python and HailoRT compatibility (OQ-11) | vision-02 records the exact versions |
+| Pi OS, Python and HailoRT compatibility (OQ-11) | vision-02 records the versions to install; the owner confirms when the device is connected |
 | Ultralytics is AGPL-3.0 (OQ-16) | Owner decides before any release |
 | Overlays drawn client-side or burned in (OQ-6) | Client-side by default |
 

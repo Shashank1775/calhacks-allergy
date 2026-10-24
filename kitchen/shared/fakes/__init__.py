@@ -30,5 +30,5 @@ Fakes other teams ship (with the code they stand in for):
   MockGPIOGate         kitchen/gate (outputs)
   ConsoleSpeaker       kitchen/gate (outputs)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

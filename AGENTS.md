@@ -2,7 +2,7 @@
 
 **This is the only file you need to read.** It covers what we're building, where everything lives, the safety rules, your role, and how work flows. Before you edit a folder, also read that folder's `README.md` (they're short). Machine-readable contracts live in [`contracts/`](contracts/README.md).
 
-> **Phase gate: PLANNING.** The owner has **not** approved implementation. Until this line says `BUILD APPROVED` (changed only by the Director, only on the owner's explicit word), agents may edit docs, READMEs, `contracts/` and `tools/`, and may open `type:rfc` and `type:question` issues. **No product code, and no dispatching build tasks.** CI enforces this.
+> **Phase gate: BUILD APPROVED.** The owner approved the plan on 2026-10-23: *"Assume hailo isn't connected right now, do stuff locally and be ready to upload to Hailo though. Beyond that everything looks good."* Agents build per this file, starting with M0 (§10). Only the Director changes this line, and only on the owner's word. Setting it back to `PLANNING` stops all product-code PRs (CI enforces this).
 
 ---
 
@@ -11,6 +11,8 @@
 A kitchen allergen tracker. A camera on a Raspberry Pi with a Hailo-8 watches food prep and tracks every bin, tool, hand and plate. Every contact between them is logged as a time-stamped edge in a provenance graph stored in SpacetimeDB. When a plate reaches the pass, the system works out which allergens could have reached it, compares them with what the ticket forbids, and holds the plate if there is any doubt.
 
 People can get hurt if this system is wrong in the PASS direction. Wrong in the HOLD direction is an annoyance. Every judgment call leans toward HOLD.
+
+**The Hailo-8 isn't connected yet.** Everything runs locally: vision uses ONNX Runtime on a laptop, with video files or a webcam. It stays ready to upload to the Hailo later (same model file, same processing code, a deploy bundle; see `kitchen/vision/README.md`). Nothing waits on the device.
 
 **Two kinds of builders work in this repo:**
 - **Agents** (you): a Director, a Manager for each of seven teams, Workers, and Reviewers.
@@ -24,7 +26,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step. 
 |---|---|---|---|---|
 | 1 | **Orders** | The server types or speaks a ticket (Cartesia Ink). Jev turns the note into typed constraints, low-confidence fields become one-tap questions, results are cached, and the sent ticket is written to the database | [`kitchen/orders/`](kitchen/orders/) | team `orders` |
 | 2 | **Profiling** | At shift start, Jev reads bin labels and prep sheets and assigns allergen probabilities; unclear ingredients go to the chef; an Apify menu import is optional | [`kitchen/profiling/`](kitchen/profiling/) | team `orders` |
-| 3 | **Vision** | YOLOv8 detection and pose on the Hailo-8 (CPU fallback), ByteTrack, entity identity and origin, zones, plate binding, frame recording | [`kitchen/vision/`](kitchen/vision/) | team `vision` |
+| 3 | **Vision** | YOLOv8 detection and pose, run locally with ONNX Runtime now and packaged to upload to the Hailo-8 later; ByteTrack, entity identity and origin, zones, plate binding, frame recording | [`kitchen/vision/`](kitchen/vision/) | team `vision` |
 | 4 | **Entities** | In-memory entity store on the Pi, synced to SpacetimeDB about 5 times a second | [`kitchen/entities/`](kitchen/entities/) | **partner** |
 | 5 | **Interactions** | Candidate pairs, allergen-blind feature vectors, zone rules, a classifier wrapper with fallback, edges written to the database | [`kitchen/interactions/`](kitchen/interactions/) | team `interactions` |
 | 5b | **LSTM** | Learned interaction classifier, adopted only if it beats zone rules | [`kitchen/lstm/`](kitchen/lstm/) | **partner** |
@@ -230,7 +232,7 @@ Merge with squash only. GitHub won't let one account approve its own PR, so appr
 - Needs the partner → Manager or Director opens `owner:partner`.
 - Product decision, keys, money or hardware → owner (`status:needs-human`, with options and a recommendation).
 
-**Hardware.** Agents can't touch the Pi, camera, Hailo, servo, lights or speaker. Every hardware module has a laptop backend: a video file instead of the camera, CPU instead of Hailo, console instead of GPIO. `hardware` issues go as far as the fake allows, then post a step-by-step test script for the owner and move to `status:needs-human`.
+**Hardware.** Agents can't touch the Pi, camera, Hailo, servo, lights or speaker. Every hardware module has a laptop backend: a video file or webcam instead of the Pi camera, ONNX Runtime instead of the Hailo, console instead of GPIO. The Hailo isn't connected yet, so the local backend is the default and Hailo work produces a deploy bundle and a parity script, never a blocker. `hardware` issues go as far as the fake allows, then post a step-by-step test script for the owner and move to `status:needs-human`.
 
 **Data and secrets.**
 - Nothing over 1 MB in git: no video, weights, datasets or HEF/ONNX files. Large artifacts live in `data/` (gitignored), with a `data-manifest.json` in the folder giving name, size, sha256, source and author.
@@ -243,7 +245,7 @@ Merge with squash only. GitHub won't let one account approve its own PR, so appr
 |---|---|---|---|---|
 | `platform` | `kitchen/shared/`, `tests/e2e/`, `tools/`, `.github/`, `.claude/`, `pyproject.toml`, `contracts/` upkeep | The `kitchen` Python project, CI, models generated from contracts, interfaces, clock, the end-to-end harness, TS types for `web/` | `InMemoryStateClient`, and fakes for partner parts (`FakeEntityStore`, `FakeProvenanceGraph`, `ScriptedClassifier`), plus contract tests the partner's code must pass | Fakes must be faithful, especially fail-closed behavior |
 | `orders` | `kitchen/orders/`, `kitchen/profiling/` | Note parsing via Jev, one-tap questions, cache, apply, amendments, Cartesia Ink, bin profiling, chef confirmation, menu import, the Orders HTTP API, a ticket-note eval set | `FakeJev`, `TextFileTranscriber` | 3 (never send with an open question), 4 |
-| `vision` | `kitchen/vision/` | Camera and video input, YOLOv8 detection and pose (Hailo, CPU fallback), ByteTrack, identity and origin, zone calibration, plate binding, frame recording and replay, the Pi HTTP server | Recorded frame JSONL packs, `FakeVisionAPI` | 8 (new ID on re-acquire, origin set correctly) |
+| `vision` | `kitchen/vision/` | Video and webcam input, YOLOv8 detection and pose run locally with ONNX Runtime, a Hailo deploy bundle and backend ready for upload, ByteTrack, identity and origin, zone calibration, plate binding, frame recording and replay, the Pi HTTP server | Recorded frame JSONL packs, `FakeVisionAPI` | 8 (new ID on re-acquire, origin set correctly) |
 | `interactions` | `kitchen/interactions/` | Candidate pairs, allergen-blind features, zone rules, the fallback classifier wrapper, event segmentation, clip labeling, the benchmark that decides whether the partner's LSTM is adopted | Recorded event JSONL packs, feature-window exports for LSTM training | 6, 7 (false washes are the costliest error) |
 | `verdict` | `kitchen/verdict/` | Verdict policy, the clean-confidence ADR, the Laya adapter, the verdict service (plate at pass, amendment), Repeated Mistakes analysis | `ExactLaya`, `AdversarialLaya`, `ScriptedVerdictSource` | 1, 2, 9. **The safety-critical team** |
 | `sim` | `kitchen/sim/` | Kitchen simulator, scenario generation at scale, error injection, Laya datasets with leak-free splits, the Laya evaluation harness | Scenario corpora | Ground truth independent of the graph implementation |
@@ -307,36 +309,37 @@ There's always a working demo on `main` after M1. Each later milestone swaps a f
 
 | Milestone | Goal | Exit criteria (summary) |
 |---|---|---|
-| **Gate** | Owner approves the plan | Blocking open questions answered. The Director flips the gate, runs `tools/bootstrap_github.sh` and `tools/seed_issues.py`, and starts the Managers |
-| **M0 Foundations** | Everyone builds against fakes | `kitchen` project and CI; generated models; interfaces; all fakes, including the partner-part fakes and their contract tests; each step has a skeleton with a passing test; vision replays a video on CPU into frame JSONL; sim generates ≥ 20 valid scenarios |
-| **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End-to-end on fakes: typed note → `FakeJev` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `ConsoleGate`, `ConsoleSpeaker`. All golden scenarios pass in `rules_only`. Property tests for invariants 1, 2 and 9 approved by the safety reviewer. Tablet can't send with open questions. Zone rules turn recorded frames into valid edges. **Integration with the partner's graph and database as they land** (`needs-partner`) |
-| **M2 Live on Pi** | The camera drives it | Hailo det+pose plus ByteTrack ≥ 30 FPS (`hardware`). Calibration and plate binding. Live zone-rule edges. Gate hardware with `fault` on a stale feed (`hardware`). Overlays. Deterministic replay of a recorded live session |
+| **Gate** ✅ | Owner approves the plan | Approved 2026-10-23 with defaults for the blocking questions. GitHub bootstrapped and backlog seeded |
+| **M0 Foundations** | Everyone builds against fakes | `kitchen` project and CI; generated models; interfaces; all fakes, including the partner-part fakes and their contract tests; each step has a skeleton with a passing test; vision replays a video locally (ONNX Runtime, no Hailo) into frame JSONL; Hailo readiness ADR; sim generates ≥ 20 valid scenarios |
+| **M1 Vertical Slice** | A simulated kitchen produces correct verdicts on screen | End-to-end on fakes: typed note → `FakeJev` → question answered → ticket → scenario events → `FakeProvenanceGraph` → verdict → expo board, `ConsoleGate`, `ConsoleSpeaker`. All golden scenarios pass in `rules_only`. Property tests for invariants 1, 2 and 9 approved by the safety reviewer. Tablet can't send with open questions. Zone rules turn recorded frames into valid edges. Hailo deploy bundle and parity script ready (no device needed). **Integration with the partner's graph and database as they land** (`needs-partner`) |
+| **M2 Live on Pi** | The camera drives it | Connect the Hailo and upload the bundle; the owner runs the parity check; det+pose plus ByteTrack ≥ 30 FPS (`hardware`). Calibration and plate binding. Live zone-rule edges. Gate hardware with `fault` on a stale feed (`hardware`). Overlays. Deterministic replay of a recorded live session |
 | **M3 Models** | Learned parts, gated by evaluation | Real Jev parse on the eval set, with misses becoming questions. Bin profiling from photos. Laya fine-tuned on sim; on held-out sim it never misses an allergen exact reachability finds. LSTM vs zone-rule benchmark, with an ADR co-signed by the partner. Cartesia Ink and Sonic live |
 | **M4 Demo Hardening** | It survives a live demo | Repeated Mistakes view. Live late-change recheck. Offline mode. Failure drills (kill any component → HOLD or `fault`, never PASS). Optional Apify import. Demo script rehearsed three times |
 
 ## 11. Open questions
 
-**Blocking** questions must be answered before the gate opens. Until then, use the default.
+The gate is open. The blocking questions were settled with their defaults on 2026-10-23. Anything still open uses its default until its owner decides.
 
 | ID | Question | Decides | Blocking | Default |
 |---|---|---|---|---|
 | OQ-1 | How does Python reach SpacetimeDB (HTTP reducer calls, bridge process, community SDK)? | partner | no | HTTP reducer calls, plus polling for subscriptions |
-| OQ-2 | Only the nine major allergens, or child units (coconut under tree nuts)? | owner | **yes** | Nine majors; exceptions stored as free-text ingredient |
+| OQ-2 | Only the nine major allergens, or child units (coconut under tree nuts)? | owner | resolved | **Default accepted (2026-10-23):** nine majors; exceptions stored as free-text ingredient |
 | OQ-3 | Default severity per allergen unit | owner | no | `allergy` |
-| OQ-4 | Pass threshold per severity (preference / intolerance / allergy / anaphylactic) | owner | **yes** | 0.80 / 0.90 / 0.95 / 0.99 |
-| OQ-5 | What backs Jev and Laya: provider, hosting, cost, offline story, keys? | owner | **yes** | Both behind interfaces with fakes |
+| OQ-4 | Pass threshold per severity (preference / intolerance / allergy / anaphylactic) | owner | resolved | **Default accepted (2026-10-23):** 0.80 / 0.90 / 0.95 / 0.99 |
+| OQ-5 | What backs Jev and Laya: provider, hosting, cost, offline story, keys? | owner | by M3 | **Default accepted (2026-10-23):** both behind interfaces with fakes until the owner decides; the orders and sim spikes gather options |
 | OQ-6 | Camera overlays drawn client-side or burned into the Pi stream? | vision + outputs | no | Client-side |
 | OQ-7 | SpacetimeDB local on the laptop or Maincloud? | owner + partner | no | Local standalone |
 | OQ-8 | What does `trace_sensitive: false` change? | verdict (ADR), owner approves | no | Every transfer edge counts (strict) |
 | OQ-9 | Contact and wipe edges: both directions, or inferred? | interactions + partner | no | Both |
-| OQ-10 | Deadline, and agent hours per day? | owner | **yes** | No dates |
-| OQ-11 | Hardware inventory (Pi, Hailo form factor, camera, servo, lights, buzzer, speaker) | owner | by M2 | Pi 5 + Hailo-8 AI HAT+ + Camera Module 3 |
+| OQ-10 | Deadline, and agent hours per day? | owner | resolved | **Default accepted (2026-10-23):** no dates; milestones in order |
+| OQ-11 | Hardware inventory (Pi, Hailo form factor, camera, servo, lights, buzzer, speaker) | owner | by M2 | **Hailo not connected yet (owner, 2026-10-23): build locally, stay upload-ready.** Assumed: Pi 5 + Hailo-8 AI HAT+ + Camera Module 3 |
 | OQ-12 | Who records and labels real clips, with what tool? | owner + interactions | by M3 | Owner records; interactions supplies a labeling tool |
 | OQ-13 | How the unknown-history profile enters noisy-OR | partner (ADR) | no | Probability 1 for every unit |
 | OQ-14 | One camera or several? | owner | no | One |
-| OQ-15 | Budget for agent tokens and paid APIs | owner | **yes** | Owner sets the concurrency cap at launch |
+| OQ-15 | Budget for agent tokens and paid APIs | owner | at launch | Owner sets the Worker concurrency cap when the Director starts |
 | OQ-16 | Ultralytics YOLOv8 is AGPL-3.0: acceptable? | owner | by M2 | Fine for a non-distributed demo |
 | OQ-17 | Ordering of edges with equal timestamps | partner (ADR) | no | By `t_start_ms`, `t_end_ms`, `event_id`; a tied wash goes before the transfer (strict) |
+| OQ-18 | Where do Hailo HEFs come from: precompiled Hailo Model Zoo files, or our own compile with the Dataflow Compiler (needs an x86-64 Linux machine, not the Mac)? | vision (ADR, vision-02), owner provides a machine if needed | by M2 | Precompiled Model Zoo HEFs for COCO YOLOv8 det + pose; compile only if we fine-tune |
 
 The Director moves answered questions to the bottom of this table with the answer and a link.
 

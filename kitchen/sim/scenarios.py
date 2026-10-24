@@ -7,5 +7,5 @@ Emits: scenario, interaction_event JSONL, entity JSONL, metrics and load reports
 Rules: expected answers come from world truth only; 8 track loss becomes a new late entity with origin unknown
 Tasks: sim-01, sim-03, sim-05, sim-07, sim-10, sim-11
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

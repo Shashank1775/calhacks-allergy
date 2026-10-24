@@ -7,5 +7,5 @@ Emits: ProvenanceGraph (reach, subgraph, unknown_ancestors, version); entity_ris
 Rules: 1 failures raise GraphUnavailable; 5 time-forward paths only; 8 unknown history is never clean
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

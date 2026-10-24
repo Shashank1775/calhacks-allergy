@@ -2,7 +2,7 @@
 
 A kitchen allergen tracker. A camera on a Raspberry Pi with a Hailo-8 watches food prep and tracks every bin, tool, hand and plate. Every contact is logged as an edge in a provenance graph in SpacetimeDB. When a plate reaches the pass, the system works out which allergens could have reached it and holds the plate if its ticket forbids any of them.
 
-> **Status: PLANNING.** The plan, contracts and code layout are in place. The files are skeletons that describe what goes where, with no product code yet. Agent implementation starts when the owner approves (see the phase gate in [AGENTS.md](AGENTS.md)).
+> **Status: BUILD APPROVED (2026-10-23), M0 next.** The plan, contracts and code layout are in place, and the files are skeletons describing what goes where. The Hailo-8 isn't connected yet, so everything runs locally and stays ready to upload. See [AGENTS.md](AGENTS.md).
 
 ## Where things are
 
@@ -26,7 +26,7 @@ You own `kitchen/entities/`, `kitchen/lstm/`, `kitchen/graph/` and `database/`. 
 
 ## For the owner: running the agents
 
-See [AGENTS.md §14](AGENTS.md#14-running-the-org-claude-code). In short: approve the plan, run `tools/bootstrap_github.sh` and `tools/seed_issues.py`, then start the Director with `claude --agent director`.
+See [AGENTS.md §14](AGENTS.md#14-running-the-org-claude-code). In short: the plan is approved and the backlog is seeded; start the Director with `claude --agent director` and give it a Worker concurrency cap.
 
 ## Checks
 

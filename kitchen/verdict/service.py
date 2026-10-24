@@ -9,5 +9,5 @@ Emits: verdict and verdict_step via StateClient.record_verdict
 Rules: 1 StateUnavailable, GraphUnavailable or stale plate holds; 9 amendments recompute from full history
 Tasks: verdict-06, verdict-07, verdict-08, verdict-10
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

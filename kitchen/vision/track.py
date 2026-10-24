@@ -7,5 +7,5 @@ Emits: tracked detections with track_id
 Rules: 8 a track lost beyond the buffer comes back as a new track
 Tasks: vision-01
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

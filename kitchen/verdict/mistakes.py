@@ -7,5 +7,5 @@ Emits: mistake_pattern via StateClient.put_mistake_pattern
 Rules: none (analysis only; never changes a verdict)
 Tasks: M4 (not in the seed backlog yet)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

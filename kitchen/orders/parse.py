@@ -7,5 +7,5 @@ Emits: ParseResult
 Rules: 3 every low-confidence field gets a question; never drop a mentioned allergen
 Tasks: orders-01
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

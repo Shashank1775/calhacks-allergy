@@ -7,5 +7,5 @@ Emits: cached ParseResult (cached=true)
 Rules: 1 a cache miss with Jev down is an error, never a guess
 Tasks: orders-05
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

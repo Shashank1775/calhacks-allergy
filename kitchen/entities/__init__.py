@@ -7,5 +7,5 @@ Emits: Entity (get, snapshot); entity table via StateClient.upsert_entities
 Rules: 8 never delete, never change first_seen or origin; 1 sync failures visible
 Tasks: partner
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

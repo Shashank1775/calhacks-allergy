@@ -7,5 +7,5 @@ Emits: raw frames with t_ms for detect.py and pose.py
 Rules: 5 strictly increasing t_ms, even across source restarts
 Tasks: vision-01 (video file), vision-09 (JSONL replay), picamera2 in M2
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

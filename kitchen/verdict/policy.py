@@ -7,5 +7,5 @@ Emits: verdict (decision, reasons, flagged, chain, versions)
 Rules: 1 any error or doubt holds; 2 Laya adds holds, never removes; 4 allergen units only, exceptions never suppress; 8 unknown ancestor holds
 Tasks: verdict-01, verdict-04, verdict-08
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

@@ -7,5 +7,5 @@ Emits: ParseResult draft; Ticket at revision + 1 via StateClient.put_ticket
 Rules: 9 new revision with the full constraint set; old rows untouched; no silent constraint drop
 Tasks: orders-08
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

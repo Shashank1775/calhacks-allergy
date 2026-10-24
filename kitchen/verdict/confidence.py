@@ -7,5 +7,5 @@ Emits: verdict.confidence
 Rules: 1 missing input means zero confidence; 2 Laya can never raise it; monotone, more evidence never raises it
 Tasks: verdict-02 (ADR), verdict-01
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

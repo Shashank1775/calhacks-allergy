@@ -7,5 +7,5 @@ Emits: SystemClock (live), FixedClock (tests and replay; advanced by hand)
 Rules: logic never calls time.time() or datetime.now(); it takes a Clock (AGENTS.md §8 Engineering conventions)
 Tasks: platform-03
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

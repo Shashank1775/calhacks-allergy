@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -126,8 +127,8 @@ def program_board_body() -> str:
 
 
 class GitHub:
-    def __init__(self, repo: str | None, dry_run: bool):
-        self.repo, self.dry_run, self.fake_n = repo, dry_run, 0
+    def __init__(self, repo: str | None, dry_run: bool, delay: float = 1.0):
+        self.repo, self.dry_run, self.fake_n, self.delay = repo, dry_run, 0, delay
 
     def _gh(self, *args: str, stdin: str | None = None) -> str:
         cmd = ["gh", *args] + (["--repo", self.repo] if self.repo else [])
@@ -155,6 +156,7 @@ class GitHub:
             args += ["--label", label]
         if milestone:
             args += ["--milestone", milestone]
+        time.sleep(self.delay)  # stay under GitHub's secondary rate limit for content creation
         url = self._gh(*args, stdin=body).strip()
         number = int(url.rstrip("/").rsplit("/", 1)[-1])
         print(f"  created #{number}: {title}")
@@ -165,11 +167,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--repo", help="owner/name (default: current repo)")
+    ap.add_argument("--delay", type=float, default=1.0, help="seconds between issue creations")
     args = ap.parse_args()
 
     tasks, epics = load_backlog()
     order = topo_order(tasks)
-    gh = GitHub(args.repo, args.dry_run)
+    gh = GitHub(args.repo, args.dry_run, args.delay)
     numbers: dict[str, int | str] = dict(gh.existing_keys())
 
     print(f"tasks: {len(tasks)} across {len(TEAMS)} teams")

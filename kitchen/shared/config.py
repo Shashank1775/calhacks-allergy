@@ -9,5 +9,5 @@ Rules: secrets come only from the environment and are never logged; a missing se
        settings object, are logged at startup, and are recorded in each verdict's versions
 Tasks: platform-01, platform-03
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

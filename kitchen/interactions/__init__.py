@@ -7,5 +7,5 @@ Emits: interaction_event (StateClient.record_interactions and JSONL), interactio
 Rules: 6 allergen-blind features; 7 rules stay the fallback; 1 never drop events; 5 events time-ordered
 Tasks: interactions-01 .. interactions-12
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

@@ -7,5 +7,5 @@ Emits: observation_frame to EntityStore.ingest (partner), kitchen/interactions a
 Rules: 1 the frame loop never blocks on a consumer; 5 strictly increasing t_ms
 Tasks: vision-01 (replay CLI), vision-06 (wiring to the entity store)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

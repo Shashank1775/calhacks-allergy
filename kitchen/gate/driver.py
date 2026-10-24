@@ -7,5 +7,5 @@ Emits: servo position, red/green light, buzzer (GateDriver)
 Rules: 1 any driver exception means fault
 Tasks: outputs-03; GPIO driver in M2 (hardware)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """

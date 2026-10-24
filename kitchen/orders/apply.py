@@ -7,5 +7,5 @@ Emits: Ticket via StateClient.put_ticket (tables ticket, ticket_constraint, tick
 Rules: 1 StateUnavailable leaves the draft unsent; 3 only sendable drafts; 4 allergen units only
 Tasks: orders-07, orders-10 (real database, needs partner)
 
-Not built yet (phase gate: PLANNING).
+Not built yet.
 """
