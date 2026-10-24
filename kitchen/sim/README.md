@@ -44,8 +44,8 @@ The owner's example: a spoon touches an omelette dish and the omelette shifts. I
 ### Make a clip dataset and train on it
 
 ```bash
-uv run python -m kitchen.sim.training_clips --out data/clips/v1 --train 40000 --val 4000 --test 4000 --workers 24
-python -m kitchen.lstm.train --data data/clips/v1 --out runs/lstm-v1 --epochs 20   # on a GPU machine with torch
+uv run python -m kitchen.sim.training_clips --out data/clips/v2 --train 40000 --val 4000 --test 4000 --workers 32
+python -m kitchen.lstm.train --data data/clips/v2 --out runs/lstm-v2 --epochs 20   # on a GPU machine with torch
 ```
 
 A clip is about 80 KB compressed, so 48,000 clips take about 4 GB. Each split has `clips.jsonl` (one `interaction_clip` record per line, with labels) and one npz per clip (keys `x` and `dt_ms`). `kitchen/lstm/train.py` trains the partner's model on them.
@@ -73,7 +73,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules).
 - Tests live in `kitchen/sim/tests/`. Run `uv run pytest kitchen/sim`.
 - They use `FakeStateClient` and `FakeClock` (platform). The corpora and JSONL files we produce are the fakes for "a kitchen happened".
 - Every generated file validates against its schema, and the same (generator version, seed) reproduces it byte for byte.
-- No seed or kitchen layout appears in two splits.
+- No seed appears in two splits, and test uses layout families that train and val never see.
 
 ## Watch out for
 

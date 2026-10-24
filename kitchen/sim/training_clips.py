@@ -7,7 +7,7 @@ Reads: episodes (episodes.py); kitchen/shared/change_mask.py and clips.py
 Emits: data/clips/<version>/{train,val,test}/ with clips.jsonl (interaction_clip records), one npz per clip,
        plus manifest.json and datasheet.md
 Rules: blind classifier: plain shapes and food blobs only, never realistic utensils; labels from the episode, never a model;
-       no seed or kitchen layout in two splits; deterministic per seed
+       no seed in two splits; test uses layout families train and val never see; deterministic per seed
 
 Generate a dataset:
     uv run python -m kitchen.sim.training_clips --out data/clips/v2 --train 40000 --val 4000 --test 4000 --workers 32
