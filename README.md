@@ -13,7 +13,7 @@ A kitchen allergen tracker. A camera on a Raspberry Pi with a Hailo-8 watches fo
 | `kitchen/entities/`, `kitchen/interactions/`, `kitchen/lstm/`, `kitchen/graph/`, [`database/`](database/) | Entity store, interactions, ConvLSTM, provenance graph, SpacetimeDB module | **partner** |
 | [`web/`](web/) | Tablet and expo screens | agents (outputs) |
 | [`contracts/`](contracts/README.md) | Data shapes and interfaces shared between folders, plus golden test scenarios | agents (platform), Director reviews |
-| [`tools/`](tools/) | Contract validator | agents (platform) |
+| [`tools/`](tools/) | Contract validator, local runner (`run_local.py`) | agents (platform) |
 | [`docs/decisions/`](docs/decisions/) | One page per decision that's hard to reverse | — |
 
 ## For the partner
@@ -31,5 +31,15 @@ uv sync --all-extras
 uv run python tools/validate_contracts.py
 uv run pytest -m 'not hardware and not slow'
 ```
+
+### The whole kitchen on one laptop
+
+No camera and no partner database: `tools/run_local.py` runs the Orders API, the verdict service and the gate loop on one shared `FakeStateClient`, replays a golden scenario's kitchen, and serves every table at `GET /state`. `tests/e2e` drives the same code on a fake clock.
+
+```bash
+uv run python tools/run_local.py knife-carries-peanut-to-plate
+```
+
+Then point the web app at it (see [Run it](web/README.md#run-it) in `web/README.md`) and open `/expo`.
 
 To run the agents, start the Director with `claude --agent director` and give it a Worker concurrency cap ([Running the org](AGENTS.md#14-running-the-org-claude-code) in AGENTS.md).
