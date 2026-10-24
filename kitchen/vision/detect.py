@@ -6,8 +6,8 @@ Step:  vision
 Reads: SourceFrame from camera.py; the deploy bundle in settings.bundle_dir (manifest.json, det.onnx and pose.onnx, or
        the HEFs through hailo.py); VISION_DETECTOR=onnx|hailo (default onnx)
 Emits: Detector.detect(frame) -> (list[Detection], list[Person]), boxes and keypoints normalized to the original frame
-Rules: fail closed: a missing or broken bundle raises at startup and a wrong-shaped output raises per frame, so there is
-       never a detector that silently returns nothing; detections and keypoints are only ever decoded, never invented
+Rules: fail closed: a missing or broken bundle raises at startup and a wrong-shaped output or one with NaN or inf values
+       raises per frame, so there is never a detector that silently returns nothing; detections and keypoints are only ever decoded, never invented
        or interpolated; backends only run the network and one post-processing path serves both, so local results
        predict Hailo results; onnxruntime and hailo_platform are imported only when a detector is opened
 
@@ -113,10 +113,16 @@ def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> list[int
 
 
 def _columns(output: np.ndarray, channels: int, network: str) -> np.ndarray:
-    """One Ultralytics output [1, channels, anchors] as [anchors, channels]; a wrong shape raises (fail closed)."""
+    """One Ultralytics output [1, channels, anchors] as [anchors, channels]; a wrong shape or a NaN or inf raises.
+
+    Both raise (fail closed). A NaN score fails every score floor, so an unfilled or broken output would otherwise
+    decode to an empty kitchen, and a NaN keypoint with a good visibility would reach tracking as a confident wrist.
+    """
     output = np.asarray(output, dtype=np.float32)
     if output.ndim != 3 or output.shape[0] != 1 or output.shape[1] != channels:
         raise ValueError(f"{network} output must be [1, {channels}, anchors], got {list(output.shape)}")
+    if not np.isfinite(output).all():
+        raise ValueError(f"{network} output has NaN or inf values")
     return output[0].T
 
 

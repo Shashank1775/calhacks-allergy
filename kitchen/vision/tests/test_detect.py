@@ -4,8 +4,8 @@ Owner: vision (agents)
 Step:  vision
 Reads: kitchen.vision.detect
 Emits: nothing
-Rules: fail closed: a missing bundle, a wrong-shaped output or a session error raises, never an empty result (safety
-       tests); no test needs onnxruntime, hailo_platform or model files except the slow one, which skips without
+Rules: fail closed: a missing bundle, a wrong-shaped or non-finite output or a session error raises, never an empty
+       result (safety tests); no test needs onnxruntime, hailo_platform or model files except the slow one, which skips without
        VISION_TEST_BUNDLE
 """
 
@@ -183,6 +183,26 @@ def test_wrong_shaped_pose_output_raises():
         decode_people(np.zeros((1, DET_CHANNELS, ANCHORS), dtype=np.float32), FRAME, SETTINGS)
 
 
+@pytest.mark.safety
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize(
+    ("decode", "output", "network"),
+    [
+        (decode_objects, det_output([((0.25, 0.5, 0.5, 0.75), {KNIFE: 0.9})]), "detection"),
+        (decode_people, pose_output([((0.2, 0.1, 0.7, 0.9), 0.85, {9: (0.25, 0.6, 0.9)})]), "pose"),
+    ],
+)
+def test_non_finite_output_raises_instead_of_an_empty_frame(decode, output, network, bad_value):
+    # An all-NaN output fails every score floor, so without the check it would decode to an empty kitchen.
+    with pytest.raises(ValueError, match=f"{network} output has NaN or inf"):
+        decode(np.full_like(output, bad_value), FRAME, SETTINGS)
+    # One bad value anywhere is enough, for example a NaN wrist with a confident visibility.
+    output = output.copy()
+    output[0, -1, 0] = bad_value
+    with pytest.raises(ValueError, match=f"{network} output has NaN or inf"):
+        decode(output, FRAME, SETTINGS)
+
+
 def test_person_box_and_arm_keypoints_map_to_the_frame():
     keypoints = {7: (0.30, 0.40, 0.9), 8: (0.60, 0.40, 0.8), 9: (0.25, 0.60, 0.95), 10: (0.65, 0.62, 0.2)}
     output = pose_output([((0.2, 0.1, 0.7, 0.9), 0.85, keypoints)])
@@ -194,6 +214,25 @@ def test_person_box_and_arm_keypoints_map_to_the_frame():
     assert person.left_wrist == pytest.approx((0.25, 0.60, 0.95), abs=1e-6)
     # A barely visible wrist keeps its low confidence for tracking.py to reject; it is never raised or guessed.
     assert person.right_wrist == pytest.approx((0.65, 0.62, 0.2), abs=1e-6)
+
+
+def test_keypoints_outside_the_frame_are_clipped_and_keep_their_visibility():
+    keypoints = {9: (-0.1, 1.2, 0.9), 10: (1.3, -0.2, 0.4)}
+    output = pose_output([((0.2, 0.1, 0.7, 0.9), 0.85, keypoints)])
+    (person,) = decode_people(output, FRAME, SETTINGS)
+    assert person.left_wrist == pytest.approx((0.0, 1.0, 0.9), abs=1e-6)
+    assert person.right_wrist == pytest.approx((1.0, 0.0, 0.4), abs=1e-6)
+
+
+def test_a_person_wholly_in_the_padding_is_dropped():
+    output = pose_output(
+        [
+            ((0.4, -0.3, 0.5, -0.1), 0.9, {}),  # wholly in the padding above the frame
+            ((0.1, 0.1, 0.4, 0.9), 0.8, {}),
+        ]
+    )
+    (person,) = decode_people(output, FRAME, SETTINGS)
+    assert person.box == pytest.approx((0.1, 0.1, 0.4, 0.9), abs=1e-6)
 
 
 def test_people_score_floor_and_nms():
@@ -272,9 +311,11 @@ def test_session_error_propagates_instead_of_an_empty_frame():
 
 
 @pytest.mark.safety
-def test_detector_refuses_a_model_of_another_input_size():
-    sessions = {"det": FakeSession(None, input_shape=(1, 3, 320, 320)), "pose": FakeSession(None)}
-    with pytest.raises(ValueError, match="320"):
+@pytest.mark.parametrize("network", ["det", "pose"])
+def test_detector_refuses_a_model_of_another_input_size(network):
+    sessions = {"det": FakeSession(None), "pose": FakeSession(None)}
+    sessions[network] = FakeSession(None, input_shape=(1, 3, 320, 320))
+    with pytest.raises(ValueError, match=f"the {network} network takes .*320"):
         Detector(sessions, SETTINGS, "onnx")
 
 
