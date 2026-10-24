@@ -7,7 +7,7 @@ import scoop from "../../../contracts/fixtures/valid/interaction_event/scoop.jso
 import { server } from "../api/mocks/server";
 import { plate_badge } from "../badge";
 import type { Ticket, Verdict } from "../types/TEMPORARY";
-import { LocalStateSource, POLL_MS } from "./local_state_source";
+import { LocalStateSource, POLL_MS, POLL_TIMEOUT_MS } from "./local_state_source";
 import type { TableName } from "./state_source";
 
 const RUNNER_URL = "http://runner.test";
@@ -221,6 +221,24 @@ describe("safety: LocalStateSource fails closed", () => {
     );
     expect(source.feed_status()).toBe("lost");
   });
+
+  it(
+    "goes lost when the runner never answers, once POLL_TIMEOUT_MS passes",
+    async () => {
+      // Real timers and a handler that never responds: only the poll's own timeout can end it, so a hung runner
+      // can't leave a PASS on screen.
+      const source = await live_source(snapshot([PASS]));
+      server.use(http.get(`${RUNNER_URL}/state`, () => new Promise<Response>(() => {})));
+      const started = Date.now();
+
+      await source.poll_once();
+
+      expect(Date.now() - started).toBeGreaterThanOrEqual(POLL_TIMEOUT_MS - 50);
+      expect(source.feed_status()).toBe("lost");
+      expect(plate_badge(source.feed_status(), source.rows("ticket")[0], source.rows("verdict"))).toBe("feed_lost");
+    },
+    POLL_TIMEOUT_MS + 3000,
+  );
 
   it("goes from connecting to lost when the first poll fails", async () => {
     runner_answers(() => HttpResponse.error());

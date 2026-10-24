@@ -135,8 +135,9 @@ async function fetch_snapshot(base_url: string): Promise<Snapshot | null> {
 
 /**
  * Checks the snapshot's outline: a scenario id and an array for each of the
- * seven tables. Rows are passed on as sent; badge.ts holds on anything it can't
- * read as a pass.
+ * seven tables. Rows are passed on as sent: the runner writes every ticket and
+ * verdict through FakeStateClient, which checks each against its contract
+ * schema, and keeps one row per primary key.
  */
 function parse_snapshot(body: unknown): Snapshot | null {
   if (typeof body !== "object" || body === null) return null;

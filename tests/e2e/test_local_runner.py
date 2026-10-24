@@ -17,10 +17,11 @@ import pytest
 from kitchen.gate.voice import number_words
 from kitchen.shared.clock import FakeClock
 from kitchen.shared.fakes import GOLDEN_SCENARIO_PATHS
-from kitchen.shared.models import validate
+from kitchen.shared.models import CONTRACTS_DIR, validate
 
 RUNNER = Path(__file__).resolve().parents[2] / "tools" / "run_local.py"
 KNIFE_SCENARIO = next(path for path in GOLDEN_SCENARIO_PATHS if path.stem == "knife-carries-peanut-to-plate")
+DAIRY_SCENARIO = next(path for path in GOLDEN_SCENARIO_PATHS if path.stem == "late-amendment-adds-dairy")
 WEB_ORIGIN = "http://localhost:5173"
 ANSWERS = {"severity": "allergy", "trace_sensitive": True}
 
@@ -107,8 +108,8 @@ def test_runner_plays_each_golden_scenario_to_its_expected_verdicts(path):
 
 
 def test_state_serves_every_table_read_only():
-    """GET /state has exactly the tables of contracts/state-tables.md, each row in its contract shape, matching what
-    the StateClient holds; nothing can be written through it."""
+    """GET /state has exactly the tables of contracts/state-tables.md, each holding the knife scenario's rows in
+    their contract shape; nothing can be written through it."""
     runner = replay(KNIFE_SCENARIO)
     state = runner.shift.state
     body = runner.shift.orders.get("/state").json()
@@ -118,21 +119,58 @@ def test_state_serves_every_table_read_only():
     assert set(body["tables"]) == STATE_TABLES
     tables = body["tables"]
 
-    assert tables["ticket"] == [validate(ticket, "ticket") for ticket in tables["ticket"]]
-    assert tables["ticket"] == [state.get_ticket("t1")]
-    assert tables["verdict"] == [validate(verdict, "verdict") for verdict in state.list_verdicts()]
-    assert tables["interaction"] == [validate(event, "interaction_event") for event in state.list_interactions()]
-    for profile in tables["bin_profile"]:
-        validate({key: value for key, value in profile.items() if key != "entity_id"}, "allergen_profile")
+    units = json.loads((CONTRACTS_DIR / "allergen_units.json").read_text())["units"]
+    assert tables["allergen"] == [{key: unit[key] for key in ("id", "name", "default_severity")} for unit in units]
+    assert tables["zone"] == [
+        {"zone_id": "pass", "kind": "pass", "polygon": [[0.8, 0.0], [1.0, 0.0], [1.0, 1.0], [0.8, 1.0]]}
+    ]
+    assert tables["ticket"] == [validate(state.get_ticket("t1"), "ticket")]
+    assert tables["bin_profile"] == [
+        {"entity_id": b["entity_id"], **b["allergen_profile"]} for b in runner.scenario["bins"]
+    ]
+    # Identity fields only: zone, box and allergens live in entity_state (contracts/state-tables.md).
+    assert sorted(tables["entity"], key=lambda row: row["entity_id"]) == [
+        {"entity_id": "bin-1", "kind": "bin", "label": "satay sauce", "origin": "shift_start", "first_seen_t_ms": 0},
+        {"entity_id": "bin-3", "kind": "bin", "label": "steamed rice", "origin": "shift_start", "first_seen_t_ms": 0},
+        {"entity_id": "plate-t1", "kind": "plate", "label": "plate-t1", "origin": "shift_start", "first_seen_t_ms": 0},
+        {
+            "entity_id": "tool-knife-1",
+            "kind": "tool",
+            "label": "tool-knife-1",
+            "origin": "shift_start",
+            "first_seen_t_ms": 0,
+        },
+    ]
     assert [(row["state_id"], row["entity_id"], row["zone"]) for row in tables["entity_state"]] == [
         ("s1", "plate-t1", "pass")
     ]
     assert tables["plate_binding"] == [{"plate_id": "plate-t1", "ticket_id": "t1", "t_ms": 500}]
-    assert {row["id"] for row in tables["allergen"]} >= {"peanut", "milk", "sesame"}
-    assert json.loads(json.dumps(body)) == body
+    assert tables["interaction"] == [validate(event, "interaction_event") for event in state.list_interactions()]
+    assert tables["verdict"] == [validate(verdict, "verdict") for verdict in state.list_verdicts()]
 
     for method in ("POST", "PUT", "DELETE"):
         assert runner.shift.orders.request(method, "/state").status_code == 405
+
+
+def test_state_keeps_only_the_latest_ticket_revision():
+    """A ticket row holds the latest revision (contracts/state-tables.md): after the amendment, GET /state has one t5
+    row, at revision 2, so the expo board can't show revision 1's PASS as current."""
+    runner = replay(DAIRY_SCENARIO)
+
+    tickets = runner.shift.orders.get("/state").json()["tables"]["ticket"]
+
+    assert [(ticket["ticket_id"], ticket["revision"], ticket["forbidden"]) for ticket in tickets] == [
+        ("t5", 2, ["milk", "peanut"])
+    ]
+
+
+def test_scripted_answers_name_the_severity_of_the_tickets_threshold():
+    """The runner answers a severity question with the severity the scenario ticket's pass threshold stands for, so
+    orders sends that same threshold; traces always matter."""
+    assert run_local.answers_for({"pass_threshold": 0.99}) == {"severity": "anaphylactic", "trace_sensitive": True}
+    assert run_local.answers_for({"pass_threshold": 0.95}) == {"severity": "allergy", "trace_sensitive": True}
+    assert run_local.answers_for({"pass_threshold": 0.90})["severity"] == "intolerance"
+    assert run_local.answers_for({"pass_threshold": 0.80})["severity"] == "preference"
 
 
 def test_a_tablet_ticket_shows_up_in_state_beside_the_scenarios():

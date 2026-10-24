@@ -63,9 +63,14 @@ WEB_STATE_URL=http://localhost:8001
 WEB_ORDERS_URL=http://localhost:8001
 ```
 
+Start the runner in one terminal and the web app in another, then open http://localhost:5173/expo:
+
 ```bash
 uv run python tools/run_local.py knife-carries-peanut-to-plate
-npm --prefix web run dev                 # then open http://localhost:5173/expo
+```
+
+```bash
+npm --prefix web run dev
 ```
 
 The screens poll the runner's `GET /state` twice a second and show REPLAY, since it's a scenario, not the kitchen. If the runner stops or answers badly, every screen shows FEED LOST until it's back. `WEB_STATE_URL` must be an `http://` or `https://` address, or there's no source.
