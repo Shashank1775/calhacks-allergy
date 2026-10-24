@@ -207,6 +207,31 @@ def test_a_surer_hit_from_the_fallback_names_the_fallback():
 
 
 @pytest.mark.safety
+def test_a_surer_hit_is_news_to_the_touches_on_its_entities():
+    """A spoon rests on a plate. A hand grabs the spoon at 330, first scored 0.8 (zone rules, the primary failed on
+    that frame), then 0.9 from 363. The surer hit adds an edge for the difference, and that is news: the spoon on the
+    plate carries it across in the same frame, so the plate counts the hand at its surest."""
+    lstm = {"name": "lstm", "version": "fake-1"}
+    segmenter = Segmenter(SETTINGS)
+    spoon_plate = {"a_id": "tool-spoon-1", "b_id": "plate-t1", "b_kind": "plate"}
+    hand_spoon = {"a_id": HAND, "b_id": "tool-spoon-1", "b_kind": "tool"}
+    written: dict[int, list] = {}
+    for t_ms in range(0, 500, 33):
+        frame = [judged_at(t_ms, [("transfer.contact", 0.9)], lstm, **spoon_plate)]
+        if t_ms == 330:
+            frame.append(judged_at(t_ms, CONTACT, ZONE_RULES, **hand_spoon))
+        elif t_ms > 330:
+            frame.append(judged_at(t_ms, [("transfer.contact", 0.9)], lstm, **hand_spoon))
+        written[t_ms] = segmenter.add_frame(t_ms, frame)
+
+    assert [(e["a_id"], e["b_id"], e["t_start_ms"], e["t_end_ms"], e["direction"]) for e in written[363]] == [
+        (HAND, "tool-spoon-1", 363, 363, "both"),  # the difference, (0.9 - 0.8) / (1 - 0.8)
+        ("tool-spoon-1", "plate-t1", 363, 364, "a_to_b"),  # carried on to the plate
+    ]
+    assert written[363][0]["probability"] == pytest.approx(0.5)
+
+
+@pytest.mark.safety
 def test_news_from_a_new_touch_crosses_each_touch_going_on_its_entities_once():
     """A spoon rests on a plate (a contact from 0, a scoop from 99); at 165 a hand starts touching the spoon. Each
     spoon-plate touch writes one more edge in that frame, ending at 166, just after the hand's first hit, and only from
@@ -401,7 +426,9 @@ def can_receive(key: tuple) -> list[str]:
 def test_a_touch_is_one_edge_plus_one_per_news_and_news_crosses_every_touch_seen_lately(frames):
     hits, written = segment_frames(frames)
     events = [event for event, _ in written]
-    lead_ms = Segmenter(SETTINGS).lead_ms
+    # A touch is confirmed contact_min_ms (scoop_min_ms for a scoop) into its overlap, so it may have begun that long
+    # before its first hit: news looks back the longer of the two, worked out here rather than read from the code.
+    lead_ms = max(SETTINGS.contact_min_ms, SETTINGS.scoop_min_ms)
     touches = touches_of(hits)
     first_hits = {(key, times[0]) for key, times in touches}
 

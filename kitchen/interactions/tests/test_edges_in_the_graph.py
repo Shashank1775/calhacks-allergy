@@ -257,6 +257,31 @@ def test_a_hand_on_the_rim_that_slides_onto_the_bin_dirties_the_plate(fps, stay_
 
 
 @pytest.mark.safety
+@pytest.mark.parametrize(("fps", "late_ms"), [(12, 0), (24, 0), (30, 0), (30, 4)])
+def test_a_hand_that_jumps_from_the_rim_onto_the_bin_between_frames_dirties_the_plate(fps, late_ms):
+    """A hand rests on a plate's rim, then is on the peanut bin beside it in the next frame: to cross the gap it must
+    have touched both at once. The hand-bin contact is confirmed contact_min_ms into the overlap, which at 12 or 24
+    FPS, or with one frame a few ms late, is more than contact_min_ms after the hand was last seen on the rim. News
+    still crosses the rim touch, so the plate gets the peanut."""
+    beside = (0.67, 0.5)  # box [0.60, 0.74]; the plate's is [0.42, 0.58]
+    hand = Track(
+        HAND,
+        "hand",
+        ((0, (0.565, 0.5)), (700, (0.565, 0.5)), (701, (0.625, 0.5)), (1500, (0.625, 0.5)), (1600, (0.625, 0.2))),
+    )
+    frames = render([still("plate-t1", "plate", PLATE_AT, 2000), still("bin-1", "bin", beside, 2000), hand], 2000, fps)
+    jumped = next(index for index, frame in enumerate(frames) if frame["t_ms"] > 700)
+    frames = [
+        {**frame, "t_ms": frame["t_ms"] + late_ms} if index == jumped else frame for index, frame in enumerate(frames)
+    ]
+
+    events = replay(frames, ZONES, SETTINGS)
+
+    assert not any(event["b_id"] == "plate-t1" and event["a_id"] != HAND for event in events)
+    assert peanut_after(events, "plate-t1", start={"bin-1": {"peanut": 1.0}}) >= ANAPHYLACTIC_FLAG
+
+
+@pytest.mark.safety
 @pytest.mark.parametrize("lift_ms", [None, 2100, 1800, 1500])
 def test_a_touch_two_steps_from_the_plate_reaches_it_while_everything_still_touches(lift_ms):
     """A clean hand holds a spoon that rests on a plate's rim; at 1.2 s the hand also reaches the peanut bin beside
