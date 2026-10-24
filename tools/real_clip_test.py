@@ -35,7 +35,8 @@ STEP_MS = 62.5
 TOUCH_STEP = 7  # the labeled moment lands on step 7 of 16, where touches land in the sim clips
 CLIP_SIZE = 128
 CHANGE_MASK_PARAMS = {"gain": DEFAULT_GAIN, "blur_sigma_px": DEFAULT_BLUR_SIGMA_PX, "decay": DEFAULT_DECAY}
-DEFAULT_THRESHOLDS = (0.17, 0.085)  # boxpooled-v1's thresholds that caught 99% of val's real cases
+DEFAULT_WEIGHTS = Path("data/models/lstm/boxpooled-v2_4/best.pt")  # the sim-trained model the owner shipped
+DEFAULT_THRESHOLDS = (0.99845, 0.16027)  # boxpooled-v2_4's contact and moved picks for 99% recall on sim val
 
 KINDS = ("scoop", "deposit", "wipe", "touch", "hover", "pass_over", "motion_nearby", "approach_leave", "other")
 TOOL_CLASSES = {42: "fork", 43: "knife", 44: "spoon"}  # COCO classes the stock detector knows
@@ -496,7 +497,7 @@ def main() -> None:
     parser.add_argument("--labels", type=Path, required=True, help="the filled-in labeling sheet")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--bundle", type=Path, default=Path("data/models/stock-yolov8s"))
-    parser.add_argument("--weights", type=Path, default=Path("data/models/lstm/boxpooled-v1/best.pt"))
+    parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--thresholds", type=float, nargs=2, default=None, help="contact and moved thresholds")
     parser.add_argument("--no-score", action="store_true", help="only build clips and previews (no torch needed)")
     args = parser.parse_args()
