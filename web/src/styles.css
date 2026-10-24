@@ -460,3 +460,95 @@ a {
   background: var(--paper);
   text-align: left;
 }
+
+/* Gate panel: the pass, in type big enough to read across the room */
+.gate_panel {
+  margin: 24px 0;
+  padding: 20px 24px;
+  border: 6px solid currentColor;
+  background: var(--paper);
+}
+
+.gate_head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.gate_word {
+  margin: 4px 0 0;
+  font-size: clamp(72px, 14vw, 180px);
+  line-height: 0.9;
+}
+
+.gate_ticket {
+  margin: 8px 0 0;
+  font-size: 20px;
+}
+
+.gate_note,
+.gate_reasons {
+  margin: 8px 0 0;
+  font-size: 16px;
+}
+
+.gate_pass {
+  color: var(--pass);
+}
+
+.gate_hold {
+  color: var(--hold);
+}
+
+.gate_fault {
+  color: var(--ink);
+  background: repeating-linear-gradient(45deg, var(--paper) 0 16px, #f1d4d0 16px 32px);
+}
+
+.gate_idle {
+  color: var(--muted);
+}
+
+/* Live camera with entity boxes */
+.camera_frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.camera_frame img {
+  display: block;
+  max-width: 100%;
+}
+
+.entity_box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid var(--risk);
+}
+
+.entity_tag {
+  position: absolute;
+  left: -3px;
+  bottom: 100%;
+  padding: 1px 6px;
+  background: var(--risk);
+  color: var(--paper);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.risk_unknown,
+.risk_high {
+  --risk: var(--hold);
+}
+
+.risk_some {
+  --risk: var(--recheck);
+}
+
+.risk_clean {
+  --risk: var(--pass);
+}
