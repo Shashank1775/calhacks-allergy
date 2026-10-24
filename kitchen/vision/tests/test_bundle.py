@@ -134,11 +134,11 @@ def test_custom_weights_need_one_class_name_per_detector_class(tmp_path, inputs)
 
 @pytest.mark.safety
 def test_class_names_in_another_order_than_the_onnx_metadata_are_refused(tmp_path, inputs):
-    """Swapped plate and bowl would make every bin a plate, so no bin's allergens would ever be tracked (PASS)."""
+    """Names in the wrong order read one class as another: here every plate as a knife, and every knife as a plate."""
     assert bundle.metadata_class_names("{0: 'plate', 1: 'bowl', 2: 'knife', 3: 'spoon', 4: 'fork'}") == CUSTOM_NAMES
     inputs["shapes"][inputs["det"]]["channels"] = 4 + len(CUSTOM_NAMES)
     inputs["shapes"][inputs["det"]]["class_names"] = CUSTOM_NAMES
-    swapped = ["bowl", "plate", "knife", "spoon", "fork"]
+    swapped = ["knife", "bowl", "plate", "spoon", "fork"]
 
     with pytest.raises(SystemExit, match="metadata names its classes"):
         build(tmp_path, inputs, "custom", swapped)

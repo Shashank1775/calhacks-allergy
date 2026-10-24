@@ -105,7 +105,7 @@ def check_class_names(weights: str, class_names: list[str] | None, det: dict) ->
     exactly one per class det.onnx scores, in output order, since vision reads class i's score as class_names[i].
 
     When det.onnx carries Ultralytics' own class names, they must be the same list in the same order: names in the
-    wrong order would make bowls plates (no bins, so no allergen sources: the PASS direction) or knives spoons.
+    wrong order would read one class as another, such as every plate as a knife or every knife as a plate.
     """
     classes = det["channels"] - 4
     if weights == "stock":

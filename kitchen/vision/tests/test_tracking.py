@@ -400,7 +400,8 @@ def test_identity_book_never_hands_out_an_id_twice(kinds):
         elif kind.startswith("plate-class"):
             zone = slot if kind.endswith("in-slot") else None
             identity = book.object_identity(track_id, "plate", AFTER_SHIFT_START, zone, maybe_switched=False)
-            assert identity.kind == "plate"  # only a bowl can be a bin
+            # Every track ends straight away, so the slot is always free: a plate-class newcomer there is the bin.
+            assert identity.kind == ("bin" if zone is slot else "plate")
         else:
             identity = book.object_identity(track_id, kind, AFTER_SHIFT_START, None, maybe_switched=False)
         # Every track ends straight away, so only the bin slot may hand its ID out again.
@@ -595,24 +596,47 @@ def plate(box=SLOT_BOX, confidence=0.9):
 
 
 @pytest.mark.safety
-def test_a_plate_detection_is_a_plate_even_in_a_bin_slot():
-    """Only a bowl can be a bin. A plate in slot-4 must not take bin-4's ID, with its shift-start origin and its
-    allergen profile, and must leave the slot free for the bin."""
+def test_a_plate_detection_first_seen_in_a_bin_slot_is_that_bin():
+    """A fine-tuned detector calls a pie on a board a plate. In slot-4 it must be bin-4, the entity orders keys bin-4's
+    allergen profile by: as a plate it would leave the kitchen with no allergen source (the PASS direction). It is
+    bin-4 again when re-acquired there, with the origin bin-4 was first given."""
     tracker = Tracker(SETTINGS)
-    run(tracker, [([bowl()], [])] + gone(LOST_FRAMES + 1))  # bin-4 seen at shift start, then taken away
+    first = run(tracker, [([plate()], [])] + gone(LOST_FRAMES + 1))[0]  # the pie at shift start, then lifted away
 
-    in_slot = tracker.update([plate()], [], AFTER_SHIFT_START, zone_of, 640, 640)
-    with_bin = tracker.update(
-        [plate(), bowl((0.0, 0.1, 0.1, 0.2))], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640
+    back = tracker.update([plate()], [], AFTER_SHIFT_START, zone_of, 640, 640)
+
+    assert [(item["entity_id"], item["kind"], item["class_name"], item["origin"]) for item in first] == [
+        ("bin-4", "bin", "plate", "shift_start")
+    ]
+    assert [(item["entity_id"], item["kind"], item["zone"], item["origin"]) for item in back] == [
+        ("bin-4", "bin", "slot-4", "shift_start")
+    ]
+
+
+@pytest.mark.safety
+def test_a_plate_or_bowl_put_in_a_slot_its_bin_still_holds_is_a_plate():
+    """Two tracks never share bin-4: while the bin's track holds the slot, a newcomer there is a plate."""
+    tracker = Tracker(SETTINGS)
+    tracker.update([plate()], [], 0, zone_of, 640, 640)
+
+    items = tracker.update(
+        [plate(), plate((0.0, 0.1, 0.1, 0.2)), bowl((0.1, 0.0, 0.2, 0.1))], [], FRAME_MS, zone_of, 640, 640
     )
 
-    assert [(item["entity_id"], item["kind"], item["zone"], item["origin"]) for item in in_slot] == [
-        ("plate-1", "plate", "slot-4", "unknown")
+    assert sorted((item["entity_id"], item["kind"]) for item in items) == [
+        ("bin-4", "bin"),
+        ("plate-1", "plate"),
+        ("plate-2", "plate"),
     ]
-    assert [(item["entity_id"], item["kind"], item["origin"]) for item in with_bin] == [
-        ("plate-1", "plate", "unknown"),
-        ("bin-4", "bin", "shift_start"),
-    ]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("box", [KNIFE_BOX, CLEAN_STACK_BOX])
+def test_a_plate_detection_outside_a_bin_slot_stays_a_plate(box):
+    tracker = Tracker(SETTINGS)
+    items = tracker.update([plate(box)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+
+    assert [(item["entity_id"], item["kind"]) for item in items] == [("plate-1", "plate")]
 
 
 @pytest.mark.safety

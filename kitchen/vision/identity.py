@@ -27,11 +27,13 @@ Strict mode (VISION_TRACKER=motion, experimental) adds two guards. The clean-sta
 classes, since the detector may call the same utensil a knife and later a spoon. And reacquire_hands() lets the tracker
 start a person's hands over when pose swaps left and right.
 
-The one exception is bins. Orders keys bin profiles by bin-<n>, so a bowl first seen in the bin slot zone slot-<n> is
-bin-<n>, and a bowl re-acquired in slot-<n> is bin-<n> again, keeping the origin bin-<n> was first given. Bins are
-identified by slot, so swapping bins between slots mid-shift is unsupported. While a track holds bin-<n>, another new
-bowl in slot-<n> is a plate: two tracks never share one entity ID. Only a bowl can be a bin: a detector with a plate
-class (a custom bundle's class_names, detect.py) makes every plate detection a plate, even in a bin slot.
+The one exception is bins. Orders keys bin profiles by bin-<n>, so a bowl or plate first seen in the bin slot zone
+slot-<n> is bin-<n>, and one re-acquired in slot-<n> is bin-<n> again, keeping the origin bin-<n> was first given.
+Plates count too because a fine-tuned detector (a custom bundle's class_names, detect.py) calls a pie on a board or a
+platter a plate: a bin it can't see as a bin would have no allergen source (PASS), while a real plate taken for a bin
+only adds one, and can't be bound to a ticket (HOLD). Bins are identified by slot, so swapping bins between slots
+mid-shift is unsupported. While a track holds bin-<n>, another new bowl or plate in slot-<n> is a plate: two tracks
+never share one entity ID.
 """
 
 import re
@@ -42,8 +44,8 @@ from kitchen.shared.models import Zone
 TOOL_CLASSES = ("knife", "spoon", "fork")
 BOWL = "bowl"
 PLATE = "plate"
-# The detector classes a plate can be seen as. A stock COCO detector knows only bowls (a bowl outside a bin slot is a
-# plate); a fine-tuned one also has plates, and may call one plate either.
+# The detector classes a plate or a bin can be seen as. A stock COCO detector knows only bowls; a fine-tuned one also
+# has plates, and may call one object either. Either is a bin when first seen in a free bin slot, otherwise a plate.
 DISH_CLASSES = (BOWL, PLATE)
 # Every detector class with an entity kind. A detector's other classes are dropped (detect.py), never relabeled.
 OBJECT_CLASSES = (*TOOL_CLASSES, *DISH_CLASSES)
@@ -128,10 +130,8 @@ class IdentityBook:
 
         if class_name in TOOL_CLASSES:
             identity = self._new_tool(class_name, t_ms, zone, maybe_switched)
-        elif class_name == BOWL:
-            identity = self._new_bowl(track_id, t_ms, zone, maybe_switched)
-        elif class_name == PLATE:
-            identity = self._new_plate(t_ms, zone, maybe_switched)
+        elif class_name in DISH_CLASSES:
+            identity = self._new_dish(track_id, t_ms, zone, maybe_switched)
         else:
             raise ValueError(f"no entity kind for detector class {class_name!r}")
 
@@ -238,15 +238,15 @@ class IdentityBook:
         entity_id = f"tool-{class_name}-{self._tool_counts[class_name]}"
         return Identity(entity_id, "tool", self._origin(class_name, t_ms, zone, maybe_switched))
 
-    def _new_bowl(self, track_id: int, t_ms: int, zone: Zone | None, maybe_switched: bool) -> Identity:
-        """A new bowl track: bin-<n> when first seen in a free slot-<n>, otherwise a new plate."""
+    def _new_dish(self, track_id: int, t_ms: int, zone: Zone | None, maybe_switched: bool) -> Identity:
+        """A new bowl or plate track: bin-<n> when first seen in a free slot-<n>, otherwise a new plate."""
         number = slot_number(zone)
         if number is not None:
             entity_id = f"bin-{number}"
             # A slot already held by a live track can't hand out its bin twice; the newcomer is a plate instead.
             if entity_id not in self._bin_holders:
                 self._bin_holders[entity_id] = track_id
-                # bin-<n> keeps the origin it was first given, whichever bowl track carries it later.
+                # bin-<n> keeps the origin it was first given, whichever bowl or plate track carries it later.
                 origin = self._bin_origins.setdefault(entity_id, origin_for(t_ms, zone, self.shift_start_ms))
                 return Identity(entity_id, "bin", origin)
 
