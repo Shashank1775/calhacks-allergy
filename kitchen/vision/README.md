@@ -51,7 +51,7 @@ Turn camera frames into tracked, stably identified bins, tools, hands and plates
 
 See [AGENTS.md §3](../../AGENTS.md#3-safety-rules). Every test below is marked `safety`.
 
-- **Invariant 8: clean only from a known-clean source.** A track lost beyond ByteTrack's buffer and re-acquired gets a **new** entity ID, with `origin: unknown` and `first_seen_t_ms` set to when it reappeared. Entity IDs are never reused within a shift (property test). A person re-acquired by pose gets new hand IDs. `origin: clean_stack` only when the entity is first seen leaving a `clean_stack` zone. No re-identification or track merging without an RFC and the safety reviewer.
+- **Invariant 8: clean only from a known-clean source.** A track lost beyond ByteTrack's buffer and re-acquired gets a **new** entity ID, with `origin: unknown` and `first_seen_t_ms` set to when it reappeared. Entity IDs are never reused within a shift (property test). A person re-acquired by pose gets new hand IDs. `origin: clean_stack` only when the entity is first seen leaving a `clean_stack` zone. No re-identification or track merging without a contracts PR the Director approves.
 - **Invariant 1: fail closed.** `/v1/plates/start` refuses when the spot has 0 plates or 2+ plates, or when the plate is already bound to another ticket. Detections are never interpolated or invented. `/v1/health.last_frame_t_ms` stops advancing when frames stop, so the gate can go to `fault`.
 - **Invariant 5: time runs forward.** Frame `t_ms` comes from the injected `Clock` and is strictly increasing, including across source restarts. Replay keeps the recorded `t_ms`.
 

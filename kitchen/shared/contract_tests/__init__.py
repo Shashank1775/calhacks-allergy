@@ -24,7 +24,7 @@ How the partner runs a suite against real code:
   Each suite is a parametrized pytest module that takes an implementation factory as a fixture. The partner adds a
   conftest.py fixture in their own folder (kitchen/entities, kitchen/graph, kitchen/lstm or database/) that returns
   their real implementation, then runs e.g. `uv run pytest kitchen/graph -m contract`. Platform never edits partner
-  folders; the partner never edits these suites (ask platform with a type:request issue).
+  folders; the partner never edits these suites (ask platform in an issue).
 
 Not built yet.
 """

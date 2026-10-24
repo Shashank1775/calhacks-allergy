@@ -20,4 +20,4 @@ The owner's partner, a human, is building the LSTM and the entity graph/data sys
 
 - Agent tasks never block on the partner. Integration steps carry `needs-partner`.
 - The verdict team builds and tests the policy against `FakeProvenanceGraph`, which answers from scenario ground truth. The golden scenarios are the shared test both sides must pass.
-- Changing a partner interface needs the partner's ACK on the RFC.
+- Changing a partner interface needs the partner's OK on the contracts PR.

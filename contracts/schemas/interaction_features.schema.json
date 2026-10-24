@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "interaction_features.schema.json",
   "title": "InteractionFeatures",
-  "description": "Features for one candidate pair at one frame. A classifier window is a time-ordered list of these for the same pair. Contains NO allergen fields (invariant 6); additionalProperties is false so none can be added without an RFC.",
+  "description": "Features for one candidate pair at one frame. A classifier window is a time-ordered list of these for the same pair. Contains NO allergen fields (invariant 6); additionalProperties is false so none can be added without a contracts PR.",
   "type": "object",
   "additionalProperties": false,
   "required": [

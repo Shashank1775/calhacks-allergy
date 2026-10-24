@@ -12,7 +12,7 @@ The real pipeline needs hardware (Pi, Hailo, camera, servo), paid APIs (Cartesia
 
 - Every cross-team message has a JSON Schema in `contracts/schemas/`, with valid and invalid fixtures. Every cross-team call has an interface in `contracts/apis.md`.
 - The producing team ships a fake for each contract it produces. For the partner's components, the platform team writes the fake, and the partner's real code must pass the same contract tests. Every component's tests pass with all other components replaced by fakes.
-- Contracts change only through an RFC that the Director merges.
+- Contracts change in their own PR, which the Director merges.
 
 ## Consequences
 

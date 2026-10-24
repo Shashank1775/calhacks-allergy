@@ -6,15 +6,13 @@ Checks:
   - fixtures/valid/<schema>/*.json validate, fixtures/invalid/<schema>/*.json do not
   - scenarios/*.json validate against scenario.schema.json and are internally consistent
   - every allergen unit ID used anywhere exists in allergen_units.json
-  - VERSION is semver
 
-Usage: python3 tools/validate_contracts.py   (needs: pip install jsonschema)
+Usage: uv run python tools/validate_contracts.py
 """
 
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -22,7 +20,7 @@ try:
     from jsonschema import Draft202012Validator
     from referencing import Registry, Resource
 except ImportError:
-    sys.exit("missing dependency: pip install jsonschema")
+    sys.exit("missing dependency: run `uv sync`")
 
 ROOT = Path(__file__).resolve().parent.parent / "contracts"
 errors: list[str] = []
@@ -61,10 +59,6 @@ def collect_unit_ids(node, found: set[str]) -> None:
 
 
 def main() -> int:
-    version = (ROOT / "VERSION").read_text().strip()
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-        fail(f"VERSION: not semver: {version!r}")
-
     # schemas
     schemas: dict[str, dict] = {}
     for path in sorted((ROOT / "schemas").glob("*.schema.json")):
@@ -161,7 +155,7 @@ def main() -> int:
             print(f"  - {msg}")
         return 1
     print(
-        f"contracts OK: v{version}, {len(schemas)} schemas, {n_fixtures} fixtures, "
+        f"contracts OK: {len(schemas)} schemas, {n_fixtures} fixtures, "
         f"{len(scenario_paths)} scenarios, {len(known_units)} allergen units"
     )
     return 0

@@ -114,4 +114,4 @@ See [AGENTS.md §3](../../AGENTS.md#3-safety-rules).
 | Corpus size | Corpora live in `data/` (gitignored) with a `data-manifest.json`; the committed subset stays ≤ 1 MB |
 | Sim-to-real gap in change masks (real kitchens have steam, shadows, flicker, hands everywhere) | Shared change-mask function; domain randomization and noise; calibrate against real `change.npz` recordings in M2; the ConvLSTM is judged on real held-out clips, never on sim |
 | The model learns "overlap means transfer" | Hard negatives at a fixed share of every dataset; per-hard-negative metrics in the datasheet |
-| Scenario schema expresses hard vs soft expectations only via tags | ADR in sim-02; RFC if a field is needed |
+| Scenario schema expresses hard vs soft expectations only via tags | ADR in sim-02; a contracts PR if a field is needed |

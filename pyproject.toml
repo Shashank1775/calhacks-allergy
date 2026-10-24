@@ -1,5 +1,5 @@
 # The one Python project in this repo: package `kitchen`, managed by uv (AGENTS.md §8).
-# Owner: team platform. A new dependency is a cross-team change; never hand-merge uv.lock, re-run `uv lock`.
+# Owner: team platform. Add dependencies in your own PR and re-run `uv lock`; never hand-merge uv.lock.
 
 [project]
 name = "kitchen"
@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-# Each extra starts empty. A team adds what its step needs in a cross-team PR, then runs `uv lock`.
+# Each extra starts empty. A team adds what its step needs, then runs `uv lock`.
 pi = []      # on the Raspberry Pi: camera, GPIO, Hailo runtime (vision, gate)
 ml = []      # models: PyTorch, ONNX Runtime (vision, sim, the partner's LSTM)
 server = []  # HTTP servers: the Orders API and the Pi server (orders, vision)
@@ -26,7 +26,7 @@ module-root = ""
 
 [tool.ruff]
 line-length = 120
-# Python files only. Ruff also formats code blocks inside Markdown, which would rewrite contracts/apis.md (an RFC).
+# Python files only. Ruff also formats code blocks inside Markdown, which would rewrite contracts/apis.md.
 include = ["*.py", "*.pyi", "**/pyproject.toml"]
 
 [tool.ruff.lint]
@@ -49,6 +49,7 @@ markers = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.170.9",
+    "jsonschema>=4.26.0",
     "pytest>=9.1.1",
     "ruff>=0.17.2",
 ]

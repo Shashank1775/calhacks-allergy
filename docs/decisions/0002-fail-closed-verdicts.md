@@ -18,5 +18,5 @@ A wrong PASS can send an allergen to a guest who reacts to it. A wrong HOLD cost
 ## Consequences
 
 - More holds when parts are flaky. That is the intended trade.
-- Provenance PRs on the verdict path need the safety reviewer and property tests (`safety` marker).
+- PRs on the verdict path are `safety-critical` and need property tests (`safety` marker).
 - The golden scenarios in `contracts/scenarios/` encode these rules and run in CI.
