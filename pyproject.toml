@@ -51,7 +51,7 @@ addopts = ["--import-mode=importlib", "--strict-markers"]
 markers = [
     "safety: guards one of the nine safety rules (AGENTS.md, Safety rules)",
     "hardware: needs a real device; CI deselects it",
-    "slow: runs nightly; CI deselects it on pull requests",
+    "slow: long-running; CI deselects it, so run it locally",
     "contract: a contract suite that every implementation, fake or real, must pass",
 ]
 

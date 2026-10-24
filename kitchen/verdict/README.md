@@ -79,7 +79,7 @@ Time running forward belongs to the partner's graph; we check it end to end by r
 
 ## Watch out for
 
-- The default pass thresholds are placeholders the owner can change. They live in `VerdictSettings` and are recorded on every verdict.
+- The pass thresholds are settled (0.80 / 0.90 / 0.95 / 0.99 by strictest severity, AGENTS.md OQ-4). Orders writes each ticket's `pass_threshold`, and the verdict reads it from the ticket.
 - `FakeProvenanceGraph` tests the policy only; real-graph runs carry `needs-partner`.
 - A false wash erases real contamination. The partner's graph caps how much a wash can clean.
 - The plate model reads only the plate's time-forward paths, at most 10 edges (the longest in its training data, about 340 of Laya's 512 tokens); a longer history raises `LayaCheckUnavailable` and holds. It was trained on generated kitchens with full transfer (k = 1), so it leans strict.
