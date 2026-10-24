@@ -9,8 +9,12 @@
 //!
 //! Column names follow the contracts, so the StateClient and the generated TypeScript bindings expose the contract
 //! fields as they are; the one exception is entity_state.bbox for the contract's `box`, a Rust keyword. Probabilities
-//! are f64, so a value written from Python reads back exactly. Auto-increment state_ids have gaps and don't order
-//! rows: readers order entity_state by t_ms, then version.
+//! are f64: short decimals read back exactly, and a full-precision float within one unit in the last place (the
+//! server's JSON parsing), so nothing should compare a probability read back for exact equality.
+//!
+//! entity_latest is a derived table, kept by move_entity: each entity's newest state, and the newest one the graph
+//! wrote. Readers join through it instead of scanning entity_state, which grows by about 5 rows a second per entity.
+//! "Newest" is by t_ms, then version, then the order rows were written.
 
 use serde::Deserialize;
 use spacetimedb::{ReducerContext, SpacetimeType, Table};
@@ -145,6 +149,23 @@ pub struct EntityState {
     caused_by: Option<String>,
 }
 
+/// Each entity's newest entity_state row (where it is) and the newest row the graph wrote (what it may carry).
+/// Derived: only move_entity writes it, and entity_state stays the append-only history.
+#[spacetimedb::table(accessor = entity_latest, public)]
+pub struct EntityLatest {
+    #[primary_key]
+    entity_id: String,
+    t_ms: u64,
+    version: u64,
+    zone: Option<String>,
+    bbox: Option<Vec<f64>>,
+    graph_t_ms: Option<u64>,
+    graph_version: Option<u64>,
+    probabilities: Vec<AllergenProbability>,
+    unknown: bool,
+    caused_by: Option<String>,
+}
+
 #[spacetimedb::table(accessor = plate_binding, public)]
 #[derive(Clone, PartialEq)]
 pub struct PlateBinding {
@@ -253,6 +274,9 @@ pub fn start_shift(ctx: &ReducerContext) -> Result<(), String> {
     for row in ctx.db.entity_state().iter() {
         ctx.db.entity_state().delete(row);
     }
+    for row in ctx.db.entity_latest().iter() {
+        ctx.db.entity_latest().delete(row);
+    }
     for row in ctx.db.plate_binding().iter() {
         ctx.db.plate_binding().delete(row);
     }
@@ -323,14 +347,19 @@ pub fn put_bin_profile(
     Ok(())
 }
 
-/// vision: replace the whole calibration with `zones`.
+/// vision: replace the whole calibration with `zones`. A zone_id listed twice keeps its last entry, as the fake does.
 #[spacetimedb::reducer]
 pub fn set_zones(ctx: &ReducerContext, zones: Vec<ZoneInput>) -> Result<(), String> {
     for row in ctx.db.zone().iter() {
         ctx.db.zone().delete(row);
     }
     for zone in zones {
-        ctx.db.zone().insert(Zone { zone_id: zone.zone_id, kind: zone.kind, polygon: zone.polygon });
+        let row = Zone { zone_id: zone.zone_id, kind: zone.kind, polygon: zone.polygon };
+        if ctx.db.zone().zone_id().find(&row.zone_id).is_some() {
+            ctx.db.zone().zone_id().update(row);
+        } else {
+            ctx.db.zone().insert(row);
+        }
     }
     Ok(())
 }
@@ -392,7 +421,7 @@ pub fn move_entity(
     if ctx.db.entity().entity_id().find(&entity_id).is_none() {
         return Err(format!("move_entity for unregistered entity {entity_id}"));
     }
-    ctx.db.entity_state().insert(EntityState {
+    let state = ctx.db.entity_state().insert(EntityState {
         state_id: 0, // auto_inc assigns it
         entity_id,
         version,
@@ -403,7 +432,47 @@ pub fn move_entity(
         unknown,
         caused_by,
     });
+    keep_latest(ctx, state);
     Ok(())
+}
+
+/// Fold a new entity_state row into entity_latest. A row at the same (t_ms, version) as the newest one replaces it,
+/// since it was written later.
+fn keep_latest(ctx: &ReducerContext, state: EntityState) {
+    let by_graph = state.caused_by.is_some();
+    let Some(mut latest) = ctx.db.entity_latest().entity_id().find(&state.entity_id) else {
+        ctx.db.entity_latest().insert(EntityLatest {
+            entity_id: state.entity_id,
+            t_ms: state.t_ms,
+            version: state.version,
+            zone: state.zone,
+            bbox: state.bbox,
+            graph_t_ms: by_graph.then_some(state.t_ms),
+            graph_version: by_graph.then_some(state.version),
+            probabilities: if by_graph { state.probabilities } else { Vec::new() },
+            unknown: by_graph && state.unknown,
+            caused_by: state.caused_by,
+        });
+        return;
+    };
+    if (state.t_ms, state.version) >= (latest.t_ms, latest.version) {
+        latest.t_ms = state.t_ms;
+        latest.version = state.version;
+        latest.zone = state.zone;
+        latest.bbox = state.bbox;
+    }
+    let newer_for_graph = match (latest.graph_t_ms, latest.graph_version) {
+        (Some(t_ms), Some(version)) => (state.t_ms, state.version) >= (t_ms, version),
+        _ => true,
+    };
+    if by_graph && newer_for_graph {
+        latest.graph_t_ms = Some(state.t_ms);
+        latest.graph_version = Some(state.version);
+        latest.probabilities = state.probabilities;
+        latest.unknown = state.unknown;
+        latest.caused_by = state.caused_by;
+    }
+    ctx.db.entity_latest().entity_id().update(latest);
 }
 
 /// interactions: insert an interaction edge. A duplicate event_id is a no-op.

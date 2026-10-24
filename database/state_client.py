@@ -9,16 +9,19 @@ Rules: fail closed: a network error, a timeout or an unreachable database raises
        known-clean source: an entity with no state takes its allergens from its origin, so a registration can never
        claim a clean history; writes are checked against the contract schemas before they leave
 
-Reads and the change feed are SQL queries. subscribe() takes a snapshot of the table when called; after that, changes
-arrive two ways: each write through this client polls once before it returns, so its own change events are delivered
-first (as FakeStateClient delivers them inside the write), and a background thread polls every `poll_s` for writes
-from other processes. Callbacks run one at a time, on whichever thread polled.
+Reads and the change feed are SQL queries. An entity is joined through the module's entity_latest table, so a read
+never scans the entity_state history. Each subscribe() takes its own snapshot of the table; after that, changes arrive
+two ways: each write through this client delivers its own change events before it returns (as FakeStateClient does
+inside the write), plus whatever its callbacks write in turn, for a few rounds; and a background thread polls every
+`poll_s` for writes from other processes. Callbacks run one at a time, on whichever thread polled. Several changes to
+one row between two polls arrive as one change, with the latest row.
 """
 
 import logging
 import os
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -44,6 +47,11 @@ DEFAULT_DATABASE = "allergen-yhz81"
 
 # HTTP 530 is how SpacetimeDB reports a reducer that returned an error: the module refused the write.
 REDUCER_REFUSED = 530
+
+# A write delivers its own change, and what its callbacks write in turn (a verdict recorded from inside an
+# entity_state callback), in at most this many rounds; anything later comes with the background poll. Bounded so a
+# write never waits on another process that keeps writing.
+WRITE_ROUNDS = 3
 
 # The primary key of every table but entity_state, which is append-only and keyed by its auto-increment state_id.
 KEYS = {
@@ -129,8 +137,7 @@ class SpacetimeStateClient:
         self._token: str | None = None
         self._lock = threading.RLock()  # one poll at a time; reentrant so a callback may write
         self._polling = False
-        self._subscribers: dict[str, list[Callable[[ChangeEvent], None]]] = {}
-        self._seen: dict[str, dict] = {}  # per subscribed table: key -> last row delivered
+        self._subscriptions: list[Subscription] = []
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -140,7 +147,10 @@ class SpacetimeStateClient:
         """An Authorization header, asking the server for an identity the first time. Any identity may call."""
         if self._token is None:
             response = self._request("POST", f"{self.uri}/v1/identity")
-            self._token = response.json()["token"]
+            try:
+                self._token = response.json()["token"]
+            except (ValueError, KeyError, TypeError) as error:  # fail closed: no identity, no answers
+                raise StateUnavailable(f"SpacetimeDB gave no identity ({response.status_code}): {error}") from error
         return {"Authorization": f"Bearer {self._token}"}
 
     def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
@@ -167,7 +177,12 @@ class SpacetimeStateClient:
             raise StateUnavailable(f"no database {self.database!r} at {self.uri}")
         if response.status_code >= 400:
             raise ValueError(f"{reducer} rejected its arguments ({response.status_code}): {response.text}")
-        self._deliver_changes()
+        try:
+            self._deliver_changes()
+        except StateUnavailable:
+            # The write landed; only the follow-up poll failed. Raising would tell the caller it wasn't written. Its
+            # changes come with the next poll, since no subscription's snapshot moved on.
+            logger.warning("delivering %s's changes failed; the background poll will", reducer, exc_info=True)
 
     def _sql(self, query: str) -> list[dict]:
         """Rows of one SQL query, each as a dict by column name."""
@@ -272,10 +287,10 @@ class SpacetimeStateClient:
         rows = self._sql(f"SELECT * FROM entity WHERE entity_id = {quoted(entity_id)}")
         if not rows:
             return None
-        states = self._sql(f"SELECT * FROM entity_state WHERE entity_id = {quoted(entity_id)}")
+        latest = self._sql(f"SELECT * FROM entity_latest WHERE entity_id = {quoted(entity_id)}")
         profiles = self._sql(f"SELECT * FROM bin_profile WHERE entity_id = {quoted(entity_id)}")
         bindings = self._sql(f"SELECT * FROM plate_binding WHERE plate_id = {quoted(entity_id)}")
-        return self._joined(rows[0], states, profiles[0] if profiles else None, bindings[0] if bindings else None)
+        return self._joined(rows[0], first(latest), first(profiles), first(bindings))
 
     def list_entities(self, kind: str | None = None) -> list[Entity]:
         """Every registered entity joined with its latest state, optionally only one kind."""
@@ -283,17 +298,12 @@ class SpacetimeStateClient:
         rows = self._sql(f"SELECT * FROM entity{where}")
         if not rows:
             return []
-        states_by_entity: dict[str, list[dict]] = {}
-        for state in self._sql("SELECT * FROM entity_state"):
-            states_by_entity.setdefault(state["entity_id"], []).append(state)
+        latest = {row["entity_id"]: row for row in self._sql("SELECT * FROM entity_latest")}
         profiles = {row["entity_id"]: row for row in self._sql("SELECT * FROM bin_profile")}
         bindings = {row["plate_id"]: row for row in self._sql("SELECT * FROM plate_binding")}
         return [
             self._joined(
-                row,
-                states_by_entity.get(row["entity_id"], []),
-                profiles.get(row["entity_id"]),
-                bindings.get(row["entity_id"]),
+                row, latest.get(row["entity_id"]), profiles.get(row["entity_id"]), bindings.get(row["entity_id"])
             )
             for row in sorted(rows, key=lambda row: (row["first_seen_t_ms"], row["entity_id"]))
         ]
@@ -324,15 +334,13 @@ class SpacetimeStateClient:
 
     # ---------- the logical Entity (contracts/state-tables.md) ----------
 
-    def _joined(self, row: dict, states: list[dict], bin_profile: dict | None, binding: dict | None) -> Entity:
-        """The entity row joined with its newest state, its allergens, and a plate's ticket.
+    def _joined(self, row: dict, latest: dict | None, bin_profile: dict | None, binding: dict | None) -> Entity:
+        """The entity row joined with its entity_latest row, its allergens, and a plate's ticket.
 
-        Zone, box and last seen come from the newest state (by t_ms, then version). Allergens come from the newest
-        state the graph wrote (one with caused_by set), else a bin's profile, else the entity's origin, so the entity
-        store's zone updates can never overwrite what the graph found.
+        Zone, box and last seen come from the newest state. Allergens come from the newest state the graph wrote
+        (one with caused_by set), else a bin's profile, else the entity's origin, so the entity store's zone updates
+        can never overwrite what the graph found and a registration can never claim a clean history.
         """
-        newest_first = sorted(states, key=lambda state: (state["t_ms"], state["version"], state["state_id"]))
-        latest = newest_first[-1] if newest_first else None
         entity = {
             "entity_id": row["entity_id"],
             "kind": row["kind"],
@@ -345,52 +353,47 @@ class SpacetimeStateClient:
             "last_seen_t_ms": latest["t_ms"] if latest else row["first_seen_t_ms"],
             "ticket_id": binding["ticket_id"] if binding else None,
         }
-        graph_states = [state for state in newest_first if state["caused_by"] is not None]
-        if graph_states:
-            entity["allergen_profile"] = self._graph_profile(graph_states[-1])
+        if latest is not None and latest["graph_t_ms"] is not None:
+            entity["allergen_profile"] = self._graph_profile(latest)
         elif bin_profile is not None:
             entity["allergen_profile"] = as_profile(bin_profile)
         else:
             entity["allergen_profile"] = starting_profile(row["kind"], row["origin"])
         return entity
 
-    def _graph_profile(self, state: dict) -> AllergenProfile:
-        """A graph-written state as an allergen profile, its source named as contracts/state-tables.md says."""
-        if state["unknown"]:
+    def _graph_profile(self, latest: dict) -> AllergenProfile:
+        """The graph's newest state as an allergen profile, its source named as contracts/state-tables.md says."""
+        if latest["unknown"]:
             source = "unknown_history"
         else:
-            events = self._sql(f"SELECT * FROM interaction WHERE event_id = {quoted(state['caused_by'])}")
+            events = self._sql(f"SELECT * FROM interaction WHERE event_id = {quoted(latest['caused_by'])}")
             source = "wash_reset" if events and events[0]["action"] == "clean.wash" else "propagated"
-        return {
-            "probabilities": probabilities_of(state["probabilities"]),
-            "unknown": state["unknown"],
-            "source": source,
-        }
+        probabilities = probabilities_of(latest["probabilities"])
+        return {"probabilities": probabilities, "unknown": latest["unknown"], "source": source}
 
     # ---------- change feed ----------
 
     def subscribe(self, table: str, on_change: Callable[[ChangeEvent], None]) -> Callable[[], None]:
         """Call `on_change` for every insert or update to `table` from now on. Returns a function that unsubscribes.
 
-        The table's rows at this moment are the baseline: they are never delivered, only what changes after.
+        Each subscription takes its own snapshot of the table now; only what changes after it is delivered.
         """
         if table not in TABLES:
             raise ValueError(f"no table named {table!r}; tables are {TABLES}")
+        subscription = Subscription(table, on_change)
         with self._lock:
-            if table not in self._subscribers:
-                self._seen[table] = self._rows_by_key(table)
-                self._subscribers[table] = []
-            self._subscribers[table].append(on_change)
+            if table == "entity_state":
+                rows = self._sql("SELECT * FROM entity_state")
+                subscription.max_state_id = max((row["state_id"] for row in rows), default=-1)
+            else:
+                subscription.seen = self._rows_by_key(table)
+            self._subscriptions.append(subscription)
         self._start_polling()
 
         def unsubscribe() -> None:
             with self._lock:
-                callbacks = self._subscribers.get(table, [])
-                if on_change in callbacks:
-                    callbacks.remove(on_change)
-                if not callbacks:
-                    self._subscribers.pop(table, None)
-                    self._seen.pop(table, None)
+                if subscription in self._subscriptions:
+                    self._subscriptions.remove(subscription)
 
         return unsubscribe
 
@@ -409,57 +412,101 @@ class SpacetimeStateClient:
                 self._thread.start()
 
     def _poll_forever(self) -> None:
-        """Poll every poll_s until close(). An unreachable database is logged and tried again next time."""
+        """One delivery round every poll_s until close(), releasing the lock in between so writes never wait long.
+
+        An unreachable database is logged and tried again next time; nothing is lost, since a subscription's
+        snapshot only moves on after a round it was delivered.
+        """
         while not self._stop.wait(self.poll_s):
             try:
-                self._deliver_changes()
+                self._deliver_changes(max_rounds=1)
             except StateUnavailable:
                 logger.warning("change feed poll failed; retrying", exc_info=True)
 
-    def _deliver_changes(self) -> None:
-        """Deliver every change to a subscribed table since the last delivery, until a pass finds none.
+    def _deliver_changes(self, max_rounds: int = WRITE_ROUNDS) -> None:
+        """Deliver changes to subscribed tables, for at most `max_rounds` rounds or until a round finds none.
 
-        Runs one poll at a time. A callback that writes through this client doesn't poll again inside the callback;
-        the outer pass picks its change up on the next round.
+        One poll at a time. A callback that writes through this client doesn't poll again inside the callback; the
+        next round here, or the background poll, picks its change up.
         """
         with self._lock:
-            if self._polling or not self._subscribers:
+            if self._polling or not self._subscriptions:
                 return
             self._polling = True
             try:
-                while self._deliver_one_round():
-                    pass
+                for _ in range(max_rounds):
+                    if not self._deliver_one_round():
+                        break
             finally:
                 self._polling = False
 
     def _deliver_one_round(self) -> bool:
-        """One pass over every subscribed table. Returns whether anything changed."""
+        """One pass over every subscribed table. Returns whether any subscription got a change."""
         changed = False
-        for table in list(self._subscribers):
+        for table in sorted({subscription.table for subscription in self._subscriptions}):
+            subscriptions = [subscription for subscription in self._subscriptions if subscription.table == table]
+            if table == "entity_state":
+                changed |= self._deliver_new_states(subscriptions)
+                continue
             current = self._rows_by_key(table)
-            seen = self._seen.get(table, {})
-            changes = [
-                ChangeEvent(table=table, kind="update" if key in seen else "insert", row=as_change_row(table, row))
-                for key, row in current.items()
-                if seen.get(key) != row
-            ]
-            self._seen[table] = current
-            for change in changes:
-                changed = True
-                for on_change in list(self._subscribers.get(table, [])):
-                    try:
-                        on_change(change)
-                    except Exception:
-                        logger.exception("subscriber to %s failed on %s", table, change.kind)
+            for subscription in subscriptions:
+                changes = [
+                    ChangeEvent(table, "update" if key in subscription.seen else "insert", as_change_row(table, row))
+                    for key, row in current.items()
+                    if subscription.seen.get(key) != row
+                ]
+                subscription.seen = current
+                changed |= self._deliver(subscription, changes)
         return changed
 
+    def _deliver_new_states(self, subscriptions: list["Subscription"]) -> bool:
+        """entity_state is append-only, so only rows past each subscription's highest state_id are read.
+
+        state_ids have gaps but only grow, since the module's reducers run one at a time; they are delivered in the
+        order they were written, as FakeStateClient appends them.
+        """
+        lowest = min(subscription.max_state_id for subscription in subscriptions)
+        where = "" if lowest < 0 else f" WHERE state_id > {lowest}"  # state_id is unsigned: no "> -1"
+        rows = sorted(self._sql(f"SELECT * FROM entity_state{where}"), key=lambda row: row["state_id"])
+        changed = False
+        for subscription in subscriptions:
+            new = [row for row in rows if row["state_id"] > subscription.max_state_id]
+            if new:
+                subscription.max_state_id = new[-1]["state_id"]
+            changes = [ChangeEvent("entity_state", "insert", as_change_row("entity_state", row)) for row in new]
+            changed |= self._deliver(subscription, changes)
+        return changed
+
+    def _deliver(self, subscription: "Subscription", changes: list[ChangeEvent]) -> bool:
+        """Hand each change to the subscription's callback. Returns whether there were any."""
+        for change in changes:
+            if subscription not in self._subscriptions:
+                break  # unsubscribed by an earlier callback
+            try:
+                subscription.on_change(change)
+            except Exception:
+                logger.exception("subscriber to %s failed on %s", change.table, change.kind)
+        return bool(changes)
+
     def _rows_by_key(self, table: str) -> dict:
-        """Every row of a table by primary key, entity_state in time order (its auto-increment IDs don't order)."""
-        rows = self._sql(f"SELECT * FROM {table}")
-        if table == "entity_state":
-            rows.sort(key=lambda row: (row["t_ms"], row["version"], row["state_id"]))
-            return {row["state_id"]: row for row in rows}
-        return {row[KEYS[table]]: row for row in rows}
+        """Every row of a keyed table by primary key."""
+        return {row[KEYS[table]]: row for row in self._sql(f"SELECT * FROM {table}")}
+
+
+@dataclass(eq=False)
+class Subscription:
+    """One subscribe() call: its table, its callback, and what it has seen so far (rows by primary key, or for
+    entity_state the highest state_id delivered). Compared by identity, so unsubscribing removes exactly this one."""
+
+    table: str
+    on_change: Callable[[ChangeEvent], None]
+    seen: dict = field(default_factory=dict)
+    max_state_id: int = -1
+
+
+def first(rows: list[dict]) -> dict | None:
+    """The first row of a query by primary key, or None."""
+    return rows[0] if rows else None
 
 
 # ---------- rows as contract records ----------

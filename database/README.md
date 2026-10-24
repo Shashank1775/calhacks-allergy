@@ -46,21 +46,22 @@ uv run pytest tests/e2e --state real
 ```
 
 How the client behaves:
-- **Its own writes:** each write polls once before it returns, so its own change events reach subscribers first, as `FakeStateClient` delivers them.
-- **Other processes' writes:** a background poll every 0.2 s picks them up.
+- **Its own writes:** each write delivers its own change events before it returns, as `FakeStateClient` does, plus whatever its subscribers write in turn, for up to 3 rounds. If only that follow-up poll fails, the write still succeeds and the background poll delivers the changes.
+- **Other processes' writes:** a background poll every 0.2 s picks them up. Each subscription keeps its own snapshot, and `entity_state` is polled only past the highest `state_id` already delivered. Several changes to one row between two polls arrive as one change, carrying the latest row.
+- **Reads:** entities are joined through `entity_latest`, a derived table `move_entity` keeps current, so reads don't grow with the shift's history.
 - **Who may write:** any identity may call a reducer.
 - **Entities with no graph state:** an entity the graph hasn't written yet takes its allergens from its bin profile, or failing that from its origin, so a registration can never claim a clean history.
 
 ## What agents expect
 
 - Every method raises `StateUnavailable` on connection loss, a timeout or an unreadable answer, and never returns stale data as if it were current (invariant 1). A reducer the module refuses, such as an older ticket revision or rebinding a plate, raises `ValueError`, as `FakeStateClient` does: the verdict service retries `StateUnavailable` but drops a write that can never succeed.
-- `subscribe()` exposes the age of the last update, so the gate can go `fault` on a stale feed.
-- Writes are idempotent by primary key. Each table has exactly one writer team, enforced by caller identity.
+- `subscribe()` exposes the age of the last update, so the gate can go `fault` on a stale feed. **Not yet:** the gate polls the database every tick instead, so a dead database still shows as `fault`.
+- Writes are idempotent by primary key. Each table has exactly one writer team, enforced by caller identity. **Not yet:** any identity may call any reducer.
 - A ticket row holds its latest revision; each verdict records the revision it judged. `register_entity` writes an entity once and never changes `first_seen_t_ms` or `origin`, and `entity_state` rows are only ever appended (known-clean source, late changes recheck everything).
 - `list_interactions` returns events in time order.
 - Throughput: `move_entity` about 5 times a second for up to ~30 entities; `record_interaction` bursts up to ~20 a second.
 
-These are checked by the `StateClient` contract suite in `kitchen/shared/contract_tests/` (platform). `FakeStateClient` is the reference behavior.
+Except for the two marked "not yet", these are checked by the `StateClient` contract suite in `kitchen/shared/contract_tests/` (platform), plus `database/tests/` against the real module. `FakeStateClient` is the reference behavior.
 
 ## Until it lands
 
