@@ -33,7 +33,7 @@ A contact with no visible movement still counts as a possible trace transfer dow
 
   Datasets come with leak-free splits and a datasheet (tasks sim-12 to sim-15).
 - **Change masks (vision team).** Every real frame comes with its change mask, live and in recordings (`change.npz`), from the shared function (vision-13).
-- **The shared builders (platform team).** `kitchen/shared/change_mask.py` and `clips.py` (platform-12), plus `ScriptedClassifier` and the classifier contract tests.
+- **The shared builders (platform team).** `kitchen/shared/change_mask.py` and `clips.py` (platform-12), plus `FakeClassifier` and the classifier contract tests.
 
 The interactions step itself is yours too (`kitchen/interactions/`): candidate pairs, zone rules, live pair windows, the fallback wrapper, real-clip labeling and the adoption benchmark. Its suggested task list is on GitHub as issues labeled `owner:partner`.
 
@@ -46,7 +46,7 @@ The interactions step itself is yours too (`kitchen/interactions/`): candidate p
 
 ## Until yours lands
 
-Agents test the fallback path with `ScriptedClassifier` (platform), which returns scripted labels or fails or hangs on cue. Nothing agent-side waits on you.
+Agents test the fallback path with `FakeClassifier` (platform), which returns scripted labels or fails or hangs on cue. Nothing agent-side waits on you.
 
 ## How to hand off
 
