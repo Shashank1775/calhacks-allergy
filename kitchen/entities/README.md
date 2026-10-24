@@ -10,7 +10,7 @@ It runs on the Pi. Vision hands it every `ObservationFrame`; it keeps every enti
 
 - **The interface:** [`EntityStore`](../../contracts/apis.md#entitystore) in `contracts/apis.md`: `ingest(frame)`, `get(entity_id)`, `snapshot()`, `start_sync(state, hz=5.0)`, `stop_sync()`.
 - **Input:** [`observation_frame`](../../contracts/schemas/observation_frame.schema.json). Every detection already carries `entity_id`, `kind`, `zone`, `box` and `origin`, set by vision's identity step.
-- **Output:** [`entity`](../../contracts/schemas/entity.schema.json) rows via `StateClient.upsert_entities`. You are the single writer of the `entity` table ([state-tables.md](../../contracts/state-tables.md#writers)). Allergen profiles are not yours: `bin_profile` comes from orders, and `entity_risk` comes from your graph.
+- **Output:** [`entity`](../../contracts/schemas/entity.schema.json) rows via `StateClient.register_entity` (once per entity), and each entity's zone and box over time via `move_entity` (`entity_state` rows). You are the single writer of the `entity` table ([state-tables.md](../../contracts/state-tables.md#writers)). Allergen profiles are not yours: `bin_profile` comes from orders, and the allergens on `entity_state` come from your graph.
 - **Safety rules** ([AGENTS.md §3](../../AGENTS.md#3-safety-rules)):
   - Invariant 8: never delete an entity, and never change `first_seen_t_ms` or `origin` after it's set.
   - Invariant 1: a sync failure must surface as `StateUnavailable` or visible lag, never as freshness that isn't there.

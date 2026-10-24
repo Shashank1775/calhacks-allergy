@@ -3,7 +3,7 @@
 Owner: partner (human). Agents never edit this file.
 Step:  Entity database
 Reads: store snapshot, StateClient
-Emits: StateClient.upsert_entities -> entity table
+Emits: StateClient.register_entity -> entity table (once per entity); move_entity -> entity_state (zone, box)
 Rules: 1 failures surface as StateUnavailable or lag, never fake freshness; 8 never deletes
 Tasks: partner
 

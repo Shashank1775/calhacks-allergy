@@ -9,7 +9,7 @@ It turns tracked entity pairs into time-stamped, classified interactions: the ed
 - For each pair, build a `PairWindow`:
   - vector features (distance, overlap, zone kind, speeds, dwell, wrist proximity) for the zone rules;
   - a **clip** (box A, box B, change mask, elapsed time) for the ConvLSTM in [`kitchen/lstm/`](../lstm/README.md).
-- Classify with zone rules (always available) or the ConvLSTM (once it wins the benchmark). Write each non-trivial interaction through `StateClient.record_interactions`.
+- Classify with zone rules (always available) or the ConvLSTM (once it wins the benchmark). Write each non-trivial interaction through `StateClient.record_interaction`.
 
 ## What the agents rely on
 

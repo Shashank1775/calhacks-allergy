@@ -4,7 +4,7 @@
 
 ## What agents expect
 
-The interface is [`ProvenanceGraph` in contracts/apis.md](../../contracts/apis.md#provenancegraph): `reach`, `subgraph`, `unknown_ancestors`, `version`. It raises `GraphUnavailable` on any failure. The graph builds itself from `StateClient` (`entity`, `bin_profile`, `plate_binding`, `interaction`), and is the single writer of `entity_risk` (`put_entity_risk`) for the camera overlays.
+The interface is [`ProvenanceGraph` in contracts/apis.md](../../contracts/apis.md#provenancegraph): `reach`, `subgraph`, `unknown_ancestors`, `version`. It raises `GraphUnavailable` on any failure. The graph builds itself from `StateClient` (`entity`, `bin_profile`, `plate_binding`, `interaction`), and writes each entity's live allergens as `entity_state` rows (`move_entity`) for the camera overlays.
 
 The graph math the agents assume (from the original spec):
 
@@ -39,7 +39,7 @@ Agents build against `FakeProvenanceGraph` (platform, `kitchen/shared/fakes/`), 
 
 - **verdict:** the policy that calls `reach`, `unknown_ancestors` and `subgraph`, and `ExactLaya`, which wraps `reach`.
 - **sim:** corpora whose truth is independent of your code, so they can test it.
-- **outputs:** overlays colored from `entity_risk`.
+- **outputs:** overlays colored from each entity's latest `entity_state` allergens.
 - **platform:** the fake, the contract tests, and the end-to-end harness.
 
 Open questions that touch you: OQ-9 (edge direction; interactions is yours too), OQ-13, OQ-17. See [AGENTS.md §11](../../AGENTS.md#11-open-questions).

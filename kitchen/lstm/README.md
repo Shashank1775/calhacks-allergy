@@ -50,7 +50,7 @@ Agents test the fallback path with `FakeClassifier` (platform), which returns sc
 
 ## How to hand off
 
-- Open PRs from `partner/<slug>` branches. Any internal layout is fine; `model.py`, `train.py` and `infer.py` are only suggestions.
+- Open PRs from `partner/<slug>` branches. Any internal layout is fine. Today `model.py` holds the networks, `train.py` trains them on sim clips (`python -m kitchen.lstm.train --data data/clips/v1 --out runs/lstm-v1`, on a machine with torch), and `infer.py`, the `lstm` classifier, is still to write.
 - Changing the clip spec or the interface is a contract change. Tell the Director, who runs it as an RFC (you ACK; sim and vision follow).
 - Agents reach you with issues labeled `owner:partner`.
 

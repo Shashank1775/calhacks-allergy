@@ -3,7 +3,7 @@
 Owner: partner (human). Agents never edit this file.
 Step:  Entity database
 Reads: observation_frame (EntityStore.ingest, called by vision)
-Emits: Entity (get, snapshot); entity table via StateClient.upsert_entities
+Emits: Entity (get, snapshot); entity rows via StateClient.register_entity, entity_state rows via move_entity
 Rules: 8 never delete, never change first_seen or origin; 1 sync failures visible
 Tasks: partner
 
