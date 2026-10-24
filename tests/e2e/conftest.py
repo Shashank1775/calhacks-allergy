@@ -141,20 +141,22 @@ def make_graph(config, scenario, state):
 
 @pytest.fixture
 def kitchen(request):
-    """Factory: kitchen(scenario, with_tickets=True, parser=None) builds a Kitchen with the scenario's world loaded.
+    """Factory: kitchen(scenario, with_tickets=True, parser=None, graph=None) builds a Kitchen with the scenario's
+    world loaded.
 
     with_tickets=False leaves the scenario's tickets and amendments out, so a test creates them through the Orders
     API instead. The graph still answers from the scenario's ground truth. `parser` replaces FakeLayaParser behind
-    the Orders API, for a test that needs Laya to misread something.
+    the Orders API, for a test that needs Laya to misread something. `graph` is a factory taking the state, for a test
+    that needs a graph built from the edges actually recorded (e.g. kitchen.graph.ProvenanceGraph).
     """
 
-    def build(scenario, with_tickets=True, parser=None):
+    def build(scenario, with_tickets=True, parser=None, graph=None):
         scenario = read_scenario(scenario)
         if not with_tickets:
             scenario = dict(scenario, tickets=[], amendments=[])
         state = make_state(request.config)
         load_scenario(state, scenario)
-        graph = make_graph(request.config, scenario, state)
+        graph = graph(state) if graph is not None else make_graph(request.config, scenario, state)
         return Kitchen(state=state, graph=graph, scenario=scenario, parser=parser or FakeLayaParser())
 
     return build
