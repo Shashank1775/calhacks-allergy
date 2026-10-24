@@ -32,7 +32,7 @@ All Python lives in one package, `kitchen/`, with one folder per pipeline step, 
 | **Verdict** | When a plate reaches the pass: the graph's exact reachability, then the verdict policy (plain code, fail closed); late changes recheck | [`kitchen/verdict/`](kitchen/verdict/) | team `verdict` |
 | **Gate and screens** | Pass gate (servo, red/green light, buzzer), Cartesia Sonic voice ("Hold seven"), and the tablet and expo screens with camera overlays | [`kitchen/gate/`](kitchen/gate/), [`web/`](web/) | team `outputs` |
 | **Simulator** | One simulated world, two outputs: scenarios for graph and verdict tests, and **rendered training clips** for the ConvLSTM (abstract shapes, boxes, change masks, labels from world truth) | [`kitchen/sim/`](kitchen/sim/) | team `sim` |
-| **Shared** | Models generated from contracts, interfaces, clock, config, the one change-mask function and clip builder, fakes (including fakes for partner parts), contract tests | [`kitchen/shared/`](kitchen/shared/) | team `platform` |
+| **Shared** | Records as dicts validated against the contract schemas (`kitchen/shared/models.validate`), interfaces, clock, config, the one change-mask function and clip builder, fakes (including fakes for partner parts), contract tests | [`kitchen/shared/`](kitchen/shared/) | team `platform` |
 | **Contracts** | Schemas, interfaces, table spec, fixtures, golden scenarios: the only things folders may depend on across teams | [`contracts/`](contracts/) | platform (Director reviews) |
 | **Repo** | `tools/`, `tests/e2e/`, `.github/`, `.claude/`, `pyproject.toml` | — | team `platform` |
 | **Decisions** | One page per decision that's hard to reverse | [`docs/decisions/`](docs/decisions/) | whoever made the decision |
@@ -201,7 +201,7 @@ This table is the ownership map. Each folder's README lists its files, safety ru
 
 **Tests.** Check what a folder emits against its schema, run its main flow on fakes, and add `safety` tests (property-based with `hypothesis` where the rule is a property) on the verdict path.
 
-**Generated files** (`kitchen/shared/models.py`, TS types) are never edited by hand.
+**Records are dicts** validated against the contract schemas by `kitchen/shared/models.validate`; nothing is generated for Python. **Generated files** (the TS types) are never edited by hand.
 
 **Code style (the owner's rules; reviewers block on these)**
 - **KISS: keep it simple.** Write the simplest thing that works. No layer, option, base class or abstraction the task doesn't need. Prefer plain functions and dataclasses over class hierarchies.
