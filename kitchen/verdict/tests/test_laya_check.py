@@ -13,6 +13,7 @@ from referencing import Registry, Resource
 
 from kitchen.verdict.laya_check import (
     MAX_EDGES,
+    SHORTER_WINDOWS,
     UNITS,
     FakeLayaCheck,
     LayaCheckUnavailable,
@@ -62,17 +63,23 @@ def edge(event_id, t, a, b, action="transfer.contact", direction="both", p=0.9):
 
 
 class ScriptedAgent:
-    """Stands in for the loaded plate model: answers every question with the given P, or misbehaves on cue."""
+    """Stands in for the loaded plate model: answers every question with the given P, or misbehaves on cue. The
+    input is cut while it has more than `fits` events (the default: any length fits)."""
 
-    def __init__(self, p=0.02, fail=False, broken=None, usage=None):
-        self.p, self.fail, self.broken = p, fail, broken
+    def __init__(self, p=0.02, fail=False, broken=None, usage=None, fits=None):
+        self.p, self.fail, self.broken, self.fits = p, fail, broken, fits
         self.usage = usage if usage is not None else dict(FULL_INPUT)
+        self.states = []
 
     def predict(self, state, questions):
+        self.states.append(state)
         if self.fail:
             raise RuntimeError("model crashed")
         answer = self.broken if self.broken is not None else {"noul": self.p}
-        return {"answers": {key: answer for key in questions}, "usage": self.usage}
+        usage = self.usage
+        if self.fits is not None and len(state["events"].split(" | ")) > self.fits:
+            usage = dict(FULL_INPUT, truncated=True, state_tokens_dropped=40)
+        return {"answers": {key: answer for key in questions}, "usage": usage}
 
 
 # laya's usage block when the whole input fit
@@ -240,21 +247,23 @@ def test_a_long_history_drops_touches_that_move_nothing_first():
     assert exact_reach(long) == full_reach(long)
 
 
+SCOOP = edge("e0", 0, "tool-knife-1", "bin-1", action="transfer.scoop", direction="b_to_a")
+TOUCHES = [edge(f"e{i}", 1000 * i, "tool-knife-1", "plate-t1", p=0.5) for i in range(1, MAX_EDGES + 2)]
+LONG_KNIFE = {"plate_id": "plate-t1", "as_of_t_ms": 99000, "nodes": [SATAY] + CLEAN, "edges": [SCOOP] + TOUCHES}
+
+
 @pytest.mark.safety
 def test_a_history_still_too_long_folds_its_oldest_events_into_rounded_up_starts():
-    scoop = edge("e0", 0, "tool-knife-1", "bin-1", action="transfer.scoop", direction="b_to_a")
-    touches = [edge(f"e{i}", 1000 * i, "tool-knife-1", "plate-t1", p=0.5) for i in range(1, MAX_EDGES + 2)]
-    long = {"plate_id": "plate-t1", "as_of_t_ms": 99000, "nodes": [SATAY] + CLEAN, "edges": [scoop] + touches}
-    edges, nodes = readable_history(long)
-    assert edges == touches[-MAX_EDGES:]
+    edges, nodes = readable_history(LONG_KNIFE)
+    assert edges == TOUCHES[-MAX_EDGES:]
     # After the scoop and the first touch: knife peanut 0.98 * 0.9 = 0.882, plate 0.441, shown rounded up.
     assert nodes["tool-knife-1"]["start"]["probabilities"] == {"peanut": 0.89, "soy": 0.81}
     assert nodes["plate-t1"]["start"]["probabilities"] == {"peanut": 0.45, "soy": 0.41}
     assert (
-        plate_state(long)["start"]
+        plate_state(LONG_KNIFE)["start"]
         == "tool-knife-1 (tool): peanuts 0.89, soy 0.81 | plate-t1 (plate): peanuts 0.45, soy 0.41"
     )
-    assert all(exact_reach(long)[u] >= full_reach(long)[u] for u in UNITS)
+    assert all(exact_reach(LONG_KNIFE)[u] >= full_reach(LONG_KNIFE)[u] for u in UNITS)
 
 
 ENTITIES = ["bin-1", "bin-2", "tool-knife-1", "tool-spoon-2", "hand-p1-left", "hand-p1-right", "plate-t1"]
@@ -290,13 +299,23 @@ def kitchens(draw):
 
 
 @pytest.mark.safety
-@given(kitchen=kitchens())
-def test_shortening_never_lowers_any_allergens_reach(kitchen):
+@given(kitchen=kitchens(), limit=st.sampled_from((MAX_EDGES, *SHORTER_WINDOWS, 1)))
+def test_shortening_never_lowers_any_allergens_reach(kitchen, limit):
     """Stricter only: the history the model reads fits, and carries at least as much of every allergen onto the plate
-    as the whole history does, by the same noisy-OR."""
-    assert len(readable_history(kitchen)[0]) <= MAX_EDGES
-    full, read = full_reach(kitchen), exact_reach(kitchen)
+    as the whole history does, by the same noisy-OR, at the usual length and at every shorter window the check uses."""
+    edges, nodes = readable_history(kitchen, limit)
+    assert len(edges) <= limit
+    full, read = full_reach(kitchen), carry(edges, nodes)[kitchen["plate_id"]]
     assert all(read[u] >= full[u] for u in UNITS), {u: (read[u], full[u]) for u in UNITS if read[u] < full[u]}
+
+
+@pytest.mark.safety
+def test_an_input_too_long_for_the_model_is_folded_further_and_asked_again():
+    agent = ScriptedAgent(p=0.97, fits=SHORTER_WINDOWS[-1])
+    assert local_check(agent).check(LONG_KNIFE, ["peanut"]) == {"peanut": 0.97}
+    assert [len(state["events"].split(" | ")) for state in agent.states] == [MAX_EDGES, *SHORTER_WINDOWS]
+    with pytest.raises(LayaCheckUnavailable):  # still too long at the shortest window: hold
+        local_check(ScriptedAgent(fits=1)).check(LONG_KNIFE, ["peanut"])
 
 
 @pytest.mark.safety

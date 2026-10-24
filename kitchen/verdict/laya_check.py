@@ -35,9 +35,12 @@ UNIT_NAMES = {
 
 # The longest history the model reads. It was trained on up to 10 edges; 15 is the owner's call, so 11 to 15 edges are
 # longer than anything it saw. Laya is stricter only: a wrong answer there can add a HOLD but never cause a PASS, and
-# the graph's own reachability still decides. A longer history is shortened to fit (shorten); an input the model
-# had to cut to fit its 512 tokens raises LayaCheckUnavailable (LocalLayaCheck.check).
+# the graph's own reachability still decides. A longer history is shortened to fit (shorten).
 MAX_EDGES = 15
+
+# If laya has to cut the input to fit its 512 tokens (folded starting values make the text longer), the check folds
+# the history further, to these many events, and asks again; if it still doesn't fit, it holds (LocalLayaCheck.check).
+SHORTER_WINDOWS = (10, 5)
 
 ACTION_WORDS = {"transfer.contact": "contact", "transfer.scoop": "scoop", "transfer.wipe": "wipe"}
 
@@ -82,25 +85,25 @@ def on_path(subgraph):
     return list(reversed(kept))
 
 
-def readable_history(subgraph):
-    """The on-path edges and the nodes they need, shortened to at most MAX_EDGES events, or LayaCheckUnavailable if
-    a node is missing. A history that already fits is read exactly as it is."""
+def readable_history(subgraph, limit=MAX_EDGES):
+    """The on-path edges and the nodes they need, shortened to at most `limit` events, or LayaCheckUnavailable if a
+    node is missing. A history that already fits is read exactly as it is."""
     edges = on_path(subgraph)
     nodes = {n["entity_id"]: n for n in subgraph["nodes"]}
     needed = [subgraph["plate_id"]] + [entity for e in edges for entity in (e["a_id"], e["b_id"])]
     missing = sorted({entity for entity in needed if entity not in nodes})
     if missing:
         raise LayaCheckUnavailable(f"the subgraph has edges but no node for {missing}")
-    if len(edges) > MAX_EDGES:
-        edges, nodes = shorten(edges, nodes)
+    if len(edges) > limit:
+        edges, nodes = shorten(edges, nodes, limit)
     return edges, nodes
 
 
 # ---------- shortening a long history ----------
 
 
-def shorten(edges, nodes):
-    """At most MAX_EDGES events that carry at least as much of every allergen onto the plate as `edges` do.
+def shorten(edges, nodes, limit):
+    """At most `limit` events that carry at least as much of every allergen onto the plate as `edges` do.
 
     First, transfers whose sources carry nothing at that moment are dropped: they move nothing, so no reach changes.
     Washes are kept. If that's still too long, the oldest events are folded into what each entity carried after them,
@@ -116,10 +119,10 @@ def shorten(edges, nodes):
         if edge["action"] == "clean.wash" or moves_something(edge, carried):
             moving.append(edge)
         apply_edge(edge, carried)
-    if len(moving) <= MAX_EDGES:
+    if len(moving) <= limit:
         return moving, nodes
 
-    folded, kept = moving[:-MAX_EDGES], moving[-MAX_EDGES:]
+    folded, kept = moving[:-limit], moving[-limit:]
     start = starting_values(nodes)
     after = carry(folded, nodes)
     return kept, {
@@ -169,9 +172,9 @@ def event_text(number, edge):
     return f"{number}. {ACTION_WORDS[edge['action']]} {a} {src_dst} {edge['b_id']} (p {p:.2f})"
 
 
-def plate_state(subgraph):
-    """The state the plate model reads: who carried what at the start, then the on-path events in order."""
-    edges, nodes = readable_history(subgraph)
+def plate_state(subgraph, limit=MAX_EDGES):
+    """The state the plate model reads: who carried what at the start, then up to `limit` on-path events in order."""
+    edges, nodes = readable_history(subgraph, limit)
     mentioned = [entity for e in edges for entity in (e["a_id"], e["b_id"])] + [subgraph["plate_id"]]
     shown = list(dict.fromkeys(mentioned))  # each entity once, in the order the events first mention it
     return {
@@ -288,6 +291,10 @@ class LocalLayaCheck:
                 return {}
             questions = {f"reached_{u}": reached_question(u) for u in forbidden}
             result = self._agent.predict(state, questions)
+            for limit in SHORTER_WINDOWS:  # folding further keeps or raises every allergen's reach (shorten)
+                if not was_cut(result["usage"]):
+                    break
+                result = self._agent.predict(plate_state(subgraph, limit), questions)
             if was_cut(result["usage"]):
                 raise ValueError(f"the plate's history didn't fit the model's input: {result['usage']}")
             answers = result["answers"]
