@@ -14,14 +14,17 @@
 
 ## Planned layout
 
-Nothing is here yet; outputs-01 creates it. The framework is chosen by ADR (outputs-02); one Vite + TypeScript app with routes is the default.
+Nothing is here yet; outputs-01 creates it. Per [ADR 0007](../docs/decisions/0007-outputs-web-framework.md): one React + TypeScript app on Vite, Node 24 LTS, with the paths `/tablet`, `/chef` and `/expo` and no router library.
 
 ```
 web/
   package.json, vite.config.ts   app, build and test (vitest)
   src/
+    main.tsx   creates the state source (?source=scenario|spacetime) and mounts the app
+    app.tsx    screen_for_path(): /tablet, /chef, /expo
+    styles.css shared rules, including 44 px touch targets
     state/     StateSource interface; ScenarioStateSource (fake); SpacetimeSource (partner's TS bindings)
-    api/       clients for the Orders and Vision HTTP APIs; MSW mocks built from kitchen/orders/fakes/http/
+    api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from kitchen/orders/fakes/http/
     generated/ TS types generated from contracts/schemas by platform (never hand-edit)
     tablet/    ticket entry, one-tap questions, send gate
     chef/      chef confirmation
