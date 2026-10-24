@@ -89,12 +89,41 @@ def test_plates_start_without_the_database_is_a_503():
 
 
 @pytest.mark.safety
-@pytest.mark.parametrize("body", [{}, {"ticket_id": ""}, {"ticket_id": 7}, {"plate_id": "plate-1"}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"ticket_id": ""},
+        {"ticket_id": "   "},
+        {"ticket_id": 7},
+        {"plate_id": "plate-1"},
+        {"ticket_id": "t7", "plate_id": "plate-9"},
+    ],
+)
 def test_plates_start_bad_body_is_a_400_and_binds_nothing(body):
     calls = []
     client = client_for(VisionStatus("onnx"), lambda ticket_id: calls.append(ticket_id) or "plate-1")
     assert_error(client.post("/plates/start", json=body), 400, "bad_request")
     assert calls == []
+
+
+@pytest.mark.safety
+def test_plates_start_unexpected_error_is_a_500_with_the_error_body_and_cors():
+    def start_plate(ticket_id):
+        raise RuntimeError("bug in the binding")
+
+    client = client_for(VisionStatus("onnx"), start_plate)
+    response = client.post("/plates/start", json={"ticket_id": "t7"}, headers={"Origin": ORIGIN})
+    assert_error(response, 500, "internal_error")
+    assert response.headers["access-control-allow-origin"] == ORIGIN
+
+
+def test_unknown_path_is_a_404_with_the_error_body():
+    assert_error(client_for(VisionStatus("onnx")).get("/nope"), 404, "not_found")
+
+
+def test_wrong_method_is_a_405_with_the_error_body():
+    assert_error(client_for(VisionStatus("onnx")).get("/plates/start"), 405, "method_not_allowed")
 
 
 def test_plates_start_invalid_json_is_a_400():

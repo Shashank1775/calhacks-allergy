@@ -16,6 +16,7 @@ Rules: fail closed: /health last_frame_t_ms stops advancing when frames stop, so
 """
 
 import argparse
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -25,7 +26,8 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.exceptions import HTTPException
 
 from kitchen.shared.clock import SystemClock
 from kitchen.shared.config import load_settings
@@ -41,6 +43,11 @@ FPS_SMOOTHING = 0.1
 # A stream with no new frame for this long ends, so a client of a stalled camera sees the stream stop instead of a
 # frozen picture that looks live, and a disconnected client's thread is freed.
 STREAM_IDLE_S = 5.0
+
+# The contract error code for each HTTP error FastAPI raises itself (unknown path, wrong method).
+HTTP_ERROR_CODES = {404: "not_found", 405: "method_not_allowed"}
+
+logger = logging.getLogger("kitchen.vision.server")
 
 
 class VisionStatus:
@@ -155,9 +162,16 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
 
 
 class StartPlateRequest(BaseModel):
-    """Body of POST /plates/start."""
+    """Body of POST /plates/start.
 
-    ticket_id: str = Field(min_length=1)
+    Extra fields are refused, not ignored: a client that sends a plate_id believes it chose the plate, and the API
+    never binds a plate other than the one it sees. A blank ticket_id is refused so a plate is never locked to a
+    ticket that cannot exist.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ticket_id: str = Field(pattern=r"\S")
 
 
 def create_app(
@@ -168,8 +182,9 @@ def create_app(
 ) -> FastAPI:
     """The Vision HTTP API over a VisionStatus and a start_plate(ticket_id) -> plate_id binding function.
 
-    start_plate raises BindRefused (409 with its code) or StateUnavailable (503); the API never picks a plate
-    itself. CORS is sent only for cors_origins.
+    start_plate raises BindRefused (409 with its code) or StateUnavailable (503); any other error is a 500
+    internal_error. The API never picks a plate itself. Every error uses the contract's error body, and CORS is
+    sent only for cors_origins.
     """
     if "*" in cors_origins:
         # contracts/apis.md HTTP conventions: browsers may call this API only from the listed screens.
@@ -192,9 +207,22 @@ def create_app(
     def bad_request(request, exc):
         return error_response(400, "bad_request", str(exc.errors()))
 
+    @app.exception_handler(HTTPException)
+    def http_error(request, exc):
+        return error_response(exc.status_code, HTTP_ERROR_CODES.get(exc.status_code, "http_error"), str(exc.detail))
+
     @app.post("/plates/start")
     def plates_start(body: StartPlateRequest):
-        return {"plate_id": start_plate(body.ticket_id)}
+        try:
+            plate_id = start_plate(body.ticket_id)
+        except (BindRefused, StateUnavailable):
+            raise  # their handlers answer 409 and 503 with the contract code
+        except Exception:
+            # Any other failure binds nothing and is answered here, inside the CORS middleware, so the tablet can
+            # still read the standard error body instead of an opaque network failure.
+            logger.exception("start_plate failed for ticket %s", body.ticket_id)
+            return error_response(500, "internal_error", "could not start the plate")
+        return {"plate_id": plate_id}
 
     @app.get("/health")
     def health():
