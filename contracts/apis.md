@@ -10,6 +10,7 @@ Signatures here are the contract. Types named after a schema (`Ticket`, `Entity`
 | [`InteractionClassifier`](#interactionclassifier) | **partner** (zone rules in `kitchen/interactions/`, ConvLSTM in `kitchen/lstm/`) | `FakeClassifier` | platform |
 | [Change mask and clip builder](#change-mask-and-clips) | platform (`kitchen/shared/change_mask.py`, `kitchen/shared/clips.py`) | none needed: pure functions | platform |
 | [`LayaParser`](#layaparser) | orders | `FakeLayaParser` | orders |
+| [`LayaPlateCheck`](#layaplatecheck) | verdict | `FakeLayaCheck` | verdict |
 | Verdict feed (`verdict` rows) | verdict | `FakeVerdictFeed` (replays scenario verdicts into `FakeStateClient`) | verdict |
 | [`Transcriber`](#transcriber-and-speaker) | orders | `FakeTranscriber` | orders |
 | [`Speaker`](#transcriber-and-speaker) | outputs | `FakeSpeaker` | outputs |
@@ -84,12 +85,15 @@ class ProvenanceGraph(Protocol):
         # exact reachability: every allergen unit with nonzero probability at the plate, each with its chain
     def unknown_ancestors(self, plate_id: str, as_of_t_ms: int) -> list[str]: ...
         # entity IDs in the plate's ancestry with origin "unknown" and no wash since
+    def subgraph(self, plate_id: str, as_of_t_ms: int) -> PlateSubgraph: ...
+        # the plate's time-forward ancestry: entities, what each carried at the start, and the edges, in time order;
+        # what Laya's final plate check reads (schemas/plate_subgraph.schema.json)
     def version(self) -> str: ...
 ```
 
 - Raises `GraphUnavailable` on any failure. The verdict policy turns that into HOLD (safety rule: fail closed).
 - Must follow the time-runs-forward and known-clean-source safety rules, and pass every golden scenario in [`scenarios/`](scenarios/).
-- **Fake:** answers from a scenario file's ground truth (`expected[].allergens_reached`, `chain_event_ids`). It does no graph math, so it never duplicates the partner's work.
+- **Fake:** answers from a scenario file's ground truth (`expected[].allergens_reached`, `chain_event_ids`). It does no graph math, so it never duplicates the partner's work. Its `subgraph()` returns the scenario's nodes and its events up to `as_of_t_ms`; extra off-path edges are allowed.
 
 ## InteractionClassifier
 
@@ -158,6 +162,21 @@ class LayaParser(Protocol):
 
 - Raises `LayaParserUnavailable` (an empty note too). The Orders API then answers `503 laya_unavailable`. It never guesses.
 - **Fake:** `FakeLayaParser`, a deterministic keyword parser covering the notes in the orders eval set.
+
+## LayaPlateCheck
+
+Owner: **verdict** (`kitchen/verdict/laya_check.py`). A second fine-tuned Laya model, separate from the ticket-note one, that makes the final plate check. It reads the plate's subgraph from the partner's graph and says, for each forbidden allergen, how likely it reached the plate.
+
+```python
+class LayaPlateCheck(Protocol):
+    version: str   # the checkpoint's name, recorded as verdict.versions.laya
+    def check(self, subgraph: PlateSubgraph, forbidden: list[str]) -> dict[str, float]: ...
+        # P(reached the plate) for each forbidden allergen unit
+```
+
+- **Stricter only.** The verdict adds a `laya_flagged` hold reason for each forbidden allergen with P >= 1 − `pass_threshold`, the same flag rule it applies to the graph's numbers. Laya can never remove a hold reason or cause a PASS.
+- It reads only the edges on a time-forward path to the plate (anything else is dropped first). Raises `LayaCheckUnavailable` on any failure, including more than 10 such edges (longer than anything it was trained on) or an edge whose entity has no node. The verdict then holds with `laya_unavailable` (safety rule: fail closed).
+- **Fake:** `FakeLayaCheck`, which answers with the exact noisy-OR result over the subgraph (a perfect Laya).
 
 ## Transcriber and Speaker
 

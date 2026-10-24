@@ -2,10 +2,11 @@
 
 Owner: verdict (agents)
 Step:  verdict
-Reads: ticket, entity, plate_binding (StateClient); allergen_reach and unknown ancestors (ProvenanceGraph)
+Reads: ticket, entity, plate_binding (StateClient); allergen_reach, unknown ancestors and the plate subgraph
+       (ProvenanceGraph); Laya's plate check (LayaPlateCheck)
 Emits: verdict, chain included (StateClient.record_verdict)
-Rules: fail closed; plain-code verdict; allergens, not contacts; known-clean source (an unknown ancestor holds);
-       late changes recheck everything
+Rules: fail closed; plain-code verdict (Laya's plate check only adds holds); allergens, not contacts;
+       known-clean source (an unknown ancestor holds); late changes recheck everything
 
-Not built yet.
+Built so far: laya_check.py (Laya's plate check) and training/. decide() and the service are not written yet.
 """

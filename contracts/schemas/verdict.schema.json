@@ -73,7 +73,9 @@
               "unknown_history",
               "stale_track",
               "missing_input",
-              "error"
+              "error",
+              "laya_flagged",
+              "laya_unavailable"
             ]
           },
           "allergen_unit_id": {
@@ -126,6 +128,10 @@
         },
         "classifier": {
           "type": "string"
+        },
+        "laya": {
+          "type": "string",
+          "description": "The plate-check Laya checkpoint that judged this plate."
         }
       }
     }

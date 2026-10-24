@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plate_subgraph.schema.json",
+  "title": "PlateSubgraph",
+  "description": "The part of the provenance graph that could have reached one plate by as_of_t_ms: every entity with a time-forward path to the plate, what it carried at the start, and the edges on those paths (washes included), in time order. Producer: partner graph (ProvenanceGraph.subgraph). Consumer: verdict (Laya's final plate check).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plate_id",
+    "as_of_t_ms",
+    "nodes",
+    "edges"
+  ],
+  "properties": {
+    "plate_id": {
+      "$ref": "common.schema.json#/$defs/entity_id"
+    },
+    "as_of_t_ms": {
+      "$ref": "common.schema.json#/$defs/t_ms"
+    },
+    "nodes": {
+      "description": "The plate and every entity that an edge mentions.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entity_id",
+          "kind",
+          "label",
+          "origin",
+          "start"
+        ],
+        "properties": {
+          "entity_id": {
+            "$ref": "common.schema.json#/$defs/entity_id"
+          },
+          "kind": {
+            "$ref": "common.schema.json#/$defs/entity_kind"
+          },
+          "label": {
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "shift_start",
+              "clean_stack",
+              "unknown"
+            ]
+          },
+          "start": {
+            "description": "What the entity carried when it entered the shift: a bin's profile, clean for tools, hands and plates, or unknown: true for an unknown history.",
+            "$ref": "allergen_profile.schema.json"
+          }
+        }
+      }
+    },
+    "edges": {
+      "description": "Interactions on a time-forward path to the plate, in time order. Extra off-path edges are allowed: the plate check drops them before reading (kitchen/verdict/laya_check.py, on_path).",
+      "type": "array",
+      "items": {
+        "$ref": "interaction_event.schema.json"
+      }
+    }
+  }
+}
