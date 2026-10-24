@@ -1,6 +1,6 @@
 # 0007: The screens are one React + TypeScript app on Vite
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-23
 - **Deciders:** director, mgr-outputs
 
@@ -47,7 +47,7 @@ One `index.html` and one React root. Each device opens one path and stays there:
 | `/expo` | Plates, verdicts, chains | Screen at the pass |
 | `/` | Links to the three screens | Any |
 
-- **No router library.** `src/app.tsx` holds one small function, `screen_for_path(path)`, that maps the four paths to screen components. Screens link to each other with plain `<a href>`. A full reload is fine, because no screen keeps state across screens. Why: three fixed paths with no parameters don't need a dependency (KISS).
+- **No router library.** `src/app.tsx` holds one small function, `screen_for_path(path)`, that maps the four paths to screen components. Any other path renders the `/` links page, so a mistyped address shows links, not a blank screen. Screens link to each other with plain `<a href>`. A full reload is fine: no screen keeps state across screens, and the data source comes from the build, not the URL (Decision 3). Why: three fixed paths with no parameters don't need a dependency (KISS).
 - Vite's default `appType: "spa"` serves `index.html` for these paths in both dev and preview [5].
 - If a screen ever needs URL parameters or nested routes, switch to React Router and amend this ADR.
 
@@ -57,7 +57,12 @@ The folder layout in `web/README.md` stands. This ADR adds `src/main.tsx` (creat
 
 - The `StateSource` holds each table's rows as an immutable array, plus a **feed status**: `connecting`, `live` or `lost`.
 - Screens read it through two hooks, `useTableRows(table_name)` and `useFeedStatus()`, built on React's `useSyncExternalStore` [7]. React requires the snapshot to stay the same value until the store changes [7], so the source replaces a table's array when the table changes and never mutates it.
-- `main.tsx` creates one source from the `?source=` URL parameter (`scenario` by default; `spacetime` once outputs-08 lands) and passes it down through one React context.
+- **The data source comes from the build, not the URL.** `main.tsx` passes the Vite env variable `WEB_STATE_SOURCE` to one pure function in `src/state/`, `state_source_for(name)`, and shares the result through one React context. Vite compiles the value into the bundle [19], so every screen, after every full-reload link, uses the same source.
+  - `scenario` creates `ScenarioStateSource`, which replays the golden scenario named by `WEB_SCENARIO` (a file name in `contracts/scenarios/`). While it runs, every screen shows a REPLAY banner, so replayed badges can't pass for live plates.
+  - `spacetime` creates the SpacetimeDB source once outputs-08 lands. Until then it counts as unknown.
+  - **Anything else creates no source** (invariant 1): a missing or empty value, a typo, a different case, or `scenario` without a known `WEB_SCENARIO`. With no source, `useFeedStatus()` returns `lost` and `useTableRows()` returns no rows, so every screen shows FEED LOST and no plate shows PASS. The console logs the bad value. The replay therefore runs only when someone asks for it by name.
+  - Why not a `?source=` URL parameter: links between screens reload the page and drop the query string, so a live board could fall back to a replay and show its PASS badges as if they were live plates.
+  - Changing the source means restarting the dev server or rebuilding [19].
 - Form text and the selected plate live in `useState`. HTTP calls are plain async functions in `src/api/` that use `fetch`. No Redux, Zustand or React Query.
 - **Safety display rule.** One pure function decides which badge a plate shows. It returns PASS only when the feed is `live` and the plate's latest verdict has `decision == "pass"` for the ticket's latest revision. Everything else shows a non-pass badge: HOLD, RECHECKING (verdict for an older revision, invariant 9) or FEED LOST (invariant 1). It never computes a verdict (invariant 2). It is unit tested, and no other code may render PASS.
 
@@ -67,14 +72,15 @@ The folder layout in `web/README.md` stands. This ADR adds `src/main.tsx` (creat
 - **Only `src/state/spacetime_source.ts` imports `spacetimedb` and the bindings.** It uses the framework-free core SDK: `DbConnection.builder()` with `withUri`, `withDatabaseName`, `onConnect`, `onDisconnect` and `onConnectError`; `subscriptionBuilder().onApplied().onError().subscribe(...)`; and each table's `onInsert`, `onUpdate` and `onDelete` [1]. These fill the same store `ScenarioStateSource` fills.
 - **We don't use the `spacetimedb/react` hooks in screens.** Why: screens stay source-agnostic and are tested on `ScenarioStateSource`, and the fail-closed feed status lives in one place. The React integration [1] is evidence the SDK works in a React app, not the path we take.
 - **Fail closed** (invariant 1). The feed is `connecting` until the subscription's `onApplied` fires, then `live`. It goes to `lost` on `onDisconnect`, `onConnectError` or a subscription `onError`. Only `live` can show PASS. The core SDK never retries a failed first connection, and automatic reconnect is opt-in [1]. If we turn reconnect on, the feed stays `lost` until the new subscription applies, because cached rows can be stale while it reconnects [1].
-- Settings (SpacetimeDB URI and database name, orders and vision base URLs) come from Vite env variables. We set `envPrefix: "WEB_"` so they follow the per-step prefix rule (AGENTS.md §8).
+- Settings come from Vite env variables. We set `envPrefix: "WEB_"` so they follow the per-step prefix rule (AGENTS.md §8). They are `WEB_STATE_SOURCE` and `WEB_SCENARIO` (Decision 3), the SpacetimeDB URI and database name, and the orders and vision base URLs. Set them in the shell or in `web/.env.local`. Vite reads `.env` files from the project root, `web/`, by default, and a variable already set in the shell wins over a file [5][19]. The repo's `.gitignore` already keeps `.env.*` out of git.
+- **No secrets in `WEB_` variables.** Vite compiles them into the browser bundle, where anyone who opens the page can read them [19]. A key or token never goes in one (AGENTS.md §6, Data and secrets).
 - Where the generated bindings live is the partner's call. `database/README.md` lists them under `database/`. If `web/` imports them from there, Vite needs `server.fs.allow` and the bindings must resolve the same `spacetimedb` package as `web/` (unverified; settle in outputs-08 with the partner).
 
 ### 5. Where MSW fits
 
-- **In tests, always.** `setupServer` from `msw/node` starts in a Vitest setup file: `listen()` before all tests, `resetHandlers()` after each, `close()` after all [9]. A request with no handler fails the test. (MSW 3 renamed the option for this from `onUnhandledRequest` to `onUnhandledFrame` [10].)
+- **In tests, always.** `setupServer` from `msw/node` starts in a Vitest setup file: `listen({ onUnhandledFrame: "error" })` before all tests, `resetHandlers()` after each, `close()` after all [9][10]. With `"error"`, MSW prints an error and halts any request that has no handler, so no test can reach a real service and a missing handler shows up as a network error in the test. MSW's default, `"warn"`, only warns and lets the request through [10]. (MSW 3 renamed this option from `onUnhandledRequest` [10].)
 - Handlers live in `src/api/mocks/` and use `http` and `HttpResponse` from `msw/http` [9]. They are built from the orders team's example responses in `kitchen/orders/fakes/http/` (planned there) and from the vision API table in `contracts/apis.md`.
-- **In the browser, only for demos on `localhost`.** `setupWorker` from `msw/browser` runs a service worker [9], and service workers need a secure context, which `http://localhost` is and `http://<laptop-ip>:5173` is not [15]. So the iPad always talks to a real (or fake-mode) orders service. If we use browser mocks, they start in `main.tsx` only on `?mock=1` in a dev build.
+- **In the browser, only for demos on `localhost`.** `setupWorker` from `msw/browser` runs a service worker [9], and service workers need a secure context, which `http://localhost` is and `http://<laptop-ip>:5173` is not [15]. So the iPad always talks to a real (or fake-mode) orders service. If we use browser mocks, they start in `main.tsx` only when `WEB_MOCK_API` is `1` in a dev build. Like the data source, this comes from the build, not the URL, so it doesn't change between screens.
 
 ### 6. Tests and tooling
 
@@ -104,11 +110,14 @@ Commands: `npm --prefix web test` (`vitest run`), `npm --prefix web run build` (
 ## Consequences
 
 - outputs-01 can scaffold today. Every screen is built and tested on `ScenarioStateSource` and MSW, with no service and no database.
-- The SpacetimeDB swap (outputs-08) touches one file, plus the source selection in `main.tsx`.
+- The SpacetimeDB swap (outputs-08) touches one file, plus one case in `state_source_for`.
 - All PASS display goes through one tested function, so reviewers have one place to check invariants 1, 2 and 9 in the UI.
-- **Node:** the owner's Mac had Node 20.15.0 on 2026-10-23, below Vite 8's floor. Install Node 24 LTS before outputs-01. AGENTS.md §8 and §14 say Node ≥ 20. If this ADR is accepted, the Director updates them to Node ≥ 24.15, and platform's web CI job (platform-07) uses Node 24.
+- Picking the data source takes a restart or a rebuild, not a URL. That is the point: nobody can switch a live board to a replay by tapping a link.
+- **AGENTS.md updates for the Director**, once this ADR merges:
+  - **Node (§8 and §14).** Both say Node ≥ 20. Change them to Node ≥ 24.15, and platform's web CI job (platform-07) uses Node 24. The owner's Mac had Node 20.15.0 on 2026-10-23, below Vite 8's floor, so the owner installs Node 24 LTS before outputs-01.
+  - **Hook names (§8).** The owner's style rule says snake_case for TypeScript functions. Add Decision 7's exception: hooks are named `useSomething`, because React's lint finds hooks only by that name.
 - **Watch:** the `spacetimedb` npm version should match the partner's SpacetimeDB CLI and server version (whether minor versions may differ is unverified). React Router stays out until a screen needs it.
-- **Enforced by:** `npm --prefix web test` and `npm --prefix web run build` in CI (platform-07), the badge function's unit tests, the README's feed-loss and send-gate tests, and review of the PR screenshot for touch targets.
+- **Enforced by:** `npm --prefix web test` and `npm --prefix web run build` in CI (platform-07), the badge function's unit tests, the README's feed-loss and send-gate tests, and review of the PR screenshot for touch targets. outputs-01 writes the source-selection safety tests first: `state_source_for` returns no source for a missing, empty, misspelled or wrong-case value and for `scenario` without a known `WEB_SCENARIO`, and with no source every screen shows FEED LOST and no PASS badge.
 
 ## Unverified
 
@@ -127,12 +136,12 @@ All checked on 2026-10-23.
 2. SpacetimeDB React quickstart and `react-ts` starter (Vite, React 18.3, `SpacetimeDBProvider`): https://github.com/clockworklabs/SpacetimeDB/blob/master/docs/docs/00100-intro/00200-quickstarts/00100-react.md and https://github.com/clockworklabs/SpacetimeDB/tree/master/templates/react-ts
 3. npm `spacetimedb` 2.13.0 (optional peers React `^18 || ^19`, Vue, Svelte; subpath exports): https://www.npmjs.com/package/spacetimedb (`npm view spacetimedb peerDependencies peerDependenciesMeta exports`)
 4. Vite getting started (templates, Node floor) and the create-vite templates: https://vite.dev/guide/, https://github.com/vitejs/vite/tree/main/packages/create-vite (`template-react-ts`, `template-vue-ts`, `template-svelte-ts` `package.json`)
-5. Vite config: default build target https://vite.dev/config/build-options, `appType` https://vite.dev/config/shared-options, `server.host`, `allowedHosts`, `https` https://vite.dev/config/server-options
+5. Vite config: default build target https://vite.dev/config/build-options, `appType`, `envDir` (default: the project root) and `envPrefix` https://vite.dev/config/shared-options, `server.host`, `allowedHosts`, `https` https://vite.dev/config/server-options
 6. Vitest `environment` and `setupFiles`: https://vitest.dev/config/environment, https://vitest.dev/config/setupfiles
 7. React `useSyncExternalStore` and hook naming: https://react.dev/reference/react/useSyncExternalStore, https://react.dev/learn/reusing-logic-with-custom-hooks
 8. npm `@testing-library/react` 16.3.3 peer range (React `^18 || ^19`): https://www.npmjs.com/package/@testing-library/react
 9. MSW quick start (`msw/http`, `msw/node`) and integrations: https://mswjs.io/docs/quick-start, https://mswjs.io/docs/integrations/node, https://mswjs.io/docs/integrations/browser
-10. MSW v3.0.0 release notes (Node ≥ 22, ESM only, `onUnhandledFrame`): https://github.com/mswjs/msw/releases/tag/v3.0.0
+10. MSW v3.0.0 release notes (Node ≥ 22, ESM only, `onUnhandledRequest` renamed to `onUnhandledFrame`): https://github.com/mswjs/msw/releases/tag/v3.0.0, and `server.listen()` options (`onUnhandledFrame`: `"warn"` by default, `"error"`, `"bypass"` or a function): https://mswjs.io/docs/api/setup-server/listen
 11. jsdom, unimplemented parts of the web platform (layout): https://github.com/jsdom/jsdom#unimplemented-parts-of-the-web-platform
 12. Node.js release schedule: https://github.com/nodejs/Release/blob/main/schedule.json
 13. npm `engines.node` for vite 8.3.5, vitest 5.0.5, msw 3.0.3 and jsdom 30.1.3 (`npm view <package> engines.node`)
@@ -141,3 +150,4 @@ All checked on 2026-10-23.
 16. WCAG 2.2, Understanding SC 2.5.5 Target Size (Enhanced): https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html
 17. MDN, `touch-action` (`manipulation` turns off double-tap zoom): https://developer.mozilla.org/en-US/docs/Web/CSS/touch-action
 18. MDN, `getUserMedia` (secure contexts only): https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia
+19. Vite, Env Variables and Modes (`import.meta.env` values are strings replaced at build time and bundled into the source, so they must not hold API keys; which `.env` files load; shell variables win over files; restart after changes): https://vite.dev/guide/env-and-mode

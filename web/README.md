@@ -20,8 +20,9 @@ Nothing is here yet; outputs-01 creates it. Per [ADR 0007](../docs/decisions/000
 web/
   package.json, vite.config.ts   app, build and test (vitest)
   src/
-    main.tsx   creates the state source (?source=scenario|spacetime) and mounts the app
-    app.tsx    screen_for_path(): /tablet, /chef, /expo
+    main.tsx   creates the state source from WEB_STATE_SOURCE (scenario | spacetime;
+               missing or unknown: no source, every screen shows FEED LOST) and mounts the app
+    app.tsx    screen_for_path(): /tablet, /chef, /expo, any other path the / links page
     styles.css shared rules, including 44 px touch targets
     state/     StateSource interface; ScenarioStateSource (fake); SpacetimeSource (partner's TS bindings)
     api/       clients for the Orders and Vision HTTP APIs; MSW mocks (api/mocks/) built from kitchen/orders/fakes/http/
@@ -40,7 +41,7 @@ web/
 | In | `ticket`, `ticket_constraint`, `bin_profile`, `chef_confirmation`, `entity`, `entity_risk`, `plate_binding`, `verdict`, `verdict_step`, `mistake_pattern` | [state-tables.md](../contracts/state-tables.md) via SpacetimeDB TS bindings | partner's `database/` (bindings), written by orders, vision, verdict and the partner |
 | Uses | Allergen choices | [`allergen_units.json`](../contracts/allergen_units.json) | contracts (never hardcoded) |
 
-**Data source.** Every screen reads through one `StateSource` interface. Until the partner's database ships its generated TypeScript bindings, `ScenarioStateSource` replays any `contracts/scenarios/*.json` in the browser. The SpacetimeDB source plugs in behind the same interface (`needs-partner`). Browser calls to the Pi and the orders service rely on the CORS rule in [HTTP conventions](../contracts/apis.md#http-conventions).
+**Data source.** Every screen reads through one `StateSource` interface, picked at build time by `WEB_STATE_SOURCE`, never by the URL (ADR 0007). Until the partner's database ships its generated TypeScript bindings, `ScenarioStateSource` replays any `contracts/scenarios/*.json` in the browser. The SpacetimeDB source plugs in behind the same interface (`needs-partner`). Browser calls to the Pi and the orders service rely on the CORS rule in [HTTP conventions](../contracts/apis.md#http-conventions).
 
 ## Safety rules that apply
 
@@ -48,7 +49,7 @@ See [AGENTS.md §3](../AGENTS.md#3-safety-rules).
 
 | Rule | How we could break it | Test |
 |---|---|---|
-| 1. Fail closed | Showing PASS on stale data after the feed drops | Connection loss shows a "feed lost" banner and clears PASS badges |
+| 1. Fail closed | Showing PASS on stale data after the feed drops, or falling back to a replay when the source isn't set | Connection loss shows a "feed lost" banner and clears PASS badges. A missing or unknown `WEB_STATE_SOURCE` shows FEED LOST on every screen |
 | 2. Models only tighten | Client-side decision logic | The pass badge renders only from `verdict.decision == "pass"`. Code review checks there is no other logic |
 | 3. No unanswered questions | Tablet sends with an open question | Send is disabled until `sendable`. A `409 unanswered_questions` re-shows the questions. `jev_unavailable` shows manual entry, never a guessed result |
 | 9. Late changes recheck everything | Showing an old revision's PASS | A plate whose latest verdict is for an older revision shows "rechecking" |
