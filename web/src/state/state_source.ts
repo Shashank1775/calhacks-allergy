@@ -6,7 +6,16 @@
  * Rules: fail closed. A source that is missing or not `live` must never let a
  * screen show PASS (see badge.ts).
  */
-import type { BinProfile, Entity, EntityState, Interaction, PlateBinding, Ticket, Verdict } from "../types/TEMPORARY";
+import type {
+  BinProfile,
+  Entity,
+  EntityState,
+  Interaction,
+  PlateBinding,
+  Ticket,
+  Verdict,
+  Zone,
+} from "../types/TEMPORARY";
 
 export type FeedStatus = "connecting" | "live" | "lost";
 
@@ -18,6 +27,7 @@ export type Tables = {
   plate_binding: PlateBinding[];
   interaction: Interaction[];
   verdict: Verdict[];
+  zone: Zone[];
 };
 
 export type TableName = keyof Tables;
@@ -44,5 +54,6 @@ export function empty_tables(): Tables {
     plate_binding: [],
     interaction: [],
     verdict: [],
+    zone: [],
   };
 }

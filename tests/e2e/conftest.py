@@ -6,7 +6,7 @@ Reads: contracts/scenarios/*.json; each step's public entry point: the Orders HT
        VerdictService (kitchen.verdict.service), GateService (kitchen.gate.service), and the published fakes
        (FakeStateClient, FakeProvenanceGraph, FakeClock, FakeLayaParser, FakeTranscriber, FakeLayaCheck, FakeGate,
        FakeSpeaker)
-Emits: the `kitchen` fixture, a factory for Kitchen
+Emits: the `kitchen` fixture, a factory for Kitchen; Kitchen itself, which tools/run_local.py serves on a live clock
 Rules: the harness never reaches into a team's internals and never computes a verdict itself: it plays the scenario
        and reads what the system wrote (verdict rows, gate states, spoken lines)
 
@@ -47,18 +47,21 @@ class Kitchen:
     graph: object
     scenario: dict
     parser: object = field(default_factory=FakeLayaParser)  # the LayaParser behind the Orders API
+    plate_check: object = field(default_factory=FakeLayaCheck)  # Laya's final plate check, in the verdict service
     clock: FakeClock = field(default_factory=FakeClock)
     gate: FakeGate = field(default_factory=lambda: FakeGate(quiet=True))
     speaker: FakeSpeaker = field(default_factory=lambda: FakeSpeaker(quiet=True))
     gate_log: list = field(default_factory=list)  # (t_ms, gate state) after every tick
+    cors_origins: list = field(default_factory=list)  # browser origins the Orders API allows (tools/run_local.py)
 
     def __post_init__(self):
         self.state.set_zones([PASS_ZONE])
-        self.verdict_service = VerdictService(self.state, self.graph, FakeLayaCheck(), self.clock)
+        self.verdict_service = VerdictService(self.state, self.graph, self.plate_check, self.clock)
         self.verdict_service.start()
         self.gate_loop = GateService(self.state, self.gate, self.speaker, self.clock, read_health=self.clock.now_ms)
         desk = TicketDesk(self.parser, self.state, self.clock)
-        self.orders = TestClient(create_app(desk, FakeTranscriber(), cors_origins=[]))
+        self.app = create_app(desk, FakeTranscriber(), cors_origins=self.cors_origins)  # tools/run_local.py serves it
+        self.orders = TestClient(self.app)
 
     def at(self, t_ms: int) -> None:
         """Move the shift's clock to t_ms."""
@@ -127,13 +130,12 @@ def make_state(config):
     return FakeStateClient()
 
 
-def make_graph(config, scenario):
-    """The ProvenanceGraph for this run: FakeProvenanceGraph, or the partner's once it's wired in here.
-
-    `real` fails rather than skips until then, for the same reason as make_state().
-    """
+def make_graph(config, scenario, state):
+    """The ProvenanceGraph for this run: FakeProvenanceGraph, or with `--graph real` the partner's, reading `state`."""
     if config.getoption("--graph", default="fake") == "real":
-        pytest.fail("--graph real: the partner's ProvenanceGraph isn't wired in yet (kitchen/graph is a skeleton)")
+        from kitchen.graph import ProvenanceGraph
+
+        return ProvenanceGraph(state)
     return FakeProvenanceGraph(scenario)
 
 
@@ -152,7 +154,7 @@ def kitchen(request):
             scenario = dict(scenario, tickets=[], amendments=[])
         state = make_state(request.config)
         load_scenario(state, scenario)
-        graph = make_graph(request.config, scenario)
+        graph = make_graph(request.config, scenario, state)
         return Kitchen(state=state, graph=graph, scenario=scenario, parser=parser or FakeLayaParser())
 
     return build

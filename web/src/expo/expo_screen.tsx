@@ -1,12 +1,14 @@
 /**
  * Expo board: tickets on the rail, plates on the pass, and why a plate is held.
  *
- * Reads: ticket, plate_binding, verdict (state source).
- * Rules: every badge comes from plate_badge(); this screen decides nothing.
+ * Reads: ticket, plate_binding, verdict, zone, entity, entity_state (state source); vision health.
+ * Rules: every badge comes from plate_badge(), and the gate panel's state from gate_view(); this
+ * screen decides nothing.
  */
 import { Rail } from "../components/rail";
 import { useFeedStatus, useTableRows } from "../state/hooks";
 import { CameraPanel } from "./camera_panel";
+import { GatePanel } from "./gate_panel";
 import { PlateCard } from "./plate_card";
 import { TicketChit } from "./ticket_chit";
 
@@ -18,6 +20,8 @@ export function ExpoScreen() {
 
   return (
     <>
+      <GatePanel />
+
       <Rail title="Orders in" note={`${tickets.length} on the rail`}>
         {tickets.length === 0 && <p className="empty">No tickets yet.</p>}
         {tickets.map((ticket) => (

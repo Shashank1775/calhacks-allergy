@@ -24,9 +24,9 @@
 - Every method raises `StateUnavailable` on connection loss, timeout or a rejected reducer, and never returns stale data as if it were current (invariant 1).
 - `subscribe()` exposes the age of the last update, so the gate can go `fault` on a stale feed.
 - Writes are idempotent by primary key. Each table has exactly one writer team, enforced by caller identity.
-- Every ticket revision is kept. `upsert_entities` never deletes an entity and never changes `first_seen_t_ms` or `origin` (invariants 8, 9).
+- A ticket row holds its latest revision; each verdict records the revision it judged. `register_entity` writes an entity once and never changes `first_seen_t_ms` or `origin`, and `entity_state` rows are only ever appended (known-clean source, late changes recheck everything).
 - `list_interactions` returns events in time order.
-- Throughput: `upsert_entities` about 5 times a second with up to ~30 entities; `record_interactions` bursts up to ~20 a second.
+- Throughput: `move_entity` about 5 times a second for up to ~30 entities; `record_interaction` bursts up to ~20 a second.
 
 These are checked by the `StateClient` contract suite in `kitchen/shared/contract_tests/` (platform). `FakeStateClient` is the reference behavior.
 

@@ -129,14 +129,11 @@ export function TicketEntry() {
           {error}
         </p>
       )}
-      <ToBeImplemented>
-        Amending a sent ticket (POST /tickets/&#123;id&#125;/amend), which rechecks the plate.
-      </ToBeImplemented>
     </Chit>
   );
 }
 
-function DraftSummary({ draft }: { draft: ParseResult }) {
+export function DraftSummary({ draft }: { draft: ParseResult }) {
   return (
     <div>
       <p className="bold">LAYA READ:</p>
@@ -157,7 +154,7 @@ function DraftSummary({ draft }: { draft: ParseResult }) {
   );
 }
 
-function QuestionBlock({
+export function QuestionBlock({
   question,
   busy,
   on_answer,

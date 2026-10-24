@@ -127,15 +127,19 @@ Owner: **platform** (`kitchen/shared/`). Used by **vision** (real frames, live),
 Per frame, a single channel that is bright where pixels changed since the previous frame: a gradient where brighter means more movement.
 
 ```python
+def letterbox_frame(rgb: np.ndarray, size: int) -> np.ndarray: ...          # in kitchen/shared/clips.py
+    # shrink a camera frame into a size x size square by area averaging; pad the short side with gray 114
+
 def change_mask(prev_rgb: np.ndarray, rgb: np.ndarray, prev_mask: np.ndarray | None, *,
                 gain: float, blur_sigma_px: float, decay: float) -> np.ndarray: ...
-    # both frames letterboxed to the same H x W first
+    # both frames letterboxed to the clip size first (letterbox_frame)
     # d = max over R,G,B of |rgb - prev_rgb| / 255
     # m = clip(gain * gaussian_blur(d, blur_sigma_px), 0, 1)
     # if decay > 0: m = max(m, decay * prev_mask)   # optional motion trail
 ```
 
-- Vision computes it for every real frame and hands it over in-process alongside each `ObservationFrame`. Recordings store it next to the frame JSONL as `change.npz` (uint8, downscaled).
+- **Always compute it at clip size** (128 × 128 after `letterbox_frame`), never at camera resolution and then shrink: gain and blur are tuned for clip-size frames, and full-resolution noise survives a shrink. The first frame of a stream has no previous frame, so its mask is all zeros.
+- Vision computes it for every real frame and hands it over in-process alongside each `ObservationFrame`. Recordings store it next to the frame JSONL as `change.npz` (uint8, 0 to 255): **divide by 255** before giving it to the clip builder, which rejects integer masks.
 - Sim renders abstract RGB frames (textured background, food blobs that move and smear, plain shapes for tools: never realistic spoons or forks), then runs the **same function**, so its masks have the same character as real ones.
 - Parameters (`gain`, `blur_sigma_px`, `decay`) are recorded in every clip's metadata.
 
@@ -145,12 +149,14 @@ def change_mask(prev_rgb: np.ndarray, rgb: np.ndarray, prev_mask: np.ndarray | N
 def build_clip(a_id: str, b_id: str, steps: Sequence[ClipStep], *, clip_id: str, source: str, tensor_file: str,
                change_mask_params: dict, H: int = 128, W: int = 128, view: str = "full",
                channels: Sequence[str] = ("box_a", "box_b", "change"), generator: dict | None = None,
-               labels: dict | None = None) -> tuple[InteractionClip, np.ndarray]: ...
+               labels: dict | None = None, source_size: tuple[int, int] | None = None) -> tuple[InteractionClip, np.ndarray]: ...
     # ClipStep = (t_ms, box_a, box_b, change_mask, other_boxes); a missed box is None and draws as all zeros
     # returns the interaction_clip record and a uint8 [T, C, H, W] tensor (0 to 255)
 ```
 
 - `box_a` and `box_b` channels are 1 inside each entity's box (normalized boxes drawn at H x W). `change` is the change mask. `dt_ms` carries elapsed time per step.
+- **Live, pass `source_size`** = the camera frame's (width, height). Boxes are normalized to the camera frame, so the builder moves them through the same letterbox as the frames; without it, boxes from a 16:9 frame land on the wrong rows and miss their own change. Sim renders square frames and leaves it `None`.
+- Only `view="full"` is built; `"pair"` raises until someone needs it.
 - No object class, kind or appearance goes in.
 
 ## LayaParser
