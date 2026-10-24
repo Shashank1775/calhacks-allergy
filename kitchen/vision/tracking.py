@@ -11,10 +11,13 @@ Rules: fail closed: a lost track emits nothing (no box is predicted or interpola
        object seen again is a new entity (identity.py)
 
 Association, per class group (each object class, and pose people), ByteTrack style but with no motion model:
-    1. detections scoring >= track_high_score match tracks by IoU, greedily, best pair first, IoU >= track_match_iou;
-    2. detections scoring >= track_low_score match the tracks still unmatched, the same way;
-    3. unmatched high detections start new tracks; unmatched low ones are dropped;
-    4. a track unmatched for more than track_lost_frames frames ends for good.
+    1. a track last matched more than track_lost_ms ago ends for good, even if frames stopped coming meanwhile;
+    2. detections scoring >= track_high_score match tracks by IoU, greedily, best pair first, IoU >= track_match_iou;
+    3. detections scoring >= track_low_score match the tracks still unmatched, the same way;
+    4. unmatched high detections start new tracks; unmatched low ones are dropped.
+
+The tracks a frame leaves unmatched are handed to identity.py with every new track that frame: a new track then may be
+one of those objects under a new ID (an ID switch), so it can't claim a clean origin.
 """
 
 import itertools
@@ -69,11 +72,11 @@ def greedy_match(iou: np.ndarray, min_iou: float) -> list[tuple[int, int]]:
 
 @dataclass
 class Track:
-    """One live track: its ID, the box it was last matched to, and how many frames in a row it has gone unmatched."""
+    """One live track: its ID, the box it was last matched to, and the t_ms of that match."""
 
     track_id: int
     box: Box
-    lost_frames: int = 0
+    last_seen_ms: int
 
 
 class TrackSet:
@@ -85,11 +88,12 @@ class TrackSet:
         self.new_track_id = new_track_id
         self.tracks: list[Track] = []
 
-    def update(self, boxes: list[Box], scores: list[float]) -> tuple[dict[int, int], list[int]]:
-        """Associate one frame's detections with the tracks.
+    def update(self, boxes: list[Box], scores: list[float], t_ms: int) -> tuple[dict[int, int], list[int], list[int]]:
+        """Associate one frame's detections, seen at `t_ms`, with the tracks.
 
-        Returns which track each matched or new detection belongs to ({detection index: track_id}) and the IDs of
-        tracks that ended this frame. Detections not in the first dict are dropped.
+        Returns which track each matched or new detection belongs to ({detection index: track_id}), the IDs of tracks
+        that ended this frame, and the IDs of every track left unmatched this frame (the ended ones too). Detections
+        not in the first dict are dropped.
         """
         high = [index for index, score in enumerate(scores) if score >= self.settings.track_high_score]
         low = [
@@ -98,22 +102,25 @@ class TrackSet:
             if self.settings.track_low_score <= score < self.settings.track_high_score
         ]
 
-        owners: dict[int, int] = {}
-        unmatched_tracks = self._match(self.tracks, high, boxes, owners)
-        unmatched_tracks = self._match(unmatched_tracks, low, boxes, owners)
+        ended = self._end_stale_tracks(t_ms)
 
-        ended = self._age(unmatched_tracks)
+        owners: dict[int, int] = {}
+        unmatched_tracks = self._match(self.tracks, high, boxes, owners, t_ms)
+        unmatched_tracks = self._match(unmatched_tracks, low, boxes, owners, t_ms)
+        missing = ended + [track.track_id for track in unmatched_tracks]
 
         # Only a confident detection starts a track: a weak one alone is too likely a false positive.
         for index in high:
             if index not in owners:
-                track = Track(self.new_track_id(), boxes[index])
+                track = Track(self.new_track_id(), boxes[index], t_ms)
                 self.tracks.append(track)
                 owners[index] = track.track_id
 
-        return owners, ended
+        return owners, ended, missing
 
-    def _match(self, tracks: list[Track], indexes: list[int], boxes: list[Box], owners: dict[int, int]) -> list[Track]:
+    def _match(
+        self, tracks: list[Track], indexes: list[int], boxes: list[Box], owners: dict[int, int], t_ms: int
+    ) -> list[Track]:
         """Match `tracks` to the detections at `indexes`, record the matches in `owners`, and return the tracks left
         unmatched."""
         iou = iou_matrix([track.box for track in tracks], [boxes[index] for index in indexes])
@@ -121,18 +128,18 @@ class TrackSet:
         for row, column in greedy_match(iou, self.settings.track_match_iou):
             track = tracks[row]
             track.box = boxes[indexes[column]]
-            track.lost_frames = 0
+            track.last_seen_ms = t_ms
             owners[indexes[column]] = track.track_id
             matched.add(row)
         return [track for row, track in enumerate(tracks) if row not in matched]
 
-    def _age(self, unmatched_tracks: list[Track]) -> list[int]:
-        """Count a missed frame for each unmatched track and end those lost too long. Returns the ended IDs."""
-        ended = []
-        for track in unmatched_tracks:
-            track.lost_frames += 1
-            if track.lost_frames > self.settings.track_lost_frames:
-                ended.append(track.track_id)
+    def _end_stale_tracks(self, t_ms: int) -> list[int]:
+        """End the tracks last matched more than track_lost_ms before `t_ms`, before they can match. Returns their IDs.
+
+        Time, not a frame count: at a low frame rate, or after the camera stalls, a frame count would let an object
+        come back under its old ID (and its clean origin) after a much longer absence than the lost buffer.
+        """
+        ended = [track.track_id for track in self.tracks if t_ms - track.last_seen_ms > self.settings.track_lost_ms]
         self.tracks = [track for track in self.tracks if track.track_id not in ended]
         return ended
 
@@ -184,7 +191,7 @@ class Tracker:
         track_ids = itertools.count(1)
         self.object_tracks = {name: TrackSet(settings, lambda: next(track_ids)) for name in OBJECT_CLASSES}
         self.person_tracks = TrackSet(settings, lambda: next(track_ids))
-        self.identities = IdentityBook(settings.shift_start_ms)
+        self.identities = IdentityBook(settings.shift_start_ms, settings.track_lost_ms)
 
     def update(
         self, objects: list[Detection], people: list[Person], t_ms: int, zone_of: ZoneLookup, width: int, height: int
@@ -210,8 +217,8 @@ class Tracker:
 
     def _track_objects(self, class_name: str, detections: list[Detection], t_ms: int, zone_of: ZoneLookup) -> list:
         """Track one object class and return its detection items."""
-        owners, ended = self.object_tracks[class_name].update(
-            [detection.box for detection in detections], [detection.confidence for detection in detections]
+        owners, ended, missing = self.object_tracks[class_name].update(
+            [detection.box for detection in detections], [detection.confidence for detection in detections], t_ms
         )
         # Ended tracks go first, so a bin slot freed this frame can go to a bowl first seen in it this frame.
         for track_id in ended:
@@ -221,14 +228,14 @@ class Tracker:
         for index, track_id in owners.items():
             detection = detections[index]
             zone = zone_of(box_centre(detection.box))
-            identity = self.identities.object_identity(track_id, class_name, t_ms, zone)
+            identity = self.identities.object_identity(track_id, class_name, t_ms, zone, maybe_switched=bool(missing))
             items.append(detection_item(track_id, identity, class_name, detection.box, detection.confidence, zone))
         return items
 
     def _track_people(self, people: list[Person], t_ms: int, zone_of: ZoneLookup, width: int, height: int) -> list:
         """Track pose people and return a hand item for each confident wrist."""
-        owners, ended = self.person_tracks.update(
-            [person.box for person in people], [person.confidence for person in people]
+        owners, ended, missing = self.person_tracks.update(
+            [person.box for person in people], [person.confidence for person in people], t_ms
         )
         for track_id in ended:
             self.identities.end_track(track_id)
@@ -242,7 +249,7 @@ class Tracker:
                 if wrist[2] < self.settings.wrist_min_confidence:
                     continue
                 zone = zone_of((wrist[0], wrist[1]))
-                identity = self.identities.hand_identity(track_id, side, t_ms)
+                identity = self.identities.hand_identity(track_id, side, t_ms, maybe_switched=bool(missing))
                 box = hand_box(wrist, elbow, self.settings, width, height)
                 item = detection_item(track_id, identity, "wrist", box, wrist[2], zone)
                 item["person_id"] = self.identities.person_label(track_id)
