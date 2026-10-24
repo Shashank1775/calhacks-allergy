@@ -20,7 +20,10 @@ Turns camera frames into tracked, stably identified bins, tools, hands and plate
 |---|---|
 | `camera.py` | Frame sources: video file, webcam, JSONL replay, and later the Pi camera |
 | `detect.py` | YOLOv8s detection and pose with ONNX Runtime, plus the pre- and post-processing every backend shares. `VISION_DETECTOR=onnx\|hailo` picks the backend (default `onnx`) |
-| `hailo.py` | Builds the Hailo deploy bundle, runs the HEF with HailoRT on the Pi, and checks ONNX-vs-HEF parity. Imported only when `VISION_DETECTOR=hailo` |
+| `hailo.py` | `HailoSession`: a drop-in for `onnxruntime.InferenceSession` that runs a HEF with HailoRT on the Pi and returns the same ONNX-shaped output, so `detect.py` keeps one post-processing path. Also the on-Pi device check. Imports `hailo_platform` only when the device is opened |
+| `bundle.py` | Builds the deploy bundle on the laptop: ONNX copies, calibration frames, parity frames, manifest, and the HEFs (precompiled for stock weights) or `compile.sh` (custom weights) |
+| `parity.py` | Runs the bundle's parity frames through ONNX (laptop) or the HEFs (Pi) and compares the detections |
+| `pi_setup.sh` | Installs HailoRT on the Pi, makes the venv, and runs the device and parity checks |
 | `tracking.py` | ByteTrack, then track → entity ID and `origin`. A track lost and re-acquired always becomes a new entity |
 | `zones.py` | Zones file format, click-to-calibrate tool, zone assignment, `StateClient.set_zones`, and "start plate" binding |
 | `record.py` | Records `frames.jsonl`, `change.npz` and a manifest; deterministic replay |
@@ -57,12 +60,50 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
 
 Details and versions are in the [Hailo models decision](../../docs/decisions/hailo-models.md).
 
-1. **One model artifact.** `yolov8s.pt` and `yolov8s-pose.pt` at a fixed 640×640 input, exported once to fixed-shape ONNX and run locally with ONNX Runtime.
-2. **One processing path** in `detect.py`, shared by both backends. The Hailo backend only replaces "run the network" (the detection HEF also runs NMS, with the same thresholds).
-3. **A deploy bundle** in `data/models/<name>/`: `model.onnx`, `calib/` (a few hundred frames from our kitchen recordings), `manifest.json` (classes, input size, thresholds, hashes, versions) and `model.hef`.
-4. **Precompiled HEFs** from Hailo Model Zoo v2.18.0, which pairs with HailoRT 4.23.0 on Pi OS Trixie.
-5. **Parity check.** When the device is connected, the owner runs one recorded clip through ONNX (laptop) and HEF (Pi) and compares detections.
-6. **Upload.** Copy the bundle to the Pi, set `VISION_DETECTOR=hailo`, and check `/health` reports `detector: hailo` and at least 30 FPS.
+**One processing path.** Both backends take the same letterboxed float `[1, 3, 640, 640]` tensor (0 to 1) and return the same Ultralytics output (`[1, 84, 8400]` detection, `[1, 56, 8400]` pose). `HailoSession` converts on the way in (uint8 NHWC) and on the way out: the detection HEF ends in HailoRT's NMS, so its boxes become output columns; the pose HEF returns nine raw heads, decoded on the host with Ultralytics' math. `detect.py` only chooses how to open the sessions:
+
+```python
+if settings.detector == "hailo":
+    from kitchen.vision.hailo import open_sessions
+    sessions = open_sessions(bundle_dir)          # {"det": HailoSession, "pose": HailoSession}, one device
+else:
+    sessions = {name: onnxruntime.InferenceSession(str(bundle_dir / f"{name}.onnx")) for name in ("det", "pose")}
+outputs = sessions["det"].run(None, {"images": tensor})  # same call, same output, either backend
+```
+
+**1. Export ONNX (laptop).** Fixed 640×640, opset 11 so the Hailo Model Zoo recipes accept custom weights too:
+
+```bash
+uvx --from ultralytics yolo export model=yolov8s.pt format=onnx imgsz=640 opset=11
+uvx --from ultralytics yolo export model=yolov8s-pose.pt format=onnx imgsz=640 opset=11
+```
+
+**2. Build the bundle (laptop).** `--weights stock` downloads Model Zoo v2.18.0's precompiled `yolov8s.hef` and `yolov8s_pose.hef` (it refuses ONNX files that aren't stock-shaped). `--weights custom` writes `compile.sh` instead, which needs Hailo's Dataflow Compiler on an x86-64 Linux machine (not the Mac or the Pi):
+
+```bash
+uv run python -m kitchen.vision.bundle --name kitchen-v1 --weights stock \
+    --det-onnx yolov8s.onnx --pose-onnx yolov8s-pose.onnx --video data/recordings/<prep>.mp4
+uv run python -m kitchen.vision.parity run --bundle data/models/kitchen-v1 --backend onnx
+```
+
+**3. Set up the Pi (owner, once).** Raspberry Pi OS 64-bit Trixie. `install` puts on `hailo-all` (HailoRT 4.23.0), holds it, and makes a venv that can see the system's `hailo_platform`:
+
+```bash
+bash kitchen/vision/pi_setup.sh install && sudo reboot
+```
+
+**4. Upload and check (owner).** Copy the bundle, run the device check (FPS for det, pose and both; we need 30 or more) and the parity run, then compare on the laptop:
+
+```bash
+rsync -a data/models/kitchen-v1/ <user>@raspberrypi.local:<repo>/data/models/kitchen-v1/
+bash kitchen/vision/pi_setup.sh check data/models/kitchen-v1          # on the Pi
+scp <user>@raspberrypi.local:<repo>/data/models/kitchen-v1/parity/hailo.npz data/models/kitchen-v1/parity/
+uv run python -m kitchen.vision.parity compare data/models/kitchen-v1/parity/onnx.npz data/models/kitchen-v1/parity/hailo.npz
+```
+
+`compare` exits 1 unless the HEF finds at least 90% of the ONNX boxes (and vice versa) with mean IoU 0.8 or more and mean score difference 0.1 or less. Then set `VISION_DETECTOR=hailo` and check `/health` reports `detector: hailo`.
+
+Unverified until the device is connected: the HailoRT calls in `HailoNetwork` (written against HailoRT 4.23's `InferModel` API and tested only on a mock), and that the pose HEF applies the score sigmoid on the chip, as Hailo's own decoder assumes. The device check and parity run settle both.
 
 ## Watch out for
 
