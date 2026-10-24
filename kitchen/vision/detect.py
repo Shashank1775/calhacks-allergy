@@ -11,8 +11,9 @@ Rules: fail closed: a missing or broken bundle raises at startup and a wrong-sha
        or interpolated; backends only run the network and one post-processing path serves both, so local results
        predict Hailo results; onnxruntime and hailo_platform are imported only when a detector is opened
 
-The letterbox is kitchen/shared/clips.py's (letterbox_frame and letterbox_layout at settings.input_size, gray 114), so
-the detector, the change mask and the clip builder all place a frame inside its square the same way.
+The letterbox geometry is kitchen/shared/clips.py's (letterbox_layout at settings.input_size, gray 114), so the
+detector, the change mask and the clip builder all place a frame inside its square the same way. The detector resizes
+pixels with OpenCV (fast, and what Ultralytics trains with); the change mask keeps clips.py's own letterbox_frame.
 """
 
 import json
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from kitchen.shared.clips import letterbox_frame, letterbox_layout
+from kitchen.shared.clips import LETTERBOX_PAD, letterbox_layout
 from kitchen.vision.common import COCO_OBJECTS, KEYPOINTS, Box, Detection, Keypoint, Person, SourceFrame, VisionSettings
 
 # Ultralytics output rows: box (center x, center y, width, height in input pixels), then 80 COCO class scores for
@@ -52,9 +53,18 @@ def letterbox_for(frame_width: int, frame_height: int, input_size: int) -> Lette
 def to_input_tensor(rgb: np.ndarray, input_size: int) -> np.ndarray:
     """Letterbox a uint8 RGB frame to the network input: float32 [1, 3, S, S], RGB, 0 to 1.
 
-    Uses clips.py's letterbox_frame, which refuses frames smaller than the input rather than upscaling them.
+    The geometry is clips.py's letterbox_layout (so boxes map back exactly as the clip builder maps them), and the
+    pixels are resized with OpenCV's bilinear filter, as Ultralytics trains: about ten times faster than clips.py's
+    area averaging, which only the change mask needs (to match sim's renders pixel for pixel). Frames of any size work.
     """
-    square = letterbox_frame(rgb, input_size)
+    import cv2
+
+    height, width = rgb.shape[:2]
+    content_width, content_height, left, top = letterbox_layout(width, height, input_size)
+    square = np.full((input_size, input_size, 3), LETTERBOX_PAD, dtype=np.uint8)
+    square[top : top + content_height, left : left + content_width] = cv2.resize(
+        rgb, (content_width, content_height), interpolation=cv2.INTER_LINEAR
+    )
     return np.ascontiguousarray(square.transpose(2, 0, 1)[None], dtype=np.float32) / 255
 
 
@@ -241,8 +251,18 @@ def read_bundle_manifest(bundle_dir: Path) -> dict:
     return manifest
 
 
-def open_onnx_sessions(bundle_dir: Path, networks: dict) -> dict:
-    """One ONNX Runtime CPU session per network (det, pose), from the bundle's ONNX files."""
+def onnx_providers(wanted: str, available: list[str]) -> list[str]:
+    """The execution providers to use, in order: those in `wanted` (comma-separated) that this ONNX Runtime has,
+    always ending with the CPU provider so a network is never left without one."""
+    providers = [name.strip() for name in wanted.split(",") if name.strip() in available]
+    if "CPUExecutionProvider" not in providers:
+        providers.append("CPUExecutionProvider")
+    return providers
+
+
+def open_onnx_sessions(bundle_dir: Path, networks: dict, wanted_providers: str = "CPUExecutionProvider") -> dict:
+    """One ONNX Runtime session per network (det, pose), from the bundle's ONNX files, on the wanted providers that
+    exist here (CoreML on a Mac runs both networks about ten times faster than the CPU)."""
     paths = {name: Path(bundle_dir) / networks[name]["onnx"] for name in ("det", "pose")}
     for path in paths.values():
         if not path.is_file():
@@ -250,10 +270,8 @@ def open_onnx_sessions(bundle_dir: Path, networks: dict) -> dict:
 
     import onnxruntime
 
-    return {
-        name: onnxruntime.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-        for name, path in paths.items()
-    }
+    providers = onnx_providers(wanted_providers, onnxruntime.get_available_providers())
+    return {name: onnxruntime.InferenceSession(str(path), providers=providers) for name, path in paths.items()}
 
 
 def open_detector(settings: VisionSettings) -> Detector:
@@ -271,5 +289,5 @@ def open_detector(settings: VisionSettings) -> Detector:
 
         sessions = open_sessions(bundle_dir)
     else:
-        sessions = open_onnx_sessions(bundle_dir, networks)
+        sessions = open_onnx_sessions(bundle_dir, networks, settings.onnx_providers)
     return Detector(sessions, settings, settings.detector)

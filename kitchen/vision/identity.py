@@ -9,6 +9,12 @@ Rules: known-clean source: a new track is a new entity, so a re-acquired object 
        shift_start only up to shift start, clean_stack only for a tool or bowl first seen in a clean_stack zone (a
        hand never comes out of a stack), otherwise unknown; numbers are never reused
 
+A clean stack can't vouch for an object that went missing inside it. When a tool or plate track ends while it is in a
+clean_stack zone, the object may still be there, hidden, and may come back as a new track: a dirty knife put back in
+the rack and covered by a hand would otherwise reappear clean. So the next new track of that class first seen in a
+clean stack is unknown, not clean_stack, once for each such loss (every judgment call leans toward HOLD). A genuinely
+new clean item arriving just then holds once: an annoyance, not a risk.
+
 The one exception is bins. Orders keys bin profiles by bin-<n>, so a bowl first seen in the bin slot zone slot-<n> is
 bin-<n>, and a bowl re-acquired in slot-<n> is bin-<n> again, keeping the origin bin-<n> was first given. Bins are
 identified by slot, so swapping bins between slots mid-shift is unsupported. While a track holds bin-<n>, another new
@@ -76,15 +82,22 @@ class IdentityBook:
         self._hands: dict[tuple[int, str], Identity] = {}
         self._bin_holders: dict[str, int] = {}
         self._bin_origins: dict[str, str] = {}
+        # Per detector class: tracks that ended inside a clean stack and may still be hiding there.
+        self._lost_in_clean_stack = dict.fromkeys((*TOOL_CLASSES, BOWL), 0)
+        self._class_by_track: dict[int, str] = {}
+        self._zone_by_track: dict[int, Zone | None] = {}
 
     def object_identity(self, track_id: int, class_name: str, t_ms: int, zone: Zone | None) -> Identity:
         """The identity of an object track, made the first time the track is seen and fixed after that.
 
-        `zone` is where the track's box centre is in this frame; it only matters on the track's first frame.
+        `zone` is where the track's box centre is in this frame. It sets the identity on the track's first frame, and
+        the latest one is remembered so a track that ends inside a clean stack is noticed.
         """
+        self._zone_by_track[track_id] = zone
         known = self._by_track.get(track_id)
         if known is not None:
             return known
+        self._class_by_track[track_id] = class_name
 
         if class_name in TOOL_CLASSES:
             identity = self._new_tool(class_name, t_ms, zone)
@@ -129,19 +142,31 @@ class IdentityBook:
         """Forget a track that has ended for good: it frees the bin slot it held, and its entity is never handed out
         again (except a bin, by its slot)."""
         identity = self._by_track.pop(track_id, None)
+        class_name = self._class_by_track.pop(track_id, None)
+        last_zone = self._zone_by_track.pop(track_id, None)
         if identity is not None and identity.kind == "bin":
             del self._bin_holders[identity.entity_id]
+        elif identity is not None and last_zone is not None and last_zone.kind == "clean_stack":
+            self._lost_in_clean_stack[class_name] += 1
 
         if track_id in self._person_by_track:
             del self._person_by_track[track_id]
             for side in HAND_SIDES:
                 self._hands.pop((track_id, side), None)
 
+    def _origin(self, class_name: str, t_ms: int, zone: Zone | None) -> str:
+        """origin_for(), except that a newcomer to a clean stack where an object of its class went missing is unknown."""
+        origin = origin_for(t_ms, zone, self.shift_start_ms)
+        if origin == "clean_stack" and self._lost_in_clean_stack[class_name] > 0:
+            self._lost_in_clean_stack[class_name] -= 1
+            return "unknown"
+        return origin
+
     def _new_tool(self, class_name: str, t_ms: int, zone: Zone | None) -> Identity:
         """A new tool entity: the next number for its class."""
         self._tool_counts[class_name] += 1
         entity_id = f"tool-{class_name}-{self._tool_counts[class_name]}"
-        return Identity(entity_id, "tool", origin_for(t_ms, zone, self.shift_start_ms))
+        return Identity(entity_id, "tool", self._origin(class_name, t_ms, zone))
 
     def _new_bowl(self, track_id: int, t_ms: int, zone: Zone | None) -> Identity:
         """A new bowl track: bin-<n> when first seen in a free slot-<n>, otherwise a new plate."""
@@ -156,4 +181,4 @@ class IdentityBook:
                 return Identity(entity_id, "bin", origin)
 
         self._plate_count += 1
-        return Identity(f"plate-{self._plate_count}", "plate", origin_for(t_ms, zone, self.shift_start_ms))
+        return Identity(f"plate-{self._plate_count}", "plate", self._origin(BOWL, t_ms, zone))

@@ -302,3 +302,37 @@ class ReplaySource:
                 if wait_ms > 0:
                     time.sleep(wait_ms / 1000)
             yield output
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI: record a video or camera through the whole vision pipeline into a new recording directory.
+
+        uv run python -m kitchen.vision.record --source data/recordings/prep.mp4 --out data/recordings/run1
+        uv run python -m kitchen.vision.record --source camera:0 --zones zones.json --out data/recordings/run2
+
+    It is kitchen.vision.run with --record (which builds the frames); `camera:<n>` is webcam n.
+    """
+    import argparse
+
+    from kitchen.vision import run
+
+    parser = argparse.ArgumentParser(description="Record vision frames, change masks and a manifest.")
+    parser.add_argument("--source", required=True, help="a video file, or camera:<index> for a webcam")
+    parser.add_argument("--out", required=True, type=Path, help="a new directory for the recording")
+    parser.add_argument("--zones", type=Path, help="zones.json")
+    args = parser.parse_args(argv)
+
+    if args.source.startswith("camera:"):
+        source = ["--webcam", args.source.removeprefix("camera:")]
+    else:
+        source = ["--video", args.source]
+    zones = ["--zones", str(args.zones)] if args.zones else []
+    return run.main([*source, *zones, "--record", str(args.out)])
+
+
+if __name__ == "__main__":
+    import logging
+    import sys
+
+    logging.basicConfig(level=logging.INFO)
+    sys.exit(main())

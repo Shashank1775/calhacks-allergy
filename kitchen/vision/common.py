@@ -101,6 +101,8 @@ class VisionSettings:
     # Which backend runs the networks: "onnx" (laptop) or "hailo" (the Pi), and the deploy bundle both read.
     detector: str = "onnx"
     bundle_dir: str = "data/models/stock-yolov8s"
+    # ONNX Runtime execution providers to try, in order (only those installed are used; the CPU is always last).
+    onnx_providers: str = "CoreMLExecutionProvider,CPUExecutionProvider"
     camera_id: str = "cam0"
     input_size: int = 640
 
@@ -127,6 +129,10 @@ class VisionSettings:
 
     # Known-clean source: what is visible this long after the shift starts counts as there at shift start (clean).
     shift_start_ms: int = 3000
+
+    # "Start plate" binds only from a frame at most this old (plates.py): a frozen camera's last frame must not bind
+    # whatever plate used to be on the spot. At 30 FPS this allows about 15 dropped frames.
+    plate_bind_max_age_ms: int = 500
 
     # The change mask, with the agreed clip geometry (AGENTS.md, Open questions: clip geometry).
     clip_size: int = 128

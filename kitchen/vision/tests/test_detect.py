@@ -293,12 +293,30 @@ def test_detector_runs_both_sessions_on_one_letterboxed_tensor():
     assert detector.backend == "onnx"
 
 
-def test_input_tensor_uses_the_shared_clip_letterbox():
-    from kitchen.shared.clips import letterbox_frame
+def test_input_tensor_has_the_shared_clip_letterbox_geometry():
+    """The content sits exactly where clips.py's letterbox puts it (so boxes map back the same way), with the shared
+    gray around it; only the resampling filter differs, so a smooth image comes out nearly the same."""
+    from kitchen.shared.clips import LETTERBOX_PAD, letterbox_frame, letterbox_layout
 
-    rgb = np.random.default_rng(0).integers(0, 256, (720, 1280, 3), dtype=np.uint8)
-    expected = letterbox_frame(rgb, SIZE).transpose(2, 0, 1)[None] / 255
-    assert to_input_tensor(rgb, SIZE) == pytest.approx(expected)
+    x = np.linspace(0, 255, 1280)[None, :, None]
+    y = np.linspace(0, 255, 720)[:, None, None]
+    rgb = np.broadcast_to((x + y) / 2, (720, 1280, 3)).astype(np.uint8)
+    tensor = to_input_tensor(rgb, SIZE)
+
+    content_width, content_height, left, top = letterbox_layout(1280, 720, SIZE)
+    pixels = np.rint(tensor[0].transpose(1, 2, 0) * 255).astype(np.uint8)
+    assert (pixels[:top] == LETTERBOX_PAD).all()
+    assert (pixels[top + content_height :] == LETTERBOX_PAD).all()
+    assert pixels.shape == (SIZE, SIZE, 3)
+    shared = letterbox_frame(rgb, SIZE).astype(int)
+    assert np.abs(pixels.astype(int) - shared).max() <= 3
+
+
+def test_input_tensor_upscales_a_frame_smaller_than_the_input():
+    """A small webcam frame (smaller than the network input) is upscaled into the square instead of refused."""
+    tensor = to_input_tensor(np.zeros((240, 320, 3), dtype=np.uint8), SIZE)
+
+    assert tensor.shape == (1, 3, SIZE, SIZE)
 
 
 @pytest.mark.safety
@@ -375,3 +393,12 @@ def test_real_bundle_finds_people_in_the_parity_frames():
         for found in [*objects, *people]:
             x1, y1, x2, y2 = found.box
             assert 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1
+
+
+def test_onnx_providers_keep_the_wanted_order_drop_missing_ones_and_end_on_the_cpu():
+    from kitchen.vision.detect import onnx_providers
+
+    available = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    assert onnx_providers("CoreMLExecutionProvider,CPUExecutionProvider", available) == available
+    assert onnx_providers("CUDAExecutionProvider, CoreMLExecutionProvider", available) == available
+    assert onnx_providers("CUDAExecutionProvider", ["CPUExecutionProvider"]) == ["CPUExecutionProvider"]

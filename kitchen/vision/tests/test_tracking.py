@@ -397,3 +397,63 @@ def test_identity_book_never_hands_out_an_id_twice(kinds):
         if identity.kind != "bin":
             assert identity.entity_id not in seen
         seen.append(identity.entity_id)
+
+
+def lose_all(tracker, start_ms):
+    """Run enough empty frames from start_ms to end every live track."""
+    for frame in range(SETTINGS.track_lost_frames + 2):
+        tracker.update([], [], start_ms + frame * FRAME_MS, zone_of, 640, 640)
+
+
+@pytest.mark.safety
+def test_an_object_lost_inside_the_clean_stack_comes_back_unknown():
+    """Known-clean source: a knife that vanished inside the rack may be a dirty one put back and hidden by a hand, so
+    the next knife that turns up in the rack has unknown history instead of starting clean."""
+    tracker = Tracker(SETTINGS)
+    tracker.update([knife(KNIFE_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)  # a dirty knife, out on the counter
+    tracker.update([knife(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)  # put in the rack
+    lose_all(tracker, AFTER_SHIFT_START + 2 * FRAME_MS)  # a hand covers it until its track ends
+
+    again = tracker.update([knife(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + 1000, zone_of, 640, 640)
+
+    assert again[0]["zone"] == "clean-stack"
+    assert again[0]["origin"] == "unknown"
+
+
+@pytest.mark.safety
+def test_each_loss_in_the_clean_stack_taints_one_newcomer_of_that_class():
+    tracker = Tracker(SETTINGS)
+    tracker.update([knife(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    lose_all(tracker, AFTER_SHIFT_START + FRAME_MS)
+
+    first = tracker.update([knife(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + 1000, zone_of, 640, 640)
+    lose_all(tracker, AFTER_SHIFT_START + 1000 + FRAME_MS)
+    # Losing the newcomer in the rack too taints the next one again.
+    second = tracker.update([knife(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + 2000, zone_of, 640, 640)
+    spoon = tracker.update([Detection("spoon", CLEAN_STACK_BOX, 0.9)], [], AFTER_SHIFT_START + 2100, zone_of, 640, 640)
+
+    assert first[0]["origin"] == "unknown"
+    assert second[0]["origin"] == "unknown"
+    assert spoon[0]["origin"] == "clean_stack"  # a spoon is not the knife that went missing
+
+
+def test_an_object_lost_outside_the_clean_stack_does_not_taint_it():
+    tracker = Tracker(SETTINGS)
+    tracker.update([knife(KNIFE_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    lose_all(tracker, AFTER_SHIFT_START + FRAME_MS)
+
+    newcomer = tracker.update([knife(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + 1000, zone_of, 640, 640)
+
+    assert newcomer[0]["origin"] == "clean_stack"
+
+
+@pytest.mark.safety
+def test_a_plate_lost_in_the_clean_stack_taints_the_next_plate_there():
+    tracker = Tracker(SETTINGS)
+    tracker.update([bowl(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    lose_all(tracker, AFTER_SHIFT_START + FRAME_MS)
+
+    again = tracker.update([bowl(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + 1000, zone_of, 640, 640)
+
+    assert again[0]["kind"] == "plate"
+    assert again[0]["origin"] == "unknown"
