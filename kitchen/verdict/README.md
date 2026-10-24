@@ -46,14 +46,14 @@ The sum is the safe bound however the allergens depend on each other (one knife 
 
 ## Running the plate check
 
-The fine-tuned plate model lives in `data/models/laya-plate-v1` (gitignored, about 800 MB; set `LAYA_PLATE_MODEL_DIR`). It needs the `laya` package for the run:
+The fine-tuned plate model lives in `data/models/laya-plate-v2` (gitignored, about 800 MB; set `LAYA_PLATE_MODEL_DIR`). It needs the `laya` package for the run:
 
 ```bash
-uv run --with laya==0.4.14 python -m kitchen.verdict.training.check_golden --model data/models/laya-plate-v1
+uv run --with laya==0.4.14 python -m kitchen.verdict.training.check_golden --model data/models/laya-plate-v2
 uv run python -m kitchen.verdict.training.plate_data data/laya_training/plates   # regenerate the training data
 ```
 
-plate-v1 was trained on 1,300 generated kitchens (3 epochs, 14 minutes on one A6000). On 200 held-out kitchens it is 99.5% accurate, scores a typical clean plate at 0.001, misses no reached allergen under the flag rule, and gets all six golden scenarios right.
+plate-v2 was trained on 1,700 generated kitchens, a third of them washed stories (3 epochs, about 28 minutes on one A6000). On 200 held-out kitchens it is 98.4% accurate (counted at 0.5), scores a typical clean plate at 0.0015, never misses an allergen at an anaphylactic ticket's threshold, wrongly holds 0.2% to 1.8% of clean questions depending on the threshold, and gets all six golden scenarios (seven verdicts) right. The washed-knife scenario is close: 0.049 against a 0.05 cutoff on a 0.95 ticket.
 
 ## Safety rules
 

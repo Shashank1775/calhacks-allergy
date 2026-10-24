@@ -90,7 +90,8 @@ def random_kitchen(rng):
     return bins, tools, hands, plate
 
 
-STORY_WEIGHTS = {"carry": 45, "carry_washed": 15, "too_late": 10, "clean_path": 20, "untouched": 10}
+# Washed stories land in the 1-10% band where the verdict's thresholds decide, so they get extra weight.
+STORY_WEIGHTS = {"carry": 35, "carry_washed": 35, "too_late": 10, "clean_path": 15, "untouched": 5}
 
 
 def random_steps(rng, bins, tools, hands, plate):
@@ -269,7 +270,7 @@ def golden_rows():
 def main():
     arg_parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     arg_parser.add_argument("out_dir")
-    arg_parser.add_argument("--count", type=int, default=1600)
+    arg_parser.add_argument("--count", type=int, default=2000)
     arg_parser.add_argument("--seed", type=int, default=7)
     args = arg_parser.parse_args()
 
