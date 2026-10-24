@@ -5,8 +5,10 @@ Step:  shared
 Reads: records written through the StateClient methods (validated against contracts/schemas on write)
 Emits: the StateClient reads and ChangeEvents to subscribers
 Rules: known-clean source: entities are never deleted and first_seen_t_ms and origin never change; entity history is
-       append-only; a ticket row holds the latest revision and only revision + 1 replaces it (late changes recheck
-       everything); set_unavailable() and fail_next() make every method raise StateUnavailable (fail closed)
+       append-only, and an entity's zone, box and allergens come from its newest row by t_ms (not the one written last),
+       as the real database joins them; a ticket row holds the latest revision and only revision + 1 replaces it (late
+       changes recheck everything); set_unavailable() and fail_next() make every method raise StateUnavailable (fail
+       closed)
 """
 
 import copy
@@ -49,6 +51,18 @@ def interaction_order(event: InteractionEvent) -> tuple[int, int, str]:
     return (event["t_start_ms"], event["t_end_ms"], event["event_id"])
 
 
+def newer_state(current: EntityState | None, written: EntityState) -> EntityState:
+    """Whichever of two entity_state rows is newest by (t_ms, version); a tie goes to `written`, the later write.
+
+    The real database orders them the same way (database/allergen-yhz-81 keep_latest), so a row written late with an
+    older t_ms, such as a risk row that copied the entity's position just before another writer's row landed, never
+    moves the entity back.
+    """
+    if current is None or (written.t_ms, written.version) >= (current.t_ms, current.version):
+        return written
+    return current
+
+
 class FakeStateClient:
     """A dict-backed StateClient for tests: every method, subscribe() included, and failure on cue.
 
@@ -63,7 +77,8 @@ class FakeStateClient:
         self._zones: dict[str, Zone] = {}
         self._plate_bindings: dict[str, PlateBinding] = {}
         self._entities: dict[str, Entity] = {}  # exactly as first registered
-        self._entity_states: dict[str, list[EntityState]] = {}
+        self._latest_state: dict[str, EntityState] = {}  # each entity's newest row: where it is
+        self._latest_graph_state: dict[str, EntityState] = {}  # its newest row with caused_by set: what it may carry
         self._interactions: dict[str, InteractionEvent] = {}
         self._verdicts: dict[str, Verdict] = {}
         self._subscribers: dict[str, list[Callable[[ChangeEvent], None]]] = {table: [] for table in TABLES}
@@ -169,7 +184,10 @@ class FakeStateClient:
             self._check_reachable()
             if state.entity_id not in self._entities:
                 raise ValueError(f"move_entity for unregistered entity {state.entity_id}")
-            self._entity_states.setdefault(state.entity_id, []).append(state)
+            entity_id = state.entity_id
+            self._latest_state[entity_id] = newer_state(self._latest_state.get(entity_id), state)
+            if state.caused_by is not None:
+                self._latest_graph_state[entity_id] = newer_state(self._latest_graph_state.get(entity_id), state)
             self._notify("entity_state", "insert", state)
 
     def record_interaction(self, event: InteractionEvent) -> None:
@@ -231,15 +249,19 @@ class FakeStateClient:
             return self._plate_bindings.get(plate_id)
 
     def list_interactions(self, since_t_ms: int = 0, until_t_ms: int | None = None) -> list[InteractionEvent]:
-        """Return interactions with since_t_ms <= t_start_ms <= until_t_ms, ordered by t_start_ms, t_end_ms, event_id."""
+        """Return interactions with since_t_ms <= t_start_ms <= until_t_ms, ordered by t_start_ms, t_end_ms, event_id.
+
+        Copying a shift's thousands of edges would hold the lock for tens of milliseconds and stall every writer,
+        the camera's frame loop included. Stored edges are never edited, so only picking them happens under the lock.
+        """
         with self._lock:
             self._check_reachable()
             events = [
-                copy.deepcopy(event)
+                event
                 for event in self._interactions.values()
                 if event["t_start_ms"] >= since_t_ms and (until_t_ms is None or event["t_start_ms"] <= until_t_ms)
             ]
-            return sorted(events, key=interaction_order)
+        return sorted(copy.deepcopy(events), key=interaction_order)
 
     def list_verdicts(self, ticket_id: str | None = None) -> list[Verdict]:
         """Return every verdict in the order recorded, optionally only one ticket's."""
@@ -273,32 +295,33 @@ class FakeStateClient:
     def _joined_entity(self, entity_id: str) -> Entity:
         """The entity row joined with its latest state, as contracts/state-tables.md describes the logical Entity.
 
-        Zone, box and last seen come from the newest state row, allergens from _allergen_profile_for(), and a plate's
-        ticket_id from its binding.
+        Zone, box and last seen come from the newest state row (by t_ms), allergens from _allergen_profile_for(), and a
+        plate's ticket_id from its binding.
         """
         entity = copy.deepcopy(self._entities[entity_id])
-        states = self._entity_states.get(entity_id, [])
-        if states:
-            latest = states[-1]
+        latest = self._latest_state.get(entity_id)
+        if latest is not None:
             entity["zone"] = latest.zone
             entity["box"] = list(latest.box) if latest.box is not None else None
             entity["last_seen_t_ms"] = latest.t_ms
-        entity["allergen_profile"] = self._allergen_profile_for(entity, states)
+        entity["allergen_profile"] = self._allergen_profile_for(entity, self._latest_graph_state.get(entity_id))
         binding = self._plate_bindings.get(entity_id)
         if binding is not None:
             entity["ticket_id"] = binding.ticket_id
         return entity
 
-    def _allergen_profile_for(self, entity: Entity, states: list[EntityState]) -> AllergenProfile:
+    def _allergen_profile_for(self, entity: Entity, graph_state: EntityState | None) -> AllergenProfile:
         """What the entity may carry: the graph's latest state, else a bin's profile, else what it registered with.
 
         A state with caused_by set is one the graph wrote because of an interaction. The entity store's zone and box
         updates leave caused_by empty, so they can never overwrite allergens the graph found with a stale "clean".
         """
-        graph_states = [state for state in states if state.caused_by is not None]
-        if graph_states:
-            latest = graph_states[-1]
-            return {"probabilities": dict(latest.probabilities), "unknown": latest.unknown, "source": "propagated"}
+        if graph_state is not None:
+            return {
+                "probabilities": dict(graph_state.probabilities),
+                "unknown": graph_state.unknown,
+                "source": "propagated",
+            }
         if entity["entity_id"] in self._bin_profiles:
             return copy.deepcopy(self._bin_profiles[entity["entity_id"]])
         return entity["allergen_profile"]

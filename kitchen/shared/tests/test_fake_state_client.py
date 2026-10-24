@@ -8,6 +8,8 @@ Rules: fail closed (StateUnavailable on cue); late changes recheck everything (n
        source (store updates never overwrite the graph's allergens)
 """
 
+import copy
+
 import jsonschema
 import pytest
 
@@ -120,3 +122,31 @@ def test_an_entity_with_no_graph_state_keeps_the_profile_it_registered_with():
     client.move_entity(store_move(2000, "plating-spot"))
 
     assert client.get_entity("tool-knife-17")["allergen_profile"] == knife()["allergen_profile"]
+
+
+def test_a_row_with_the_same_t_ms_and_version_replaces_the_one_before_it():
+    """The real database breaks the tie the same way: the row written later is the newer one."""
+    client = FakeStateClient()
+    client.register_entity(knife())
+    client.move_entity(store_move(2000, "slot-1"))
+    client.move_entity(store_move(2000, "plating-spot"))
+
+    assert client.get_entity("tool-knife-17")["zone"] == "plating-spot"
+
+
+def test_list_interactions_copies_the_edges_outside_the_lock(monkeypatch):
+    """A long shift's edges take tens of milliseconds to copy. Under the lock that would stall every writer, the
+    camera's frame loop included, so only picking the edges happens inside it."""
+    client = FakeStateClient()
+    client.record_interaction(contract_fixture("interaction_event", "scoop"))
+    lock_held_while_copying = []
+    deepcopy = copy.deepcopy
+
+    def deepcopy_that_notes_the_lock(value, *args):
+        lock_held_while_copying.append(client._lock._is_owned())
+        return deepcopy(value, *args)
+
+    monkeypatch.setattr(copy, "deepcopy", deepcopy_that_notes_the_lock)
+
+    assert len(client.list_interactions()) == 1
+    assert lock_held_while_copying and not any(lock_held_while_copying)

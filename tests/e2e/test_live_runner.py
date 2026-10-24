@@ -12,6 +12,7 @@ Rules: fail closed: with the interactions step missing, broken or behind, every 
 
 import importlib.util
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -134,15 +135,20 @@ class Shift:
         self.orders = TestClient(self.runner.app)
         self._frame_id = 0
 
+    def frame(self, objects: list) -> None:
+        """One frame of `objects`, FRAME_MS after the last, through vision and the entity store only: nothing is written
+        to the database yet."""
+        self.detector.objects = objects
+        self.clock.advance(FRAME_MS)
+        rgb = np.full((96, 128, 3), self._frame_id % 256, dtype=np.uint8)
+        self.runner.step_frame(SourceFrame(self._frame_id, self.clock.now_ms(), rgb))
+        self._frame_id += 1
+
     def frames(self, count: int, objects: list) -> None:
         """`count` frames of `objects`, FRAME_MS apart, each synced to the database (entity rows, then live risk) and
         followed by a gate tick."""
-        self.detector.objects = objects
         for _ in range(count):
-            self.clock.advance(FRAME_MS)
-            rgb = np.full((96, 128, 3), self._frame_id % 256, dtype=np.uint8)
-            self.runner.step_frame(SourceFrame(self._frame_id, self.clock.now_ms(), rgb))
-            self._frame_id += 1
+            self.frame(objects)
             self.runner.sync()
             self.runner.update_risk()
             self.runner.tick()
@@ -277,6 +283,62 @@ def test_risk_rows_change_neither_the_gate_nor_the_verdicts():
     assert [row["caused_by"] for row in shift.rows_of(plate_id) if row["caused_by"]] == ["e-touch"]  # a risk row landed
     assert shift.runner.state.get_entity(plate_id)["zone"] == "pass"
     assert [v["trigger"] for v in shift.runner.state.list_verdicts() if v["plate_id"] == plate_id] == ["plate_at_pass"]
+    assert shift.runner.tick() == "hold"
+
+
+def knife_edge(event_id, action, t_ms, other_id, probability, direction):
+    """An edge between the knife and `other_id`, lasting 50 ms."""
+    return {
+        "event_id": event_id,
+        "t_start_ms": t_ms,
+        "t_end_ms": t_ms + 50,
+        "a_id": "tool-knife-1",
+        "b_id": other_id,
+        "action": action,
+        "probability": probability,
+        "direction": direction,
+        "classifier": {"name": "zone_rules", "version": "test"},
+    }
+
+
+@pytest.mark.safety
+def test_a_risk_row_written_as_the_plate_reaches_the_pass_neither_moves_it_nor_judges_it_twice():
+    """The entity store puts the plate on the pass between LiveRisk's read of the plate and its write. A risk row that
+    copied the older zone would take the plate off the pass for the verdict service (a second plate_at_pass judgment)
+    and for the gate (no plate at the pass). The runner has the store's rows wait for the risk row instead."""
+    shift = Shift(interactions=quiet_step)
+    state = shift.runner.state
+    shift.frames(12, [BIN, KNIFE, plate_at(0.5)])
+    plate_id = shift.runner.bind(shift.send_ticket("peanut allergy", 1)["ticket_id"])
+    for step in range(1, 13):  # to x = 0.74, just short of the pass
+        shift.frames(1, [BIN, KNIFE, plate_at(0.5 + 0.02 * step)])
+    state.record_interaction(knife_edge("e-scoop", "transfer.scoop", 1100, "bin-1", 0.95, "b_to_a"))
+    shift.runner.update_risk()
+    shift.frame([BIN, KNIFE, plate_at(0.76)])  # on the pass for the entity store, not yet in the database
+    state.record_interaction(knife_edge("e-touch", "transfer.contact", 1200, plate_id, 0.9, "both"))
+
+    real_get_entity = state.get_entity
+    sync_threads = []
+
+    def get_entity_as_the_store_syncs(entity_id):
+        entity = real_get_entity(entity_id)
+        if entity_id == plate_id and not sync_threads:
+            sync_threads.append(threading.Thread(target=shift.runner.sync))
+            sync_threads[0].start()
+            sync_threads[0].join(timeout=0.3)  # a store that isn't held up writes inside the gap
+        return entity
+
+    state.get_entity = get_entity_as_the_store_syncs
+    shift.runner.update_risk()
+    sync_threads[0].join()
+    state.get_entity = real_get_entity
+
+    rows = shift.rows_of(plate_id)
+    assert [row["t_ms"] for row in rows] == sorted(row["t_ms"] for row in rows)  # no row takes the plate back in time
+    assert [row["caused_by"] for row in rows if row["caused_by"]] == ["e-touch"]  # the risk row did land
+    assert state.get_entity(plate_id)["zone"] == "pass"
+    shift.frames(2, [BIN, KNIFE, plate_at(0.76)])
+    assert [v["trigger"] for v in state.list_verdicts() if v["plate_id"] == plate_id] == ["plate_at_pass"]
     assert shift.runner.tick() == "hold"
 
 
