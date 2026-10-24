@@ -138,6 +138,33 @@ def test_stirred_food_stays_in_its_container():
         assert all(inside_body(b, blob.position[f], f) for blob in in_b for f in range(len(episode.times_ms)))
 
 
+def test_no_contact_clips_keep_a_and_its_load_off_bs_food():
+    """In motion_nearby (labeled contact=False), B's food never ends up under A, and a load on A never lies over B.
+
+    Bounding boxes are a loose stand-in for the drawn shapes, so a few percent of near misses are allowed.
+    """
+    from kitchen.sim.episodes import actor_extent, container_extent
+
+    def circle_hits_box(center, radius, box):
+        return np.linalg.norm(center - np.clip(center, box[:2], box[2:])) < radius
+
+    food_under_a = load_over_b = 0
+    for seed in range(200):
+        episode = simulate_episode(seed, 0, "motion_nearby")
+        b, frames = episode.containers[0], range(len(episode.times_ms))
+        b_food = [x for x in episode.food if not x.on_actor.any() and inside_body(b, x.position[0], 0)]
+        load = [x for x in episode.food if x.on_actor.all()]
+        food_under_a += any(
+            circle_hits_box(x.position[f], x.radius * x.stretch[f], actor_extent(episode.actor, f))
+            for x in b_food
+            for f in frames
+        )
+        load_over_b += any(
+            circle_hits_box(x.position[f], x.radius, container_extent(b, f)) for x in load for f in frames
+        )
+    assert food_under_a <= 8 and load_over_b <= 8  # v2.2 had about 100 and 27 per 200
+
+
 def test_splits_use_disjoint_seeds_and_test_uses_unseen_layouts(tmp_path):
     stats = {split: write_split(tmp_path, split, 2, seed_base=0, workers=1) for split in SPLIT_SEED_OFFSET}
     ranges = [range(s["seeds"][0], s["seeds"][1] + 1) for s in stats.values()]

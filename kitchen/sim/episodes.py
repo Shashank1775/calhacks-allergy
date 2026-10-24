@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-GENERATOR_VERSION = "2.2.0"
+GENERATOR_VERSION = "2.3.0"
 STEPS = 16  # clip length T: about one second (AGENTS.md, Open questions: clip geometry)
 FRAMES = STEPS + 1  # one extra frame, so the first step has a change mask too
 STEP_MS = 1000 / STEPS
@@ -220,8 +220,8 @@ def make_actor(rng: np.random.Generator, tip: np.ndarray, angle: np.ndarray, is_
 
 
 def footprint(actor_is_tool: bool) -> float:
-    """How far a hand's palm reaches past its tip point, so near-miss paths keep a real gap."""
-    return 0.0 if actor_is_tool else 0.06
+    """How far past its tip point A can reach (a hand's palm, or food loaded on a tool), so near misses keep a real gap."""
+    return PORTION_RADIUS[1] if actor_is_tool else 0.06
 
 
 def dwell_wiggle(rng: np.random.Generator, u: np.ndarray, start: float, end: float, amplitude: float, axis: float):
@@ -253,9 +253,10 @@ def plan_path(rng: np.random.Generator, kind: str, b: Container, food: list[Food
     if kind in ("scoop", "deposit", "hover") or inside_touch:
         target = center + rng.uniform(-0.5, 0.5, 2) * b.half_size
     elif kind == "wipe":
-        target = food[int(rng.integers(len(food)))].position[0]  # a wipe goes through food, so something smears
+        # A wipe goes through food, so something smears; kept in from the rim so its wide wiggle stays over B.
+        target = pull_inside(b, food[int(rng.integers(len(food)))].position[0], 0.06, 0)
     elif kind == "touch":
-        target = center + direction(approach) * edge_distance(b, approach) * 0.95
+        target = center + direction(approach) * (edge_distance(b, approach) - RIM_WIDTH)  # the tip reaches the rim
     else:  # approach_leave, motion_nearby: stop short of B with a real gap
         low, high = (0.02, 0.06) if kind == "motion_nearby" else (0.05, 0.15)
         gap = edge_distance(b, approach) + footprint(is_tool) + rng.uniform(low, high)
@@ -285,8 +286,11 @@ def drag_food(
         for blob in food:
             blob.position[f:] = blob.position[f - 1]
             if np.linalg.norm(blob.position[f] - movers[f]) < radius + blob.radius:
-                blob.position[f:] = pull_inside(container, blob.position[f] + step * strength, blob.radius, f)
-                blob.stretch[f:] = min(blob.stretch[f - 1] + np.linalg.norm(step) * 25, 3.0)
+                # Smear it, but never longer than the container is wide, and keep the whole smear inside the rim.
+                longest = max((container.half_size.min() - RIM_WIDTH) / blob.radius, 1.0)
+                blob.stretch[f:] = min(blob.stretch[f - 1] + np.linalg.norm(step) * 25, 3.0, longest)
+                shifted = blob.position[f] + step * strength
+                blob.position[f:] = pull_inside(container, shifted, blob.radius * blob.stretch[f], f)
                 blob.angle[f:] = np.arctan2(step[1], step[0])
 
 
