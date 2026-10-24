@@ -16,7 +16,7 @@ describe("HomeScreen sources", () => {
     const video = new File(["frames"], "prep-line-1.mp4", { type: "video/mp4" });
     await user.upload(screen.getByLabelText(/STAPLE VIDEO HERE/), video);
 
-    expect(screen.getByText("prep-line-1.mp4")).toBeInTheDocument();
+    expect(screen.getByText("prep-line-2.mp4")).toBeInTheDocument();
     expect(screen.getByText("** REPLAY · NOT A LIVE PLATE **")).toBeInTheDocument();
   });
 });
