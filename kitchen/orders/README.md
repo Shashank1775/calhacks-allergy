@@ -23,7 +23,7 @@
 | `cache.py` | Normalized-note cache keyed by parser name and version |
 | `apply.py` | Write a sent draft as a `Ticket` through `StateClient.put_ticket` |
 | `amend.py` | Late changes: `revision + 1` with the full constraint set |
-| `transcribe.py` | `Transcriber` adapters: `TextFileTranscriber` now, Cartesia Ink later |
+| `transcribe.py` | `Transcriber` adapters: `TextFileTranscriber` now, Cartesia Ink batch (`ink-whisper`) later, per [ADR 0013](../../docs/decisions/0013-cartesia-ink-and-apify-menu-import.md) |
 | `api.py` | The [Orders HTTP API](../../contracts/apis.md#orders-http-api) |
 
 Planned data (not files yet): `eval/notes.jsonl`, the ticket-note eval set (orders-02), and `fakes/http/`, example responses for every endpoint and error code that outputs uses as its mock server.
