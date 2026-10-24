@@ -141,14 +141,38 @@ def test_two_plates_at_the_pass_hold():
 
 
 @pytest.mark.safety
-def test_two_plates_seen_within_the_track_lost_limit_hold():
-    """Fail closed: a plate last seen plate_lost_ms before the other is still tracked by vision, so both hold."""
+def test_a_plate_hidden_beside_a_passing_plate_holds_the_gate():
+    """Fail closed: a hand hides plate-x at the pass for 1.2 s, so vision ends its track, while plate-t2 beside it has
+    a current PASS. Plate-x may still be on the pass, so the gate holds the whole time, and when plate-x is seen again
+    (as a new entity, since vision never revives a track)."""
     world = World("wash-resets-knife")
-    limit = world.service.settings.plate_lost_ms
-    world.unbound_plate_to_pass("plate-x", 3000 - limit)
-    world.plate_to_pass("plate-t2", 3000)
+    world.unbound_plate_to_pass("plate-x", 2800)
+    for t_ms in range(3000, 4001, 200):  # plate-x last seen at 2800; plate-t2 seen every 200 ms
+        world.plate_to_pass("plate-t2", t_ms)
+        assert world.at(t_ms) == "hold", t_ms
 
-    assert world.at(3000) == "hold"
+    world.unbound_plate_to_pass("plate-y", 4200)
+    world.plate_to_pass("plate-t2", 4200)
+    assert world.at(4200) == "hold"
+
+
+@pytest.mark.safety
+def test_the_gap_left_on_purpose_a_plate_hidden_over_5_s_lets_the_gate_open_beside_it():
+    """Pins the gap kitchen/gate/README.md documents: once plate-x has gone unseen for over lost_plate_crowds_ms, it no
+    longer crowds the pass, so the gate opens for plate-t2's PASS beside it until plate-x is seen again. The demo
+    keeps one plate at the pass at a time. Change this test only with that README section."""
+    world = World("wash-resets-knife")
+    window = world.service.settings.lost_plate_crowds_ms
+    world.unbound_plate_to_pass("plate-x", 2800)
+    world.plate_to_pass("plate-t2", 2800 + window)
+    assert world.at(2800 + window) == "hold"
+
+    world.plate_to_pass("plate-t2", 2800 + window + 1)
+    assert world.at(2800 + window + 1) == "pass"
+
+    world.unbound_plate_to_pass("plate-y", 2800 + window + 200)  # plate-x seen again, as a new entity
+    world.plate_to_pass("plate-t2", 2800 + window + 200)
+    assert world.at(2800 + window + 200) == "hold"
 
 
 def test_a_plate_lifted_out_of_view_leaves_the_pass():
@@ -165,17 +189,21 @@ def test_a_plate_lifted_out_of_view_leaves_the_pass():
     assert world.at(3000 + limit + 1) == "idle"
 
 
-def test_the_next_plate_passes_once_the_last_one_has_left():
-    """The bug this guards: one plate served by lifting it out of view held every later plate as two at the pass."""
+def test_the_next_plate_passes_once_the_last_one_has_been_gone_5_s():
+    """The bug this guards: one plate served by lifting it out of view held every later plate as two at the pass. The
+    crowding window's cost: a plate reaching the pass within lost_plate_crowds_ms of the last one leaving holds until
+    then."""
     world = World("wash-resets-knife")
+    window = world.service.settings.lost_plate_crowds_ms
     world.unbound_plate_to_pass("plate-x", 1500)
-    assert world.at(1500) == "idle"  # no ticket, no verdict: closed
+    assert world.at(1500) == "idle"  # no ticket, no verdict: closed; then plate-x is lifted out
 
-    world.plate_to_pass("plate-t2", 2400)
-    assert world.at(2400) == "hold"  # plate-x seen 900 ms ago: still two at the pass
+    for t_ms in range(3000, 1500 + window + 1, 500):
+        world.plate_to_pass("plate-t2", t_ms)
+        assert world.at(t_ms) == "hold", t_ms  # plate-x may still be on the pass
 
-    world.plate_to_pass("plate-t2", 3000)
-    assert world.at(3000) == "pass"  # plate-x unseen for 1500 ms: its track has ended
+    world.plate_to_pass("plate-t2", 1500 + window + 1)
+    assert world.at(1500 + window + 1) == "pass"
 
 
 def test_gate_settings_are_logged_at_startup(caplog):
@@ -183,6 +211,7 @@ def test_gate_settings_are_logged_at_startup(caplog):
         World("wash-resets-knife")
 
     assert "plate_lost_ms=1000" in caplog.text
+    assert "lost_plate_crowds_ms=5000" in caplog.text
 
 
 def test_gate_service_voice_says_each_hold_once():

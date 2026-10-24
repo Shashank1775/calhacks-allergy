@@ -25,12 +25,17 @@ The last step. Makes each verdict physical (servo arm, red or green light, buzze
 | From | Event | To |
 |---|---|---|
 | any | start, or no verdict yet for the plate at the pass | `idle` (closed, red) |
-| any | two or more plates at the pass | `hold` (closed, red, buzzer) |
+| any | two or more plates at the pass, each seen within `lost_plate_crowds_ms` | `hold` (closed, red, buzzer) |
 | any | PASS verdict for the plate at the pass, for the ticket's current revision | `pass` (open, green) |
 | any | HOLD verdict, or a verdict for an older revision | `hold` (closed, red, buzzer) |
 | any | feed silent past the limit, vision health stale, `StateUnavailable`, or any exception | `fault` (closed, red, buzzer pulsing) |
 
-A plate is **at the pass** while its latest zone is a pass zone and vision still tracks it: its `last_seen_t_ms` is within `plate_lost_ms` (1000 ms, vision's `track_lost_ms`) of the newest `last_seen_t_ms` of any entity. A plate lifted out of view keeps a last row that says pass, so without this it would count as at the pass for the rest of the shift and hold every later plate. Vision never revives an ended track, so a plate hidden over a second comes back as a new entity with unknown history, which holds. Ages are on vision's frame clock, so database lag can't drop a plate vision still has.
+**When a plate counts at the pass.** A plate lifted out of view keeps a last row that says pass, and nothing writes another. So for each plate in a pass zone, the gate checks how long it has gone unseen: the newest `last_seen_t_ms` of any entity, minus the plate's own. That is vision's frame clock, so database lag can't drop a plate vision still has.
+
+- **Up to `plate_lost_ms` (1000 ms): the plate is at the pass.** Only such a plate's verdict can drive the gate, and a lone plate lifted out goes idle 1 s after it was last seen. `plate_lost_ms` copies vision's `track_lost_ms` (`kitchen/vision/common.py`) and must change with it; `web/src/gate.ts` has the same constant.
+- **Up to `lost_plate_crowds_ms` (5000 ms): it still counts toward two plates at the pass (hold).** A hand or a missed detection can hide a plate for over a second. Vision then ends its track, and when the plate is seen again it's a new, unbound entity: on its own it shows idle (closed), and beside another plate it crowds the pass. Without this window, the gate would open for a PASS plate beside the hidden one.
+- **The gap that's left:** a plate hidden for over 5 s beside a PASS plate lets the gate open for that plate, until the hidden one is seen again. The demo keeps one plate at the pass at a time. A `safety` test pins this; change it only with this paragraph.
+- **The cost:** after a plate is lifted out, the next plate can't pass for up to 5 s.
 
 This table is the spec. Any change to it is `safety-critical` and updates this table in the same PR.
 
@@ -53,7 +58,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). All gate work is `safety-cri
 | Rule | How we could break it | Test (`safety`) |
 |---|---|---|
 | Fail closed | Opening on stale, missing or malformed data | Default is closed. Silence past the limit, stale health, `StateUnavailable` or any exception gives `fault` |
-| Fail closed | Letting one plate through with another still at the pass | Two plates both seen within `plate_lost_ms` hold |
+| Fail closed | Letting one plate through with another still at the pass | Two plates hold while each was seen within `lost_plate_crowds_ms`, including one hidden for over a second beside a PASS plate. The gap past 5 s is pinned by its own test |
 | Plain-code verdict | Recomputing or softening a decision | Only `verdict.decision == "pass"` opens. There is no decision logic here |
 | Late changes recheck everything | Keeping an old revision's PASS after an amendment | A verdict for an older ticket revision holds |
 

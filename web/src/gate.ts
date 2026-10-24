@@ -5,8 +5,8 @@
  * Rules: fail closed, plain-code verdict. The same order as kitchen/gate/service.py's gate_state:
  * stale inputs give FAULT, two plates at the pass give HOLD, no plate or no verdict yet gives
  * IDLE (closed), and only plate_badge()'s PASS opens it. A plate counts at the pass only while
- * vision still tracks it (plates_at_pass). This decides nothing new: PASS comes only from
- * plate_badge(), which only reads verdict rows.
+ * vision still tracks it, and one seen in the last 5 s still crowds it (plates_at_pass). This
+ * decides nothing new: PASS comes only from plate_badge(), which only reads verdict rows.
  */
 import { latest_verdict, plate_badge } from "./badge";
 import type { FeedStatus, Tables } from "./state/state_source";
@@ -45,11 +45,14 @@ export function gate_view(feed: FeedStatus, vision: VisionHealth, tables: GateTa
   if (feed !== "live") return closed("fault", "The kitchen feed is lost");
   if (vision === "stale") return closed("fault", "The camera stopped sending frames");
 
+  // The two windows on how long a plate at the pass has gone unseen; see plates_at_pass.
   const plates = plates_at_pass(tables);
-  if (plates.length > 1) return closed("hold", "Two plates at the pass: one at a time");
-  if (plates.length === 0) return closed("idle", "No plate at the pass");
+  const crowding = plates.filter((plate) => plate.unseen_ms <= LOST_PLATE_CROWDS_MS);
+  const at_pass = plates.filter((plate) => plate.unseen_ms <= PLATE_LOST_MS);
+  if (crowding.length > 1) return closed("hold", "Two plates at the pass: one at a time");
+  if (at_pass.length === 0) return closed("idle", "No plate at the pass");
 
-  const plate_id = plates[0];
+  const plate_id = at_pass[0].plate_id;
   const binding = tables.plate_binding.find((row) => row.plate_id === plate_id);
   const ticket = binding ? tables.ticket.find((row) => row.ticket_id === binding.ticket_id) : undefined;
   const verdicts = tables.verdict.filter((row) => row.plate_id === plate_id);
@@ -63,32 +66,47 @@ export function gate_view(feed: FeedStatus, vision: VisionHealth, tables: GateTa
   return { ...view, state: "hold", note: null };
 }
 
-/** Same limit as GateSettings.plate_lost_ms: vision's track_lost_ms. */
+/**
+ * Same as GateSettings.plate_lost_ms: a copy of vision's track_lost_ms (1000 ms,
+ * kitchen/vision/common.py), and must change with it.
+ */
 export const PLATE_LOST_MS = 1000;
 
+/** Same as GateSettings.lost_plate_crowds_ms. */
+export const LOST_PLATE_CROWDS_MS = 5000;
+
+export type PlateAtPass = { plate_id: string; unseen_ms: number };
+
 /**
- * Plates whose latest position is a pass zone and that vision still tracks, the same rule as
- * kitchen/gate/service.py's plates_at_pass().
+ * Plates whose latest position is a pass zone, each with how long it had gone unseen at vision's
+ * newest sighting: the same rule as kitchen/gate/service.py's plates_at_pass() and read_pass().
  *
- * Vision ends a track once its object goes unseen for track_lost_ms and never revives it, so a
- * plate whose newest row is more than PLATE_LOST_MS older than the newest row of any entity has
- * no track: it was lifted out of view, or a hand hid it for over a second and it will come back
- * as a new plate with unknown history, which holds. Age is measured against that newest row, not
- * this browser's clock: rows carry vision's frame times, so feed lag can't age out a plate vision
- * still has. A stale camera is still FAULT, and two plates both seen recently still HOLD.
+ * A plate lifted out of view keeps a last row that says pass, so its zone alone can't say it
+ * left. Vision ends a track once its object goes unseen for track_lost_ms and never revives it.
+ * So gate_view takes a plate unseen for up to PLATE_LOST_MS as at the pass (only its verdict can
+ * drive the gate; a lone plate lifted out goes WAITING 1 s after it was last seen), and one unseen
+ * for up to LOST_PLATE_CROWDS_MS as still counting toward two plates at the pass (HOLD). A hand
+ * can hide a plate for over a second; seen again, it is a new unbound plate (alone it would show
+ * WAITING), and without that window the gate would open for a PASS plate beside it.
+ *
+ * What's left, on purpose: a plate hidden for over LOST_PLATE_CROWDS_MS beside a PASS plate lets
+ * the gate open for that plate until the hidden one is seen again; the demo keeps one plate at the
+ * pass at a time. The cost: after a plate is lifted out, the next plate can't pass for up to
+ * LOST_PLATE_CROWDS_MS. Unseen time is measured against the newest row of any entity, not this
+ * browser's clock: rows carry vision's frame times, so feed lag can't age out a plate vision
+ * still has.
  */
-export function plates_at_pass(tables: Pick<GateTables, "zone" | "entity" | "entity_state">): string[] {
+export function plates_at_pass(tables: Pick<GateTables, "zone" | "entity" | "entity_state">): PlateAtPass[] {
   const pass_zones = new Set(tables.zone.filter((zone) => zone.kind === "pass").map((zone) => zone.zone_id));
   const plate_ids = new Set(
     tables.entity.filter((entity) => entity.kind === "plate").map((entity) => entity.entity_id),
   );
   const latest = latest_states(tables.entity_state);
   const newest_t_ms = newest_sighting(latest);
-  const plates: string[] = [];
+  const plates: PlateAtPass[] = [];
   for (const [entity_id, state] of latest) {
     const at_pass = state.zone !== null && pass_zones.has(state.zone);
-    const still_tracked = newest_t_ms - state.t_ms <= PLATE_LOST_MS;
-    if (plate_ids.has(entity_id) && at_pass && still_tracked) plates.push(entity_id);
+    if (plate_ids.has(entity_id) && at_pass) plates.push({ plate_id: entity_id, unseen_ms: newest_t_ms - state.t_ms });
   }
   return plates;
 }
