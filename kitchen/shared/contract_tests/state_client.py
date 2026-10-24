@@ -201,6 +201,35 @@ def test_move_entity_sets_the_entitys_zone_and_box(make_state_client):
 
 @pytest.mark.contract
 @pytest.mark.safety
+def test_a_row_written_late_with_an_older_t_ms_does_not_move_the_entity(make_state_client):
+    """Zone, box and last seen come from the row with the newest t_ms, not the one written last: a writer that read the
+    entity just before another writer's row landed can write after it, and must not take a plate off the pass."""
+    client = make_state_client()
+    client.register_entity(_entity("plate-t7"))
+    client.move_entity(_state("plate-t7", 3000, "pass", [0.8, 0.1, 0.9, 0.2]))
+    client.move_entity(_state("plate-t7", 2000, "plating-spot", [0.4, 0.4, 0.5, 0.5]))
+
+    plate = client.get_entity("plate-t7")
+    assert (plate["zone"], plate["box"], plate["last_seen_t_ms"]) == ("pass", [0.8, 0.1, 0.9, 0.2], 3000)
+    assert client.list_entities("plate") == [plate]
+
+
+@pytest.mark.contract
+@pytest.mark.safety
+def test_a_graph_row_written_late_with_an_older_t_ms_does_not_replace_a_newer_one(make_state_client):
+    """The same order for the graph's fields: the newest row with caused_by set, by t_ms, says what the entity carries."""
+    client = make_state_client()
+    client.register_entity(_entity("tool-knife-17"))
+    client.record_interaction(_event("e-new", 2000, 2400))
+    client.record_interaction(_event("e-old", 1000, 1400))
+    client.move_entity(EntityState("tool-knife-17", 2000, 2000, "prep", None, {"peanut": 0.9}, False, "e-new"))
+    client.move_entity(EntityState("tool-knife-17", 1000, 1000, "prep", None, {"peanut": 0.1}, False, "e-old"))
+
+    assert client.get_entity("tool-knife-17")["allergen_profile"]["probabilities"] == {"peanut": 0.9}
+
+
+@pytest.mark.contract
+@pytest.mark.safety
 def test_entity_history_is_append_only(make_state_client):
     """Every move is a new entity_state row; no row is ever updated in place."""
     client = make_state_client()
