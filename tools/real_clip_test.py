@@ -6,7 +6,8 @@ Reads: a labels CSV and the videos it names; the stock YOLOv8s detection and pos
 Emits: <out>/clips/<event>.npz and clips.jsonl, predictions.csv, summary.json, previews/<event>.png
 Rules: frames go through the same letterbox, change mask and clip builder the model trained on; boxes come from the
        detector, never from the labels (except a container box a person types in when the detector can't find it);
-       the labels only judge the model
+       the labels only judge the model; the contact head is judged by the clip contract's contact (touched, or a
+       hover: an overhead camera can't tell resting over the food from touching it)
 
 Run from the repo root (needs the ml extra; torch only to score):
     uv run --all-extras --with torch python tools/real_clip_test.py --labels labels.csv --out data/real_clips/take1
@@ -102,11 +103,20 @@ def read_labels(path: Path) -> list[Label]:
     return labels
 
 
+def contact_for(label: Label) -> bool:
+    """Contact as interaction_clip defines it: they touched, or the tool came to rest over the food (a hover).
+
+    The sheet records what really happened, so a hover is touched = n. An overhead camera can't see that 1-2 cm, so
+    the clips the model trained on call a hover contact, and so does every judgment here (it leans toward HOLD).
+    """
+    return label.touched or label.kind == "hover"
+
+
 def action_for(label: Label) -> str:
     """The interaction action the labels describe."""
     if label.moved:
         return "transfer.wipe" if label.kind == "wipe" else "transfer.scoop"
-    return "transfer.contact" if label.touched else "unimportant"
+    return "transfer.contact" if contact_for(label) else "unimportant"
 
 
 # ---------------------------------------------------------------------------------------------------- frames
@@ -301,7 +311,7 @@ def event_clip(label: Label, frames: list, t_ms: list, size: tuple[int, int], a_
         mask = change_mask(small[f - 1], small[f], mask, **CHANGE_MASK_PARAMS)
         steps.append(ClipStep(t_ms[f], a_boxes[f], b_boxes[f], mask))
     labels = {
-        "contact": label.touched,
+        "contact": contact_for(label),
         "transferred": label.moved,
         "action": action_for(label),
         "label_source": "human",
@@ -321,24 +331,24 @@ def event_clip(label: Label, frames: list, t_ms: list, size: tuple[int, int], a_
 
 
 def overlap_rule(tensor: np.ndarray) -> tuple[bool, bool]:
-    """A plain baseline: touched if the boxes overlap on 2+ steps; moved if, after they first overlap, the change
+    """A plain baseline: contact if the boxes overlap on 2+ steps; moved if, after they first overlap, the change
     inside B but outside A averages above 0.1. Not the partner's zone rules, just a floor the LSTM should beat."""
     a, b, change = tensor[:, 0] > 0, tensor[:, 1] > 0, tensor[:, 2] / 255
     overlapping = [bool((a[k] & b[k]).any()) for k in range(len(tensor))]
-    touched = sum(overlapping) >= 2
-    if not touched:
+    contact = sum(overlapping) >= 2
+    if not contact:
         return False, False
     first = overlapping.index(True)
     region = b[first:] & ~a[first:]
     moved = bool(region.any()) and float(change[first:][region].mean()) > 0.1
-    return touched, moved
+    return contact, moved
 
 
 # ---------------------------------------------------------------------------------------------------- scoring
 
 
 def score_clips(weights: Path, tensors: list[np.ndarray], dt_ms: list[list[int]]) -> np.ndarray:
-    """P(touched) and P(moved) for every clip, from a checkpoint made by kitchen/lstm/train.py."""
+    """P(contact) and P(moved) for every clip, from a checkpoint made by kitchen/lstm/train.py."""
     import torch
 
     from kitchen.lstm import model as models
@@ -368,12 +378,12 @@ def summarize(rows: list[dict], thresholds: tuple[float, float]) -> dict:
     summary = {
         "events": len(rows),
         "scored": len(scored),
-        "thresholds": dict(zip(("touched", "moved"), thresholds, strict=True)),
+        "thresholds": dict(zip(("contact", "moved"), thresholds, strict=True)),
     }
     if not scored:
         return summary
     kinds = np.array([row["kind"] for row in scored])
-    for head, column in (("touched", 0), ("moved", 1)):
+    for head, column in (("contact", 0), ("moved", 1)):
         truth = np.array([row[head] for row in scored])
         probability = np.array([row[f"p_{head}"] for row in scored])
         rule = np.array([row[f"rule_{head}"] for row in scored])
@@ -455,6 +465,7 @@ def process_event(label: Label, videos_dir: Path, sessions: dict, out: Path) -> 
         "kind": label.kind,
         "actor": label.actor,
         "touched": label.touched,
+        "contact": contact_for(label),
         "moved": label.moved,
     }
     if pair is None:
@@ -468,12 +479,12 @@ def process_event(label: Label, videos_dir: Path, sessions: dict, out: Path) -> 
     with open(out / "clips.jsonl", "a") as clips:
         clips.write(json.dumps(record) + "\n")
     draw_preview(out / "previews" / f"{label.event}.png", frames, tensor, a_boxes, b_boxes, found)
-    rule_touched, rule_moved = overlap_rule(tensor)
+    rule_contact, rule_moved = overlap_rule(tensor)
     row.update(
         status="scored",
         a_steps=sum(box is not None for box in a_boxes[1:]),
         b_steps=sum(box is not None for box in b_boxes[1:]),
-        rule_touched=rule_touched,
+        rule_contact=rule_contact,
         rule_moved=rule_moved,
     )
     return row, tensor, record["dt_ms"]
@@ -486,7 +497,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--bundle", type=Path, default=Path("data/models/stock-yolov8s"))
     parser.add_argument("--weights", type=Path, default=Path("data/models/lstm/boxpooled-v1/best.pt"))
-    parser.add_argument("--thresholds", type=float, nargs=2, default=None, help="touched and moved thresholds")
+    parser.add_argument("--thresholds", type=float, nargs=2, default=None, help="contact and moved thresholds")
     parser.add_argument("--no-score", action="store_true", help="only build clips and previews (no torch needed)")
     args = parser.parse_args()
 
@@ -512,8 +523,8 @@ def main() -> None:
         probabilities = iter(score_clips(args.weights, tensors, dts))
         for row in rows:
             if row["status"] == "scored":
-                row["p_touched"], row["p_moved"] = (round(float(p), 4) for p in next(probabilities))
-                row["call_touched"] = row["p_touched"] >= thresholds[0]
+                row["p_contact"], row["p_moved"] = (round(float(p), 4) for p in next(probabilities))
+                row["call_contact"] = row["p_contact"] >= thresholds[0]
                 row["call_moved"] = row["p_moved"] >= thresholds[1]
 
     columns = list(dict.fromkeys(key for row in rows for key in row))

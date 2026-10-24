@@ -52,10 +52,46 @@ def test_bad_label_rows_name_the_event_and_the_problem(tmp_path, row, complaint)
 
 
 def test_action_follows_what_happened_not_the_kind_name():
-    label = rct.Label("e", "v", 1.0, "hover", "tool", True, False, None, "")
+    label = rct.Label("e", "v", 1.0, "touch", "tool", True, False, None, "")
     assert rct.action_for(label) == "transfer.contact"
     assert rct.action_for(label.__class__(**{**label.__dict__, "kind": "wipe", "moved": True})) == "transfer.wipe"
-    assert rct.action_for(label.__class__(**{**label.__dict__, "touched": False})) == "unimportant"
+    assert rct.action_for(label.__class__(**{**label.__dict__, "kind": "pass_over", "touched": False})) == "unimportant"
+
+
+@pytest.mark.safety
+def test_a_hover_counts_as_contact_though_nothing_touched():
+    """Straight down, resting 1-2 cm over the food looks like touching: the clip contract and sim call it contact."""
+    hover = rct.Label("h1", "v", 1.0, "hover", "tool", False, False, None, "")
+    assert rct.contact_for(hover) and rct.action_for(hover) == "transfer.contact"
+    assert not rct.contact_for(hover.__class__(**{**hover.__dict__, "kind": "pass_over"}))
+
+
+def test_summary_judges_the_contact_head_by_contact():
+    rows = [
+        {
+            "status": "scored",
+            "kind": "hover",
+            "contact": True,
+            "moved": False,
+            "p_contact": 0.9,
+            "p_moved": 0.0,
+            "rule_contact": True,
+            "rule_moved": False,
+        },
+        {
+            "status": "scored",
+            "kind": "pass_over",
+            "contact": False,
+            "moved": False,
+            "p_contact": 0.0,
+            "p_moved": 0.0,
+            "rule_contact": False,
+            "rule_moved": False,
+        },
+    ]
+    summary = rct.summarize(rows, (0.5, 0.5))
+    assert summary["thresholds"] == {"contact": 0.5, "moved": 0.5}
+    assert summary["contact"]["lstm_at_thresholds"] == {"accuracy": 1.0, "recall": 1.0, "false_alarm": 0.0}
 
 
 def test_the_labeled_moment_lands_on_the_touch_step_with_even_gaps():

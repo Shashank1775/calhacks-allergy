@@ -53,6 +53,9 @@ time display (VLC or QuickTime; step frame by frame with `.`/`,` in VLC), and fo
 | `notes` | Anything odd | `food stuck to spoon` |
 
 Label what really happened, not the kind's name: if a "hover" actually brushed the food, write `touched = y`.
+A real hover stays `touched = n` on the sheet, but the scorer still counts it as **contact**. The camera looks
+straight down and can't see that 1–2 cm, so the clip contract and the sim both call a tool resting over the food
+contact, and that leans toward HOLD. A `pass_over` that never stops is not contact.
 
 ## 3. Run it
 
@@ -71,7 +74,7 @@ The video needs at least 16 fps. The tool takes every Nth frame so the gaps stay
 it refuses an event whose one-second window runs off the start or end of the video, so leave a second either side.
 
 Defaults: the detector bundle in `data/models/stock-yolov8s`, the LSTM in `data/models/lstm/boxpooled-v1/best.pt`, and
-thresholds 0.17 (touched) and 0.085 (moved), the 99%-recall picks from validation. Change them with `--bundle`,
+thresholds 0.17 (contact) and 0.085 (moved), the 99%-recall picks from validation. Change them with `--bundle`,
 `--weights` and `--thresholds`.
 
 ## 4. Read the results
@@ -80,7 +83,7 @@ In `data/real_clips/take1/`:
 - **`previews/<event>.png`**: the frames around each event with the tool's box (red), the container's box (blue) and
   the change mask. **Check a handful first**: if the boxes are on the wrong things, the score says nothing about the
   LSTM. Fix those rows with `container_box` and rerun.
-- **`predictions.csv`**: one row per event: your labels, the model's P(touched) and P(moved), its calls, and how many
+- **`predictions.csv`**: one row per event: your labels (plus `contact`: touched, or a hover), the model's P(contact) and P(moved), its calls, and how many
   of the 16 steps had a box for each side.
 - **`summary.json`** and the printed table: accuracy, recall (real cases caught) and false alarms per kind, at the
   thresholds and at 0.5, next to a plain "the boxes overlapped" rule for comparison.
