@@ -7,7 +7,8 @@ Reads: the shift (entities and interaction edges) from a StateClient through gra
 Emits: entity_state rows (probabilities, unknown, caused_by) via StateClient.move_entity
 Rules: known-clean source: an unknown-history entity shows unknown: true until a wash, and a wash is the only thing
        that lowers a shown number; fail closed: an error writes nothing, so a failed update leaves the screen as it
-       was and never shows a clean entity, and a row is never rounded down to zero; the verdict is untouched: it asks
+       was and never shows a clean entity, an entity the database doesn't hold yet is waited for rather than shown as
+       it would be once registered clean, and a row is never rounded down to zero; the verdict is untouched: it asks
        ProvenanceGraph directly, and no row here can change what the graph computes (see below)
 
 The camera overlays color each box from its latest entity_state row. Nothing else writes allergens into those rows
@@ -17,20 +18,33 @@ changed. The entity store's next row for that entity copies the allergens forwar
 screens need no change.
 
 A risk row copies zone, box and t_ms from the entity's newest row, so it moves nothing: last_seen_t_ms stays when the
-camera last saw the entity, and a plate at the pass stays where it is and is not judged again. Its version counts the
-risk rows written for that entity. It differs from the entity store's counter on purpose: the two writers never need
-to agree, because SpacetimeDB keeps zone and box from the newest (t_ms, version) row and the allergens from the newest
-row with caused_by set, and every risk row has the same zone and box as the row before it.
+camera last saw the entity, and a plate at the pass stays where it is and is not judged again. That holds only if no
+other row lands between the read and the write, so LiveRisk holds `write_lock` across both and whoever writes the entity
+store's rows takes the same lock around each (tools/run_local.py wraps the StateClient the store syncs to): a store row
+then comes before the risk row's read or after its write, never between.
 
-Bins get no rows. The graph starts a bin from the allergen profile the database joins to it (graph.start_profile), so a
-row here would become the bin's starting profile and the graph would count the contact twice on its next query. Tools,
-hands and plates start clean (or unknown) from their origin alone, so their rows are never read back as a start. The
-unknown flag follows the same rule: it is true only for an entity whose origin is unknown, never for one that merely
+A risk row's version counts the risk rows written for that entity. It differs from the entity store's counter on
+purpose: the two writers never need to agree, because SpacetimeDB keeps zone and box from the newest (t_ms, version)
+row and the allergens from the newest row with caused_by set, and every risk row has the same zone and box as the row
+before it.
+
+An update reads and propagates the whole shift, which grows with it, so the thread rests IDLE_PER_BUSY times as long as
+an update took (at most `hz` updates a second otherwise): it never takes more than 1 / (1 + IDLE_PER_BUSY) of the CPU
+the camera's frame loop shares with it, however long the shift has run.
+
+Bins get no rows, so a bin a dirty tool dipped into still shows its own profile on the overlay (the verdict is not
+affected: the graph carries the contact on to the plate). The graph starts a bin from the allergen profile the database
+joins to it (graph.start_profile), so a row here would become the bin's starting profile and the graph would count the
+contact twice on its next query. Showing it needs a read of the bin's own profile, which the StateClient doesn't offer.
+Tools, hands and plates start clean (or unknown) from their origin alone, so their rows are never read back as a start.
+The unknown flag follows the same rule: it is true only for an entity whose origin is unknown, never for one that merely
 touched such an entity, since the graph would read the flag back as an unknown start.
 """
 
 import logging
 import threading
+import time
+from contextlib import AbstractContextManager
 
 from kitchen.graph.graph import read_shift
 from kitchen.graph.propagate import Carried, propagate
@@ -43,6 +57,9 @@ logger = logging.getLogger(__name__)
 # database exactly, so an unchanged entity compares equal and isn't written again.
 DECIMALS = 3
 SMALLEST_SHOWN = 10**-DECIMALS
+
+# After an update the thread rests this many times as long as the update took, if that is longer than its period.
+IDLE_PER_BUSY = 4
 
 # What an overlay shows for an entity: its nonzero probabilities, and whether it is unwashed unknown history.
 Shown = tuple[dict[str, float], bool]
@@ -67,6 +84,16 @@ def shown(entity: Entity, carried: Carried) -> Shown:
     return probabilities, unknown
 
 
+def wait_after_update(period_s: float, took_s: float) -> float:
+    """How long the update thread rests after an update that took `took_s`: its period, or longer for a slow update.
+
+    A shift's edges only pile up, so every update is slower than the last. Resting IDLE_PER_BUSY times as long as one
+    took keeps the thread to a fixed share of the CPU, at the price of the screen lagging further behind on a very long
+    shift, which is better than the camera dropping frames.
+    """
+    return max(period_s, IDLE_PER_BUSY * took_s)
+
+
 def latest_edge_per_entity(edges: list[InteractionEvent]) -> dict[str, str]:
     """The event_id of the last edge, in time order, that touches each entity. Only entities with an edge are here."""
     latest = {}
@@ -83,9 +110,12 @@ class LiveRisk:
     a second and only after an interaction edge has landed.
     """
 
-    def __init__(self, state: StateClient, clock: Clock) -> None:
+    def __init__(self, state: StateClient, clock: Clock, write_lock: AbstractContextManager | None = None) -> None:
+        """`write_lock` is held while a row is read and written. Pass the lock the entity store's writes take, so its rows
+        can't land in between; left out, nothing else is serialized with these rows."""
         self._state = state
         self._clock = clock
+        self._write_lock = write_lock if write_lock is not None else threading.Lock()
         self._written: dict[str, Shown] = {}  # what each entity last showed, once its row landed
         self._versions: dict[str, int] = {}  # risk rows written per entity
         self._lock = threading.Lock()  # one update at a time
@@ -128,12 +158,21 @@ class LiveRisk:
         guessed: rows already written stay, and the rest are written on the next update.
         """
         with self._lock:
+            # Read before the shift, so an entity registered in between counts as missing for now (and is waited for),
+            # never the other way round: read_shift gives an entity it doesn't find a placeholder.
+            registered = {entity["entity_id"] for entity in self._state.list_entities()}
             entities, edges = read_shift(self._state, self._clock.now_ms())
             carried = propagate(entities, edges)
             # What an entity no edge touches shows. A first row is written only if it shows something else.
             at_start = propagate(entities, [])
             up_to_date = True
             for entity_id, caused_by in latest_edge_per_entity(edges).items():
+                if entity_id not in registered:
+                    # An edge can land before the entity store registers the entity. The placeholder the graph makes
+                    # for it shows the same unknown-history risk as an untouched one, so comparing would skip it; once
+                    # registered, a clean-stack plate or tool shows clean, whatever the edge gave it.
+                    up_to_date = False
+                    continue
                 entity = entities[entity_id]
                 if entity["kind"] == "bin":  # see the module docstring
                     continue
@@ -147,27 +186,29 @@ class LiveRisk:
     def _write_row(self, entity_id: str, now_shown: Shown, caused_by: str) -> bool:
         """Append one entity_state row with the new allergens and the entity's zone, box and t_ms as they are now.
 
-        The entity is read again just before the write, so the copy is as fresh as it can be. Returns False when the
-        database doesn't hold the entity yet.
+        The entity is read again just before the write, under the write lock the entity store's rows also take, so the
+        copy is the entity's position at the moment of the write. Returns False when the database doesn't hold the
+        entity yet.
         """
-        entity = self._state.get_entity(entity_id)
-        if entity is None:
-            logger.debug("live risk: %s isn't registered yet, trying again next update", entity_id)
-            return False
         probabilities, unknown = now_shown
         version = self._versions.get(entity_id, 0) + 1
-        self._state.move_entity(
-            EntityState(
-                entity_id=entity_id,
-                version=version,
-                t_ms=entity["last_seen_t_ms"],
-                zone=entity["zone"],
-                box=entity["box"],
-                probabilities=dict(probabilities),
-                unknown=unknown,
-                caused_by=caused_by,
+        with self._write_lock:
+            entity = self._state.get_entity(entity_id)
+            if entity is None:
+                logger.debug("live risk: %s isn't registered yet, trying again next update", entity_id)
+                return False
+            self._state.move_entity(
+                EntityState(
+                    entity_id=entity_id,
+                    version=version,
+                    t_ms=entity["last_seen_t_ms"],
+                    zone=entity["zone"],
+                    box=entity["box"],
+                    probabilities=dict(probabilities),
+                    unknown=unknown,
+                    caused_by=caused_by,
+                )
             )
-        )
         # Counted only once the row landed, so a failed write is tried again with the same version.
         self._versions[entity_id] = version
         self._written[entity_id] = now_shown
@@ -186,12 +227,15 @@ class LiveRisk:
             self._edge_landed.set()
 
     def _run(self, period_s: float) -> None:
-        """The background thread: update when an edge has landed, wait one period, repeat until stopped."""
+        """The background thread: update when an edge has landed, rest (see wait_after_update), repeat until stopped."""
         while not self._stop.is_set():
+            rest_s = period_s
             if self._edge_landed.is_set():
                 self._edge_landed.clear()  # before the update, so an edge that lands during it brings another one
+                started = time.monotonic()  # pacing a thread, not logic: the injected Clock doesn't measure work
                 self._update_or_retry()
-            self._stop.wait(period_s)
+                rest_s = wait_after_update(period_s, time.monotonic() - started)
+            self._stop.wait(rest_s)
 
     def _update_or_retry(self) -> None:
         """One update from the background thread. Whatever goes wrong is logged and tried again next tick."""
