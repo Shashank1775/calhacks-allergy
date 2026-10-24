@@ -15,10 +15,12 @@ tests check the edges the step writes, through the graph that reads them.
 """
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from kitchen.graph.graph import time_order
 from kitchen.graph.propagate import propagate
-from kitchen.interactions.events import EventWriter, InteractionStep, replay
+from kitchen.interactions.events import EventWriter, InteractionStep, Segmenter, replay
 from kitchen.interactions.settings import InteractionSettings
 from kitchen.interactions.tests.scenes import BIN_AT, KNIFE, PASS_AT, PLATE_AT, WASH_AT, ZONES, Track, render, still
 from kitchen.shared.contract_tests import contract_fixture
@@ -355,3 +357,108 @@ def test_a_plate_carried_to_the_pass_has_its_edge_in_the_database_when_it_arrive
 
     assert at_the_pass is not None
     assert peanut_after(state.list_interactions(0, at_the_pass), "plate-t1") >= ALLERGY_FLAG
+
+
+# Entities for the renaming test, each with a second name that sorts the other way round among its kind, so every
+# tie between edges stamped alike (one frame, one wave) is broken the other way.
+NAMES = {
+    "hand-p1-left": "hand-p9-right",
+    "hand-p2-right": "hand-p8-left",
+    "tool-spoon-1": "tool-whisk-9",
+    "tool-knife-1": "tool-fork-9",
+    "bin-1": "bin-9",
+    "bin-2": "bin-8",
+    "plate-t1": "plate-t9",
+    "plate-t2": "plate-t8",
+}
+TOUCHABLE = [
+    (a_id, b_id)
+    for a_id in NAMES
+    for b_id in NAMES
+    if (a_id.split("-")[0], b_id.split("-")[0])
+    in {("hand", "tool"), ("hand", "bin"), ("hand", "plate"), ("tool", "bin"), ("tool", "plate")}
+]
+TOUCHES = st.lists(
+    st.tuples(st.integers(1, 300), st.sets(st.tuples(st.sampled_from(TOUCHABLE), st.sampled_from([0.8, 0.9])))),
+    max_size=40,
+)
+
+
+def carried_by_name(frames: list, names: dict) -> dict:
+    """What each entity may carry after the frames' contact hits, under the given names, by original name."""
+    segmenter = Segmenter(SETTINGS)
+    events, t_ms = [], 0
+    for gap, hits in frames:
+        t_ms += gap
+        judged = [
+            (
+                {
+                    "t_ms": t_ms,
+                    "frame_id": t_ms,
+                    "a_id": names[a_id],
+                    "b_id": names[b_id],
+                    "b_kind": b_id.split("-")[0],
+                },
+                [("transfer.contact", p)],
+                {"name": "zone_rules", "version": "test"},
+            )
+            for (a_id, b_id), p in sorted(hits)
+        ]
+        events += segmenter.add_frame(t_ms, judged)
+    events += segmenter.close_all()
+    start = {names["bin-1"]: {"unknown": False, "probabilities": {"peanut": 1.0}}}
+    entities = {
+        names[node]: {
+            "allergen_profile": start.get(names[node], {"unknown": False, "probabilities": {}}),
+            "origin": "shift_start",
+        }
+        for node in NAMES
+    }
+    carried = propagate(entities, sorted(events, key=time_order)).probabilities
+    return {node: carried[names[node]]["peanut"] for node in NAMES}
+
+
+@pytest.mark.safety
+@settings(max_examples=150, deadline=None)
+@given(TOUCHES)
+def test_what_reaches_each_entity_does_not_depend_on_what_the_entities_are_called(frames):
+    """Edges stamped alike apply in event-ID order, and IDs hold the entities' names. Renaming every entity so the
+    order flips must not change which entities the peanut reaches, so a name can never let a plate PASS."""
+    as_named = carried_by_name(frames, {node: node for node in NAMES})
+    renamed = carried_by_name(frames, NAMES)
+
+    assert {node for node, p in as_named.items() if p > 0} == {node for node, p in renamed.items() if p > 0}
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(("holder", "steadier"), [("hand-p2-right", "hand-p1-left"), ("hand-p1-left", "hand-p2-right")])
+def test_news_by_parallel_paths_all_gets_across_whichever_hand_is_named_first(holder, steadier):
+    """A knife rests in a clean bin; one hand holds the knife with its palm on the bin's rim, the other steadies the
+    bin. A third hand that touched a may-contain bin (peanut 0.03) grabs the knife at 1023: its news reaches the clean
+    bin directly from the knife and again through the holding hand. Both routes cross the steadying hand's touch, so
+    when it later touches the plate, the plate holds an anaphylactic ticket whichever hand's ID sorts first."""
+    dirty = "hand-p3-right"
+    contact = [("transfer.contact", 0.8)]
+    segmenter = Segmenter(SETTINGS)
+    events = []
+    for t_ms in range(0, 3003, 33):
+        pairs = []
+        if t_ms <= 300:
+            pairs.append((dirty, "bin-2"))
+        if t_ms <= 2000:
+            pairs += [(KNIFE, "bin-3"), (holder, KNIFE), (holder, "bin-3"), (steadier, "bin-3")]
+        if 1023 <= t_ms <= 1300:
+            pairs.append((dirty, KNIFE))
+        if 2500 <= t_ms <= 2800:
+            pairs.append((steadier, "plate-t1"))
+        judged = [
+            (
+                {"t_ms": t_ms, "frame_id": t_ms // 33, "a_id": a_id, "b_id": b_id, "b_kind": b_id.split("-")[0]},
+                contact,
+                {"name": "zone_rules", "version": "test"},
+            )
+            for a_id, b_id in pairs
+        ]
+        events += segmenter.add_frame(t_ms, judged)
+
+    assert peanut_after(events, "plate-t1", start={"bin-2": {"peanut": 0.03}}) >= ANAPHYLACTIC_FLAG
