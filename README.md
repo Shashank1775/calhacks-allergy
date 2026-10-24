@@ -40,6 +40,12 @@ No camera and no partner database: `tools/run_local.py` serves the end-to-end ha
 uv run python tools/run_local.py knife-carries-peanut-to-plate
 ```
 
+Notes are parsed by `FakeLayaParser` and plates checked by `FakeLayaCheck` unless `LAYA_MODEL_DIR` and `LAYA_PLATE_MODEL_DIR` point at the fine-tuned checkpoints (see `.env.example`). With them, add the `laya` package for the run; loading both takes about 15 s:
+
+```bash
+uv run --env-file .env --with laya==0.4.14 python tools/run_local.py knife-carries-peanut-to-plate
+```
+
 Then point the web app at it (see [Run it](web/README.md#run-it) in `web/README.md`) and open `/expo`.
 
 To run the agents, start the Director with `claude --agent director` and give it a Worker concurrency cap ([Running the org](AGENTS.md#14-running-the-org-claude-code) in AGENTS.md).
