@@ -14,7 +14,7 @@ verdict ──▶ GateService ──▶ FakeGate + FakeSpeaker
 ```
 
 - **Default:** everything on fakes under one `FakeClock`: `FakeStateClient`, `FakeLayaParser`, `FakeTranscriber`, `FakeProvenanceGraph`, `FakeLayaCheck`, `FakeGate`, `FakeSpeaker`. Vision is simulated: the harness writes the `entity_state` row a plate gets when it enters the pass, and reports a fresh frame every gate tick.
-- **With the partner's parts** (`needs-partner`): `--state real` and `--graph real` select the partner's `StateClient` and `ProvenanceGraph`. Until they're wired into `conftest.py`, those runs fail with a message, so a run that never touched the partner's code can't look green. The expected results are identical.
+- **With the partner's parts** (`needs-partner`): `--state real` runs on the partner's `SpacetimeStateClient` against a local SpacetimeDB test database (see `database/README.md`); with no database it errors rather than skips. `--graph real` selects the partner's `ProvenanceGraph`, and fails with a message until it's wired into `conftest.py`. Either way, a run that never touched the partner's code can't look green. The expected results are identical.
 
 | File | What it does |
 |---|---|
@@ -27,7 +27,7 @@ verdict ──▶ GateService ──▶ FakeGate + FakeSpeaker
 
 ```bash
 uv run pytest tests/e2e                                  # every golden scenario + the typed-note flow, on fakes
-uv run pytest tests/e2e --state real                     # partner's StateClient against a local SpacetimeDB (fails until wired in)
+uv run pytest tests/e2e --state real                     # partner's StateClient against a local SpacetimeDB (database/README.md)
 uv run pytest tests/e2e --graph real                     # partner's ProvenanceGraph instead of the fake (fails until wired in)
 uv run python tools/run_local.py late-amendment-adds-dairy   # the same shift, live: Orders API + GET /state on :8001
 uv run --env-file .env --with laya==0.4.14 python -m pytest tests/e2e -m slow   # the runner on laya-v1 and laya-plate-v2 (both dirs set)
