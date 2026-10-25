@@ -12,6 +12,7 @@ Rules: fail closed: with the interactions step missing, broken or behind, every 
        app start the shift at the first frame and are refused by a runner on its own camera
 """
 
+import dataclasses
 import importlib.util
 import sys
 import threading
@@ -129,13 +130,15 @@ def peanut_knife_step(state, clock):
 class Shift:
     """A LiveRunner on a FakeClock (or `clock`), fed scripted frames, with a peanut-allergy ticket for table 1."""
 
-    def __init__(self, interactions, zones_path: Path | None = None, clock=None, from_web: bool = False):
+    def __init__(
+        self, interactions, zones_path: Path | None = None, clock=None, from_web: bool = False, vision_settings=SETTINGS
+    ):
         self.clock = clock or FakeClock(0)
         self.detector = ScriptedDetector()
         self.runner = run_local.LiveRunner(
             self.clock,
             ZONES,
-            vision_settings=SETTINGS,
+            vision_settings=vision_settings,
             detector=self.detector,
             interactions=interactions,
             zones_path=zones_path,
@@ -212,6 +215,29 @@ def test_without_the_interactions_step_every_plate_holds():
     assert verdict["decision"] == "hold"
     assert any("interactions step" in reason.get("detail", "") for reason in verdict["reasons"])
     assert shift.runner.tick() == "hold"
+
+
+@pytest.mark.safety
+def test_a_plate_first_seen_mid_shift_holds_for_its_unknown_history():
+    """Known-clean source: an untouched plate that first appears after shift start, outside a clean stack, holds."""
+    shift = Shift(interactions=quiet_step)
+    shift.frames(35, [BIN, KNIFE])  # past shift start (3 s) before the plate appears
+    plate_id = shift.plate_to_pass()
+
+    verdict = shift.verdict(plate_id)
+    assert verdict["decision"] == "hold"
+    assert "unknown_history" in [reason["code"] for reason in verdict["reasons"]]
+
+
+def test_with_new_entities_start_clean_an_untouched_plate_first_seen_mid_shift_passes():
+    """The owner's demo setting: a plate with no edges is clean, whenever it first appears."""
+    start_clean = dataclasses.replace(SETTINGS, new_entities_start_clean=True)
+    shift = Shift(interactions=quiet_step, vision_settings=start_clean)
+    shift.frames(35, [BIN, KNIFE])
+    plate_id = shift.plate_to_pass()
+
+    assert shift.verdict(plate_id)["decision"] == "pass"
+    assert shift.runner.tick() == "pass"
 
 
 def test_a_clean_plate_passes_when_interactions_see_no_touch():

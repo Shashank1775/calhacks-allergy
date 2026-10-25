@@ -144,6 +144,13 @@ class VisionSettings:
 
     # Known-clean source: what is visible this long after the shift starts counts as there at shift start (clean).
     shift_start_ms: int = 3000
+    # Demo setting, off by default so AGENTS.md safety rule 8 holds. On (VISION_NEW_ENTITIES_START_CLEAN=1, the owner's
+    # choice for the live demo), a plate, tool or hand that would start with unknown history (first seen after shift
+    # start outside a clean stack, re-acquired after a lost track, or a possible ID switch) starts clean instead: only
+    # edges from a bin, and from what those touched, can then carry an allergen to it. The cost: a tool that touched an
+    # allergen, lost and re-acquired, comes back clean and forgets it. Bins are unchanged. These entities get origin
+    # shift_start, since the schema has no "assumed clean" origin.
+    new_entities_start_clean: bool = False
 
     # "Start plate" binds only from a frame at most this old (plates.py): a frozen camera's last frame must not bind
     # whatever plate used to be on the spot. At 30 FPS this allows about 15 dropped frames. It also counts every plate

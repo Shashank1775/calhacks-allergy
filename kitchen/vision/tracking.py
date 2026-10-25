@@ -420,7 +420,12 @@ class Tracker:
         track_ids = itertools.count(1)
         self.object_tracks = {name: TrackSet(settings, lambda: next(track_ids)) for name in OBJECT_CLASSES}
         self.person_tracks = TrackSet(settings, lambda: next(track_ids))
-        self.identities = IdentityBook(settings.shift_start_ms, settings.track_lost_ms, strict=self.strict)
+        self.identities = IdentityBook(
+            settings.shift_start_ms,
+            settings.track_lost_ms,
+            strict=self.strict,
+            new_start_clean=settings.new_entities_start_clean,
+        )
         # Motion mode: each pose track's last sighting with both wrists, (t_ms, left (x, y), right (x, y)).
         self._both_wrists: dict[int, tuple[int, tuple[float, float], tuple[float, float]]] = {}
 

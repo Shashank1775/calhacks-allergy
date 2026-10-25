@@ -185,6 +185,45 @@ def test_origin_is_unknown_anywhere_else_after_shift_start_and_never_changes():
     assert later[0]["origin"] == "unknown"
 
 
+@pytest.mark.safety
+def test_new_entities_start_clean_is_off_by_default():
+    """Known-clean source: unless the owner turns the demo setting on, a newcomer still has unknown history."""
+    assert VisionSettings().new_entities_start_clean is False
+    assert IdentityBook(3000, 1000).new_start_clean is False
+
+
+def test_with_new_entities_start_clean_no_plate_tool_or_hand_starts_unknown():
+    """The owner's demo setting: what would start unknown starts clean, so only edges can carry an allergen to it."""
+    book = IdentityBook(SETTINGS.shift_start_ms, 100, new_start_clean=True)
+
+    # First seen mid-shift outside a clean stack, and a possible ID switch.
+    assert book.object_identity(1, "knife", AFTER_SHIFT_START, None, False).origin == "shift_start"
+    assert book.object_identity(2, "bowl", AFTER_SHIFT_START, None, False).origin == "shift_start"
+    assert book.object_identity(3, "fork", AFTER_SHIFT_START, None, True).origin == "shift_start"
+    # A hand first seen mid-shift, then re-acquired after its wrist was lost for longer than the lost buffer.
+    assert book.hand_identity(10, "left", AFTER_SHIFT_START, False).origin == "shift_start"
+    again = book.hand_identity(10, "left", AFTER_SHIFT_START + 1000, False)
+    assert (again.entity_id, again.origin) == ("hand-p1-left-2", "shift_start")
+
+
+@pytest.mark.safety
+def test_with_new_entities_start_clean_a_bin_first_seen_mid_shift_is_still_unknown():
+    """The setting covers plates, tools and hands only: a bin keeps rule 8."""
+    book = IdentityBook(SETTINGS.shift_start_ms, 100, new_start_clean=True)
+
+    identity = book.object_identity(1, "bowl", AFTER_SHIFT_START, ZONES[0], False)
+
+    assert (identity.entity_id, identity.origin) == ("bin-4", "unknown")
+
+
+def test_the_tracker_passes_new_entities_start_clean_to_its_identities():
+    tracker = Tracker(dataclasses.replace(SETTINGS, new_entities_start_clean=True))
+
+    items = tracker.update([knife((0.6, 0.6, 0.85, 0.85))], [], AFTER_SHIFT_START, zone_of, 640, 640)
+
+    assert items[0]["origin"] == "shift_start"
+
+
 def test_a_bowl_in_a_bin_slot_is_that_bin_and_any_other_bowl_is_a_plate():
     tracker = Tracker(SETTINGS)
     items = tracker.update([bowl(), bowl((0.5, 0.5, 0.7, 0.7))], [], 0, zone_of, 640, 640)

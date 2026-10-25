@@ -8,7 +8,9 @@ Reads: track IDs and classes from tracking.py, the zone each track is first seen
 Emits: Identity (entity_id, kind, origin) for every tracked object and hand
 Rules: known-clean source: a new track is a new entity, so a re-acquired object, person or hand gets a new ID; origin
        is shift_start only up to shift start, clean_stack only for a tool or plate first seen in a clean_stack zone (a
-       hand never comes out of a stack), otherwise unknown; numbers are never reused
+       hand never comes out of a stack), otherwise unknown; numbers are never reused. With new_start_clean (the demo
+       setting VISION_NEW_ENTITIES_START_CLEAN, off by default) a plate, tool or hand that would be unknown starts
+       clean (shift_start) instead; bins never change
 
 A new track can only start clean when it can't be an object already seen. Two cases say it might be:
     - an ID switch: a track of the same group went unmatched in the frame the new track started (a knife carried fast
@@ -93,10 +95,12 @@ class IdentityBook:
     only go up, so no tool, plate or person number is ever handed out twice in a shift.
     """
 
-    def __init__(self, shift_start_ms: int, lost_ms: int, strict: bool = False):
+    def __init__(self, shift_start_ms: int, lost_ms: int, strict: bool = False, new_start_clean: bool = False):
         self.shift_start_ms = shift_start_ms
         self.lost_ms = lost_ms
         self.strict = strict
+        # VisionSettings.new_entities_start_clean: a plate, tool or hand never starts unknown (the owner's demo choice).
+        self.new_start_clean = new_start_clean
         self._by_track: dict[int, Identity] = {}
         self._tool_counts = dict.fromkeys(TOOL_CLASSES, 0)
         self._plate_count = 0
@@ -176,7 +180,7 @@ class IdentityBook:
         else:
             entity_id = f"hand-{person}-{side}-{sightings}"
             clean = False
-        identity = Identity(entity_id, "hand", "shift_start" if clean else "unknown")
+        identity = Identity(entity_id, "hand", "shift_start" if clean or self.new_start_clean else "unknown")
         self._hands[key] = identity
         return identity
 
@@ -200,6 +204,13 @@ class IdentityBook:
                 self._hand_sightings.pop((track_id, side), None)
 
     def _origin(self, class_name: str, t_ms: int, zone: Zone | None, maybe_switched: bool) -> str:
+        """The origin of a new tool or plate: shift_start when new_start_clean is on, else _known_origin()."""
+        origin = self._known_origin(class_name, t_ms, zone, maybe_switched)
+        if origin == "unknown" and self.new_start_clean:
+            return "shift_start"
+        return origin
+
+    def _known_origin(self, class_name: str, t_ms: int, zone: Zone | None, maybe_switched: bool) -> str:
         """origin_for(), except that a newcomer that may be an object already seen is unknown (see the module docstring):
         one that started while a track of its class went unmatched, or one first seen in a clean stack where an object
         of its class went missing."""
