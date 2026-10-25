@@ -64,7 +64,8 @@ def edge(event_id, t, a, b, action="transfer.contact", direction="both", p=0.9):
 
 class ScriptedAgent:
     """Stands in for the loaded plate model: answers every question with the given P, or misbehaves on cue. The
-    input is cut while it has more than `fits` events (the default: any length fits)."""
+    input is cut while it has more than `fits` events (the default: any length fits), and a cut input answers 0, so
+    a test can tell which attempt's answer the check returned."""
 
     def __init__(self, p=0.02, fail=False, broken=None, usage=None, fits=None):
         self.p, self.fail, self.broken, self.fits = p, fail, broken, fits
@@ -78,6 +79,7 @@ class ScriptedAgent:
         answer = self.broken if self.broken is not None else {"noul": self.p}
         usage = self.usage
         if self.fits is not None and len(state["events"].split(" | ")) > self.fits:
+            answer = {"noul": 0.0}
             usage = dict(FULL_INPUT, truncated=True, state_tokens_dropped=40)
         return {"answers": {key: answer for key in questions}, "usage": usage}
 
@@ -312,7 +314,7 @@ def test_shortening_never_lowers_any_allergens_reach(kitchen, limit):
 @pytest.mark.safety
 def test_an_input_too_long_for_the_model_is_folded_further_and_asked_again():
     agent = ScriptedAgent(p=0.97, fits=SHORTER_WINDOWS[-1])
-    assert local_check(agent).check(LONG_KNIFE, ["peanut"]) == {"peanut": 0.97}
+    assert local_check(agent).check(LONG_KNIFE, ["peanut"]) == {"peanut": 0.97}  # the answer that fit, not a cut 0
     assert [len(state["events"].split(" | ")) for state in agent.states] == [MAX_EDGES, *SHORTER_WINDOWS]
     with pytest.raises(LayaCheckUnavailable):  # still too long at the shortest window: hold
         local_check(ScriptedAgent(fits=1)).check(LONG_KNIFE, ["peanut"])
