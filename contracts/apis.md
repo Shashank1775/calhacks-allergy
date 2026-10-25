@@ -183,8 +183,9 @@ class LayaPlateCheck(Protocol):
 ```
 
 - **Stricter only.** The verdict adds a `laya_flagged` hold reason for each forbidden allergen with P >= 1 − `pass_threshold`, the same flag rule it applies to the graph's numbers. Laya can never remove a hold reason or cause a PASS.
-- It reads only the edges on a time-forward path to the plate (anything else is dropped first). Raises `LayaCheckUnavailable` on any failure, including more than 10 such edges (longer than anything it was trained on) or an edge whose entity has no node. The verdict then holds with `laya_unavailable` (safety rule: fail closed).
-- **Fake:** `FakeLayaCheck`, which answers with the exact noisy-OR result over the subgraph (a perfect Laya).
+- It reads only the edges on a time-forward path to the plate (anything else is dropped first), up to 15 of them (`MAX_EDGES`, the owner's call; the model was trained on up to 10). A longer history is shortened, never lowering any allergen's reach: transfers that move nothing are dropped, then the oldest events are folded into rounded-up starting values. If the model still has to cut the input to fit its 512 tokens, the history is folded further (10, then 5 events) and asked again.
+- Raises `LayaCheckUnavailable` on any failure: an edge whose entity has no node, an input the model still has to cut at the shortest window, an answer without the model's usage report (so it can't be checked for a cut), or a malformed answer. The verdict then holds with `laya_unavailable` (safety rule: fail closed). Length alone no longer raises.
+- **Fake:** `FakeLayaCheck`, which answers with the exact noisy-OR result (full transfer, k = 1) over the same history the model reads: the subgraph's on-path edges, shortened as above when there are more than 15 (a perfect Laya).
 
 ## Transcriber and Speaker
 
