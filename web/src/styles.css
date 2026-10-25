@@ -820,3 +820,38 @@ a {
 .zone_message {
   margin: 0 0 0 8px;
 }
+
+/* Zones on the expo camera (Zones toggle): under the boxes, display only, so clicks go straight through. */
+.camera_tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.zones_overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Outlines with a faint fill, so the detector's boxes drawn into the picture stay readable through them. */
+.zone_outline {
+  fill-opacity: 0.08;
+  stroke-width: 2px;
+}
+
+/* In the fast view the detector's labels are in the picture itself, so a zone's tag must not hide one. */
+.zones_overlay .zone_tag {
+  opacity: 0.75;
+}
+
+.zones_note {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  margin: 0;
+  padding: 1px 8px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 12px;
+}

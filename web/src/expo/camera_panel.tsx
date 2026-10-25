@@ -7,6 +7,7 @@
  *   allergen risk, updating only as fast as the state feed.
  *
  * Reads: GET <WEB_VISION_URL>/stream.mjpg; entity_state (latest box, probabilities, unknown).
+ * With the Zones toggle on, the kitchen's zones draw under the boxes (zones_overlay.tsx).
  * Rules: display only. Either way, entity identity and every verdict stay in the backend. Only
  * entities tracked now are counted and, in the entity view, drawn; a lost track keeps its row in
  * the database (and still matters to verdicts) but not its box here. A missing or broken stream
@@ -19,6 +20,7 @@ import { vision_url } from "../api/http";
 import { latest_states } from "../gate";
 import { useTableRows } from "../state/hooks";
 import type { EntityState } from "../types/TEMPORARY";
+import { useShowZones, ZonesOverlay, ZonesToggle } from "./zones_overlay";
 
 export type Risk = "unknown" | "high" | "some" | "clean";
 
@@ -61,12 +63,16 @@ export function CameraPanel() {
   const boxes = tracked_now(states);
   const fast = fast_boxes();
   const stream = fast ? `${base}/stream.mjpg?boxes=true` : `${base}/stream.mjpg`;
+  const [show_zones, set_show_zones] = useShowZones();
 
   return (
     <section className="rail_section">
       <div className="rail_head">
         <h2 className="display">Camera</h2>
-        <span className="rail_note">CAM-01 · {boxes.length} tracked</span>
+        <span className="camera_tools">
+          <span className="rail_note">CAM-01 · {boxes.length} tracked</span>
+          <ZonesToggle on={show_zones} on_change={set_show_zones} />
+        </span>
       </div>
       <div className="camera_box">
         {!base && <p className="muted">No camera set: start vision and set WEB_VISION_URL to see the counter.</p>}
@@ -74,6 +80,8 @@ export function CameraPanel() {
         {base && !offline && (
           <div className="camera_frame">
             <img src={stream} alt="Live view of the counter" onError={() => set_offline(true)} />
+            {/* Before the boxes, so they draw over the zones and stay readable. */}
+            {show_zones && <ZonesOverlay />}
             {!fast && boxes.map((state) => <EntityBox key={state.entity_id} state={state} />)}
           </div>
         )}
