@@ -7,7 +7,7 @@
  * With one request in flight at a time, a slow vision never builds a queue here either: the tab simply sends less.
  *
  * Two ways to send. A camera is read off its track in a worker (track_sender.ts) where the browser can, and keeps
- * 15 frames a second in a hidden tab (measured in Chrome). A video file, or a camera in a browser without
+ * TARGET_FPS in a hidden tab (measured in Chrome). A video file, or a camera in a browser without
  * MediaStreamTrackProcessor, is drawn from its <video> by this page: even on start_ticker's worker timer, Chrome
  * slowed that to about a frame a second in a hidden tab (measured, camera and video alike), so that tab must stay
  * visible.
@@ -16,7 +16,11 @@ import type { ApiResult } from "../api/http";
 import { post_frame } from "../api/vision";
 import type { WorkerCommand, WorkerReport } from "./track_sender";
 
-export const TARGET_FPS = 15;
+/**
+ * Vision kept up with 27 frames a second pushed to it (measured on the laptop); 24 keeps its /health above 20 with
+ * a 30 fps camera, leaving room for a skipped tick while a frame is still in flight.
+ */
+export const TARGET_FPS = 24;
 /** Wider frames are scaled down to this: vision letterboxes every frame to 640 anyway. */
 export const MAX_WIDTH = 1280;
 export const JPEG_QUALITY = 0.8;
