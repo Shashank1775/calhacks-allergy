@@ -3,11 +3,23 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { install_fake_cameras } from "../test_utils";
 import { HomeScreen } from "./home_screen";
+import { HIDDEN_TAB_WARNING } from "./kitchen_run";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/** The browser hides or shows this tab, as when the user switches to /expo in another tab and back. */
+function set_tab_hidden(hidden: boolean) {
+  vi.spyOn(document, "hidden", "get").mockReturnValue(hidden);
+  fireEvent(document, new Event("visibilitychange"));
+}
+
+async function start_with(user: ReturnType<typeof userEvent.setup>) {
+  await waitFor(() => expect(screen.getByRole("button", { name: "START" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "START" }));
+}
 
 async function use_a_video(user: ReturnType<typeof userEvent.setup>) {
   const video = new File(["frames"], "prep-line-1.mp4", { type: "video/mp4" });
@@ -129,5 +141,73 @@ describe("HomeScreen kitchen run", () => {
     await user.click(screen.getByRole("button", { name: "STOP" }));
     expect(screen.getByRole("heading", { name: "Box the kitchen" })).toBeInTheDocument();
     expect(screen.getByText(/The shift started with the first frame/)).toBeInTheDocument();
+  });
+});
+
+describe("HomeScreen in a background tab", () => {
+  it("warns that a video's frames slow while its tab is hidden, and keeps the warning when the tab is back", async () => {
+    const user = userEvent.setup();
+    render(<HomeScreen />);
+    await use_a_video(user);
+    await start_with(user);
+    expect(screen.getByText(/Keep this tab open and in front/)).toBeInTheDocument();
+    expect(screen.queryByText(HIDDEN_TAB_WARNING)).toBeNull();
+
+    set_tab_hidden(true);
+    expect(screen.getByRole("alert")).toHaveTextContent(HIDDEN_TAB_WARNING);
+
+    set_tab_hidden(false);
+    expect(screen.getByRole("alert")).toHaveTextContent(HIDDEN_TAB_WARNING);
+
+    await user.click(screen.getByRole("button", { name: "STOP" }));
+    await start_with(user);
+    expect(screen.queryByText(HIDDEN_TAB_WARNING)).toBeNull();
+  });
+
+  it("warns for a camera too, where the browser can't read it in a worker", async () => {
+    const user = userEvent.setup();
+    install_fake_cameras();
+    render(<HomeScreen />);
+    await user.click(screen.getByRole("button", { name: "ADD CAMERA" }));
+    await screen.findByRole("combobox", { name: "CAMERA" });
+    await user.click(screen.getByRole("button", { name: "USE THIS CAMERA" }));
+    await start_with(user);
+
+    set_tab_hidden(true);
+    expect(screen.getByRole("alert")).toHaveTextContent(HIDDEN_TAB_WARNING);
+  });
+
+  it("doesn't warn for a camera read in the frame worker, which keeps its pace in a hidden tab", async () => {
+    const user = userEvent.setup();
+    const { streams } = install_fake_cameras();
+    const worker = { postMessage: vi.fn(), terminate: vi.fn() };
+    vi.stubGlobal(
+      "Worker",
+      vi.fn(function () {
+        return worker;
+      }),
+    );
+    vi.stubGlobal(
+      "MediaStreamTrackProcessor",
+      class {
+        readable = new ReadableStream();
+      },
+    );
+    render(<HomeScreen />);
+    await user.click(screen.getByRole("button", { name: "ADD CAMERA" }));
+    await screen.findByRole("combobox", { name: "CAMERA" });
+    await user.click(screen.getByRole("button", { name: "USE THIS CAMERA" }));
+    await start_with(user);
+
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: "start", frames: expect.any(ReadableStream) }, [
+      expect.any(ReadableStream),
+    ]);
+    expect(screen.getByText(/^Keep this tab open: it is the kitchen's camera/)).toBeInTheDocument();
+    set_tab_hidden(true);
+    expect(screen.queryByText(HIDDEN_TAB_WARNING)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "STOP" }));
+    expect(worker.terminate).toHaveBeenCalled();
+    expect(streams[0].track.stop).not.toHaveBeenCalled();
   });
 });

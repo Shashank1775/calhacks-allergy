@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { vision_frames_taken } from "../api/mocks/handlers";
 import type { ApiResult } from "../api/http";
 import { post_frame } from "../api/vision";
-import { MAX_WIDTH, start_frame_sender, TARGET_FPS, type SenderStatus } from "./frame_sender";
+import {
+  MAX_WIDTH,
+  sender_mode,
+  start_camera_worker,
+  start_frame_sender,
+  TARGET_FPS,
+  type SenderStatus,
+} from "./frame_sender";
+import type { WorkerCommand, WorkerReport } from "./track_sender";
 
 type FrameResult = ApiResult<null>;
 
@@ -33,8 +41,48 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   draw_image.mockClear();
 });
+
+/** A camera track that can be cloned, as getUserMedia gives it. */
+function camera_track() {
+  const clone = { stop: vi.fn() };
+  const track = { stop: vi.fn(), clone: vi.fn(() => clone) };
+  return { track: track as unknown as MediaStreamTrack, original: track, clone };
+}
+
+/** Stands in for Chrome's MediaStreamTrackProcessor and the frame worker, and keeps what they were given. */
+function install_fake_worker() {
+  const workers: FakeWorker[] = [];
+  const processed: unknown[] = [];
+  class FakeWorker {
+    url: URL;
+    posted: { message: WorkerCommand; transfer: Transferable[] }[] = [];
+    onmessage: ((event: MessageEvent<WorkerReport>) => void) | null = null;
+    onerror: ((event: ErrorEvent) => void) | null = null;
+    terminate = vi.fn();
+    constructor(url: URL) {
+      this.url = url;
+      workers.push(this);
+    }
+    postMessage(message: WorkerCommand, transfer: Transferable[]) {
+      this.posted.push({ message, transfer });
+    }
+    report(report: WorkerReport) {
+      this.onmessage?.(new MessageEvent("message", { data: report }));
+    }
+  }
+  class FakeProcessor {
+    readable = new ReadableStream<VideoFrame>();
+    constructor({ track }: { track: unknown }) {
+      processed.push(track);
+    }
+  }
+  vi.stubGlobal("Worker", FakeWorker);
+  vi.stubGlobal("MediaStreamTrackProcessor", FakeProcessor);
+  return { workers, processed };
+}
 
 describe("start_frame_sender", () => {
   it("sends the picture as a JPEG at most MAX_WIDTH wide, one request at a time", async () => {
@@ -117,6 +165,66 @@ describe("start_frame_sender", () => {
 
     expect(post).toHaveBeenCalledTimes(1);
     expect(statuses).toEqual([]);
+  });
+});
+
+describe("sender_mode", () => {
+  it("reads a camera in the frame worker where the browser has MediaStreamTrackProcessor", () => {
+    install_fake_worker();
+    expect(sender_mode(camera_track().track)).toBe("camera_worker");
+  });
+
+  it("falls back to the main thread for a video file, or a browser without MediaStreamTrackProcessor", () => {
+    install_fake_worker();
+    expect(sender_mode(undefined)).toBe("main_thread");
+
+    vi.unstubAllGlobals();
+    expect("MediaStreamTrackProcessor" in globalThis).toBe(false);
+    expect(sender_mode(camera_track().track)).toBe("main_thread");
+  });
+});
+
+describe("start_camera_worker", () => {
+  it("hands the frame worker the frames of a clone of the camera's track, transferred, not copied", () => {
+    const { workers, processed } = install_fake_worker();
+    const { track, clone } = camera_track();
+    const stop = start_camera_worker(track, () => {});
+
+    expect(workers).toHaveLength(1);
+    expect(workers[0].url.pathname).toMatch(/frame_worker\.ts$/);
+    expect(processed).toEqual([clone]);
+    const [{ message, transfer }] = workers[0].posted;
+    expect(message).toEqual({ type: "start", frames: expect.any(ReadableStream) });
+    expect(transfer).toEqual([message.frames]);
+    stop();
+  });
+
+  it("passes on the worker's status reports until stopped, then ends the clone, never the camera", () => {
+    const { workers } = install_fake_worker();
+    const { track, original, clone } = camera_track();
+    const statuses: SenderStatus[] = [];
+    const stop = start_camera_worker(track, (status) => statuses.push(status));
+
+    workers[0].report({ type: "status", status: { fps: 12, sent: 40, error: null } });
+    stop();
+    workers[0].report({ type: "status", status: { fps: 12, sent: 41, error: null } });
+
+    expect(statuses).toEqual([{ fps: 12, sent: 40, error: null }]);
+    expect(workers[0].terminate).toHaveBeenCalled();
+    expect(clone.stop).toHaveBeenCalled();
+    expect(original.stop).not.toHaveBeenCalled();
+  });
+
+  it("safety: says no picture when the worker fails, keeping the count so far", () => {
+    const { workers } = install_fake_worker();
+    const statuses: SenderStatus[] = [];
+    const stop = start_camera_worker(camera_track().track, (status) => statuses.push(status));
+
+    workers[0].report({ type: "status", status: { fps: 12, sent: 40, error: null } });
+    workers[0].onerror?.(new ErrorEvent("error"));
+    stop();
+
+    expect(statuses.at(-1)).toEqual({ fps: 0, sent: 40, error: "no_picture" });
   });
 });
 

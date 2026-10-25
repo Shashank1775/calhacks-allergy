@@ -35,6 +35,7 @@ export function install_fake_cameras(options: { refuse?: string } = {}) {
     const device_id = video === true ? "cam-a" : video ? video.deviceId.exact : "";
     const track = {
       stop: vi.fn(),
+      clone: vi.fn(() => ({ stop: vi.fn() })),
       readyState: "live",
       getSettings: () => ({ deviceId: device_id }),
       addEventListener: vi.fn(),
