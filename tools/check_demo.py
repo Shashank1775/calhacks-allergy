@@ -176,7 +176,9 @@ def check_detector(detector) -> Result:
     """ONNX on the Pi's CPU works but is far too slow for the demo."""
     if detector == "hailo":
         return Result(PASS, "detector is hailo")
-    fix = "on the Pi set VISION_DETECTOR=hailo VISION_BUNDLE_DIR=data/models/stock-yolov8s and restart the runner"
+    fix = (
+        "on the Pi set VISION_DETECTOR=hailo VISION_BUNDLE_DIR=data/models/stock-yolov8s-hailo8l and restart the runner"
+    )
     return Result(WARN, f"detector is {detector}, not hailo", fix)
 
 
