@@ -13,6 +13,7 @@ import { FRAME_ERRORS } from "../api/vision";
 import { ZonesScreen } from "../zones/zones_screen";
 import { start_frame_sender, type SenderStatus } from "./frame_sender";
 import { useObjectUrl } from "./use_object_url";
+import { UNPLAYABLE_VIDEO } from "./video_source";
 
 export type Source = { kind: "video"; file: File } | { kind: "camera"; stream: MediaStream; label: string };
 
@@ -23,6 +24,7 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
   const [ready, set_ready] = useState(false);
   const [started, set_started] = useState(false);
   const [aspect, set_aspect] = useState(16 / 9);
+  const [unplayable, set_unplayable] = useState(false);
   const [status, set_status] = useState<SenderStatus | null>(null);
   const video_ref = useRef<HTMLVideoElement>(null);
   const video_url = useObjectUrl(source.kind === "video" ? source.file : null);
@@ -56,6 +58,7 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
       playing={phase === "running"}
       on_aspect={set_aspect}
       on_ended={() => set_phase("stopped")}
+      on_error={() => set_unplayable(true)}
     />
   );
 
@@ -73,7 +76,7 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
             appears later has unknown history.
           </p>
           <div className="option_row">
-            <button type="button" className="btn" disabled={!ready} onClick={start}>
+            <button type="button" className="btn" disabled={!ready || unplayable} onClick={start}>
               START
             </button>
             <button type="button" className="btn btn_ghost" onClick={on_change_source}>
@@ -81,6 +84,11 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
             </button>
           </div>
           {!ready && <p className="muted">START turns on once vision has this layout: SAVE your changes first.</p>}
+          {unplayable && (
+            <p role="alert" className="error">
+              {UNPLAYABLE_VIDEO}
+            </p>
+          )}
           {started && (
             <p className="muted">
               The shift started with the first frame. Starting again continues it; restart the runner for a fresh shift.
@@ -146,10 +154,12 @@ type SourceVideoProps = {
   playing: boolean;
   on_aspect: (aspect: number) => void;
   on_ended: () => void;
+  /** The browser can't play the video file: it could send no frames. */
+  on_error: () => void;
 };
 
 /** The source's picture: the camera live, or the video file (its first frame until it plays). */
-function SourceVideo({ source, url, video_ref, playing, on_aspect, on_ended }: SourceVideoProps) {
+function SourceVideo({ source, url, video_ref, playing, on_aspect, on_ended, on_error }: SourceVideoProps) {
   useEffect(() => {
     const video = video_ref.current;
     if (!video || source.kind !== "camera") return;
@@ -171,6 +181,7 @@ function SourceVideo({ source, url, video_ref, playing, on_aspect, on_ended }: S
         if (video.videoWidth && video.videoHeight) on_aspect(video.videoWidth / video.videoHeight);
       }}
       onEnded={on_ended}
+      onError={on_error}
     />
   );
 }
