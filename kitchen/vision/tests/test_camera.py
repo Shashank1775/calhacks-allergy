@@ -2,12 +2,16 @@
 
 Owner: vision (agents)
 Step:  vision
-Reads: kitchen.vision.camera, a tiny MJPG video written by OpenCV, a stand-in picamera2 module, FakeClock
+Reads: kitchen.vision.camera, a tiny MJPG video written by OpenCV, a stand-in picamera2 module, JPEGs encoded by
+       OpenCV, FakeClock
 Emits: nothing
-Rules: time runs forward (strictly increasing t_ms, even across source restarts); a source that can't open fails
+Rules: time runs forward (strictly increasing t_ms, even across source restarts); a source that can't open fails;
+       pushed frames: only the newest waits, none is invented or repeated, and a bad JPEG is refused
 """
 
 import sys
+import threading
+import time
 import types
 
 import cv2
@@ -18,7 +22,15 @@ from hypothesis import strategies as st
 
 from kitchen.shared.fakes import FakeClock
 from kitchen.vision import camera
-from kitchen.vision.camera import PI_CAMERA_SIZE, PiCameraSource, VideoSource, WebcamSource, forward_t_ms
+from kitchen.vision.camera import (
+    PI_CAMERA_SIZE,
+    PiCameraSource,
+    PushedFrames,
+    VideoSource,
+    WebcamSource,
+    forward_t_ms,
+)
+from kitchen.vision.common import BadFrame
 
 FPS = 25
 FRAME_COUNT = 6
@@ -273,3 +285,112 @@ def test_pi_camera_that_isnt_attached_raises(monkeypatch):
     fake_picamera2(monkeypatch, fail_to_open=True)
     with pytest.raises(OSError, match="can't open the Pi camera"):
         PiCameraSource(FakeClock())
+
+
+# ---------- PushedFrames: JPEGs from the web app ----------
+
+
+def jpeg_of(red: int, green: int = 0, blue: int = 0) -> bytes:
+    """A 32x24 JPEG of one solid RGB color."""
+    bgr = np.zeros((24, 32, 3), dtype=np.uint8)
+    bgr[:] = (blue, green, red)
+    ok, jpeg = cv2.imencode(".jpg", bgr)
+    assert ok
+    return jpeg.tobytes()
+
+
+def red_of(frame) -> int:
+    """The red value at the middle of a frame (JPEG is lossy, so compare roughly)."""
+    return int(frame.rgb[12, 16, 0])
+
+
+def test_pushed_frame_is_decoded_to_rgb_and_stamped_with_the_clock_when_pushed():
+    clock = FakeClock(start_ms=250)
+    frames = PushedFrames(clock)
+    frames.push(jpeg_of(red=200))
+    clock.advance(500)  # taken later than it came: the stamp is still when it was pushed
+
+    frame = next(iter(frames))
+
+    assert (frame.frame_id, frame.t_ms) == (0, 250)
+    assert frame.rgb.dtype == np.uint8 and frame.rgb.shape == (24, 32, 3)
+    red, green, blue = frame.rgb[12, 16]
+    assert red > 180 and green < 30 and blue < 30
+
+
+@pytest.mark.safety
+def test_only_the_newest_pushed_frame_waits():
+    """A slow detector never builds a backlog: frames pushed while the loop is busy are replaced, not queued."""
+    clock = FakeClock()
+    frames = PushedFrames(clock)
+    taken = iter(frames)
+    for red in (40, 120, 200):
+        clock.advance(66)
+        frames.push(jpeg_of(red=red))
+
+    frame = next(taken)
+    assert (frame.frame_id, frame.t_ms) == (0, 198)
+    assert abs(red_of(frame) - 200) < 20
+
+    clock.advance(66)
+    frames.push(jpeg_of(red=80))
+    second = next(taken)
+    assert (second.frame_id, second.t_ms) == (1, 264)
+    assert abs(red_of(second) - 80) < 20
+
+
+@pytest.mark.safety
+def test_pushed_t_ms_strictly_increases_when_the_clock_stalls():
+    """Time runs forward: frames pushed within one clock reading still get increasing t_ms, each yielded once."""
+    clock = FakeClock(start_ms=100)  # never advanced
+    frames = PushedFrames(clock, after_t_ms=120)
+    taken = iter(frames)
+    t_values = []
+    for _ in range(4):
+        frames.push(jpeg_of(red=100))
+        t_values.append(next(taken).t_ms)
+
+    assert t_values == [121, 122, 123, 124]
+    assert_strictly_increasing([120, *t_values])
+
+
+@pytest.mark.safety
+def test_pushed_frames_wait_for_a_frame_and_never_repeat_one():
+    """Fail closed: with nothing pushed the source yields nothing (frames stop and /health goes stale), and a frame is
+    never handed out twice while waiting for the next."""
+    frames = PushedFrames(FakeClock())
+    taken = []
+    loop = threading.Thread(target=lambda: taken.extend(f.frame_id for f in frames), daemon=True)
+    loop.start()
+
+    loop.join(timeout=0.2)
+    assert loop.is_alive() and taken == []  # waiting for the first frame
+
+    frames.push(jpeg_of(red=100))
+    deadline = time.monotonic() + 2.0
+    while not taken and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.1)  # time for a repeat, if there were one
+    assert taken == [0]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"not a jpeg",
+        b"\xff\xd8\xff\xe0 truncated",
+        cv2.imencode(".png", np.zeros((4, 4, 3), np.uint8))[1].tobytes(),
+    ],
+    ids=["empty", "text", "broken-jpeg", "png"],
+)
+def test_a_bad_pushed_frame_raises_and_changes_nothing(body):
+    clock = FakeClock(start_ms=10)
+    frames = PushedFrames(clock)
+    with pytest.raises(BadFrame):
+        frames.push(body)
+    assert frames.last_t_ms == -1  # no timestamp was used up
+
+    frames.push(jpeg_of(red=100))
+    assert next(iter(frames)).t_ms == 10

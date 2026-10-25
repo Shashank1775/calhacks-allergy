@@ -1,14 +1,18 @@
-"""The Pi's HTTP API (POST /plates/start, GET /stream.mjpg, GET /health, GET and PUT /zones) and FakeVisionAPI.
+"""The Pi's HTTP API (POST /plates/start, POST /frames, GET /stream.mjpg, GET /health, GET and PUT /zones) and
+FakeVisionAPI.
 
 Owner: vision (agents)
 Step:  vision
 Reads: the latest FrameOutput and RGB frame (VisionStatus, updated by the frame loop), a start_plate callable
-       (plates.py binding), get_zones and put_zones callables (zones.LiveZones), VISION_PORT, VISION_DETECTOR and
-       VISION_CORS_ORIGINS (CLI only)
+       (plates.py binding), get_zones and put_zones callables (zones.LiveZones), a push_frame callable
+       (camera.PushedFrames, when the web app sends the frames), VISION_PORT, VISION_DETECTOR and VISION_CORS_ORIGINS
+       (CLI only)
 Emits: the Vision HTTP API (contracts/apis.md), with the standard error body and CORS for VISION_CORS_ORIGINS only
 Rules: fail closed: /health last_frame_t_ms stops advancing when frames stop, so the gate can go to fault;
        /plates/start never guesses, every refusal is a 409 with the contract's code;
        PUT /zones changes nothing unless the whole layout is valid and saved (422 bad_zones, 500, 503);
+       POST /frames never takes the browser's time and never queues: vision stamps the frame, and only the newest
+       waits; when pushes stop, frames stop and /health goes stale;
        endpoints never block the frame loop: update() only swaps references, JPEGs are encoded in the HTTP thread;
        open streams never stall /health or /plates/start: they wait for frames on their own few threads
 
@@ -18,6 +22,7 @@ Rules: fail closed: /health last_frame_t_ms stops advancing when frames stop, so
     curl -X POST localhost:8002/plates/start -H 'Content-Type: application/json' -d '{"ticket_id": "t7"}'
     curl localhost:8002/zones                                      # {"zones": [{"zone_id", "kind", "polygon"}, ...]}
     curl -X PUT localhost:8002/zones -H 'Content-Type: application/json' -d @kitchen/vision/default_zones.json
+    curl -X POST localhost:8002/frames -H 'Content-Type: image/jpeg' --data-binary @frame.jpg   # 204 (--from-web)
 """
 
 import argparse
@@ -33,7 +38,7 @@ import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException
 
@@ -41,7 +46,7 @@ from kitchen.shared.clock import SystemClock
 from kitchen.shared.config import load_settings
 from kitchen.shared.interfaces import Clock, StateUnavailable
 from kitchen.shared.models import Zone, validate
-from kitchen.vision.common import BindRefused, FrameOutput, VisionSettings
+from kitchen.vision.common import BadFrame, BindRefused, FrameOutput, VisionSettings
 from kitchen.vision.zones import DEFAULT_ZONES_PATH, ZoneFileError, load_zones, parse_zones, zone_record
 
 MJPEG_BOUNDARY = "frame"
@@ -213,14 +218,17 @@ def create_app(
     put_zones: Callable[[object], list[Zone]],
     cors_origins: list[str],
     stream_idle_s: float = STREAM_IDLE_S,
+    push_frame: Callable[[bytes], None] | None = None,
 ) -> FastAPI:
-    """The Vision HTTP API over a VisionStatus, a start_plate(ticket_id) -> plate_id binding function, and the zones
-    in use (get_zones) and their replacement (put_zones(parsed JSON) -> the zones now in use; zones.LiveZones).
+    """The Vision HTTP API over a VisionStatus, a start_plate(ticket_id) -> plate_id binding function, the zones in
+    use (get_zones) and their replacement (put_zones(parsed JSON) -> the zones now in use; zones.LiveZones), and, when
+    the web app sends the frames, push_frame(JPEG bytes) (camera.PushedFrames; None when vision reads its own camera).
 
     start_plate raises BindRefused (409 with its code) or StateUnavailable (503); any other error is a 500
     internal_error. The API never picks a plate itself. put_zones raises ZoneFileError (422 bad_zones) or
     StateUnavailable (503); any other error, such as the zones file not being writable, is a 500 internal_error.
-    Every error uses the contract's error body, and CORS is sent only for cors_origins.
+    push_frame raises BadFrame (422 bad_frame); without it, POST /frames is a 409 not_web_source. Every error uses the
+    contract's error body, and CORS is sent only for cors_origins.
     """
     if "*" in cors_origins:
         # contracts/apis.md HTTP conventions: browsers may call this API only from the listed screens.
@@ -297,6 +305,27 @@ def create_app(
             return error_response(422, "bad_zones", "the body is not JSON")
         # Writing the file and swapping the lookup block, so they run off the event loop.
         return await anyio.to_thread.run_sync(replace_zones, data)
+
+    def take_frame(jpeg_bytes: bytes):
+        try:
+            push_frame(jpeg_bytes)
+        except BadFrame as error:
+            return error_response(422, "bad_frame", str(error))
+        except Exception:
+            # A bug: no frame was taken. Answered here, inside the CORS middleware, so the web app can read it.
+            logger.exception("POST /frames failed")
+            return error_response(500, "internal_error", "the frame was not taken")
+        return Response(status_code=204)
+
+    @app.post("/frames")
+    async def frames_post(request: Request):
+        if push_frame is None:
+            return error_response(
+                409, "not_web_source", "vision reads its own camera or video; run it with --from-web to send frames"
+            )
+        # The body is read raw: it is the JPEG itself. Decoding takes milliseconds, so it runs off the event loop.
+        jpeg_bytes = await request.body()
+        return await anyio.to_thread.run_sync(take_frame, jpeg_bytes)
 
     @app.get("/stream.mjpg")
     def stream():
