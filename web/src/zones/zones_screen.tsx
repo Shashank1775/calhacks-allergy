@@ -13,7 +13,16 @@ import { vision_url } from "../api/http";
 import { get_zones, put_zones } from "../api/vision";
 import { useTableRows } from "../state/hooks";
 import type { Zone } from "../types/TEMPORARY";
-import { bin_label, is_rectangle, kind_name, next_zone_id, ZONE_KINDS, type ZoneKind } from "./layout";
+import {
+  allergen_text,
+  bin_label,
+  bins_without_slot,
+  is_rectangle,
+  kind_name,
+  next_zone_id,
+  ZONE_KINDS,
+  type ZoneKind,
+} from "./layout";
 import { ZoneCanvas } from "./zone_canvas";
 
 type Message = { tone: "error" | "ok"; text: string };
@@ -32,6 +41,8 @@ export function ZonesScreen() {
 
   const changed = saved_json !== null && JSON.stringify(zones) !== saved_json;
   const selected = zones.find((zone) => zone.zone_id === selected_id) ?? null;
+  // Until a layout loads there are no slots to compare with, so no warnings either.
+  const unslotted = saved_json === null ? [] : bins_without_slot(zones, bin_profiles);
 
   /** Loads the layout vision uses now, replacing any edits. */
   async function load(done_text?: string) {
@@ -59,7 +70,11 @@ export function ZonesScreen() {
     }
     set_zones(result.data.zones);
     set_saved_json(JSON.stringify(result.data.zones));
-    set_message({ tone: "ok", text: "Saved. The kitchen uses this layout from the next frame." });
+    set_message({
+      tone: "ok",
+      // The interactions step reads zone kinds once, at its first frame.
+      text: "Saved. The kitchen uses this layout from the next frame. A new washing area starts washing after the runner restarts.",
+    });
   }
 
   useEffect(() => {
@@ -108,14 +123,25 @@ export function ZonesScreen() {
         <p className="error">No vision set: start vision and set WEB_VISION_URL to see and change the layout.</p>
       )}
 
+      {unslotted.length > 0 && (
+        <ul className="zone_warnings" aria-label="Bins with no slot">
+          {unslotted.map((profile) => (
+            <li key={profile.entity_id}>
+              {profile.entity_id} ({allergen_text(profile)}) has no slot: a bowl there will count as a clean plate.
+            </li>
+          ))}
+        </ul>
+      )}
+
       <div className="option_row zone_actions">
         <button type="button" className="btn" disabled={!changed || busy} onClick={() => void save()}>
           SAVE
         </button>
+        {/* Never disabled by a request in flight: a request that hangs would leave no way to retry. */}
         <button
           type="button"
           className="btn btn_ghost"
-          disabled={!base || busy}
+          disabled={!base}
           onClick={() => void load("Reloaded the layout the kitchen uses now.")}
         >
           REVERT
