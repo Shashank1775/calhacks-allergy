@@ -125,6 +125,17 @@ def test_a_failing_consumer_never_starves_the_others_or_the_status():
     assert status.health()["last_frame_t_ms"] == 133
 
 
+def test_the_stream_status_gets_the_detectors_own_boxes_for_each_frame():
+    """The fast camera view draws exactly what the detector found in that frame, not tracked entities."""
+    status = VisionStatus("onnx")
+    make_loop(status=status).step(frame(0, 100))
+
+    _, boxed = status.next_jpeg(0, 0.1, boxes=True)
+    _, plain = status.next_jpeg(0, 0.1)
+    assert boxed != plain
+    assert status._objects == [KNIFE]
+
+
 def test_entity_store_consumer_feeds_every_frame_to_the_store():
     store = FakeEntityStore(FakeClock())
     make_loop(consumers=[entity_store_consumer(store)]).run([frame(0, 100), frame(1, 133)])

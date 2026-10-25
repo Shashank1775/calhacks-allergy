@@ -17,6 +17,8 @@ export default defineConfig({
       WEB_ORDERS_URL: "http://orders.test",
       WEB_VISION_URL: "http://vision.test",
       WEB_SUMMARY_URL: "http://summary.test",
+      // The entity view, so tests see the entity boxes; the fast view's test turns it on itself.
+      WEB_FAST_BOXES: "false",
     },
   },
 });

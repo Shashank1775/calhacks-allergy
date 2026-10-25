@@ -51,8 +51,9 @@ Consumer = Callable[[FrameOutput], None]
 class FrameLoop:
     """One frame at a time through detection, tracking and zones, to an ObservationFrame and its change mask.
 
-    `status` is the Vision API's VisionStatus (or None): it gets every output with its RGB frame, for /health and
-    /stream.mjpg. use_zones() swaps the zone lookup while it runs (PUT /zones).
+    `status` is the Vision API's VisionStatus (or None): it gets every output with its RGB frame and the detector's own
+    boxes for that frame, for /health and /stream.mjpg (?boxes=true draws them). use_zones() swaps the zone lookup while
+    it runs (PUT /zones).
     """
 
     def __init__(
@@ -107,7 +108,9 @@ class FrameLoop:
             except Exception:  # one failing consumer must not starve the others or stop the camera
                 logger.exception("frame %s: consumer %r failed", frame.frame_id, consumer)
         if self.status is not None:
-            self.status.update(output, frame.rgb)
+            # The detector's boxes go to the stream as they are, for display only: the fast camera view draws them on the
+            # same frame, with no tracking or entity IDs. Everything above is unchanged by them.
+            self.status.update(output, frame.rgb, objects)
         return output
 
     def use_zones(self, zone_of: ZoneLookup) -> None:

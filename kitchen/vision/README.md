@@ -16,6 +16,7 @@ uv run python -m kitchen.vision.zones calibrate --image still.jpg --out zones.js
 uv run python -m kitchen.vision.server --fake --port 8002                          # the API on a test pattern
 curl http://localhost:8002/health                     # {"fps": ..., "detector": "onnx", "last_frame_t_ms": ...}
 curl --max-time 3 -o stream.bin http://localhost:8002/stream.mjpg                 # a few seconds of MJPEG
+curl --max-time 3 -o boxed.bin 'http://localhost:8002/stream.mjpg?boxes=true'      # the same, with the detector's boxes
 curl http://localhost:8002/zones                                                   # the zones in use
 curl -X PUT http://localhost:8002/zones -H 'Content-Type: application/json' -d @zones.json   # replace them
 uv run python tools/run_local.py --live --from-web    # the whole kitchen, frames sent by the web app's camera or video
@@ -27,6 +28,8 @@ curl -X POST http://localhost:8002/frames -H 'Content-Type: image/jpeg' --data-b
 - Only the newest frame waits. One the detector hasn't taken yet is replaced by the next, so a slow detector never builds a backlog.
 - The shift's clock is held at 0 until the first good frame (`kitchen.shared.clock.HeldClock`), which is `t_ms` 0. The time spent boxing zones doesn't use up `VISION_SHIFT_START_MS`.
 - A runner reading its own camera or video answers `409 not_web_source`, and a body that isn't a decodable JPEG is `422 bad_frame`.
+
+**The fast camera view.** `GET /stream.mjpg?boxes=true` draws the detector's own boxes into each frame (class and confidence), so the boxes move with the picture at the camera's frame rate. They are the detector's raw output for that frame: no tracking, entity IDs or allergen risk, and nothing on the verdict path reads them. Entity identity, origins and verdicts are unchanged and stay in the backend. The web app shows this view unless `WEB_FAST_BOXES=false` (`web/README.md`). Hands come from the pose model through tracking, so they appear only in the entity view.
 
 Settings are `VISION_*` environment variables (`kitchen/vision/common.py`, `VisionSettings`), logged at startup. The ones you'll touch: `VISION_BUNDLE_DIR` (the model bundle: default `data/models/stock-yolov8s` on the laptop, `data/models/stock-yolov8s-hailo8l` on the Pi), `VISION_DETECTOR` (`onnx` or `hailo`), `VISION_PORT` (8002) and `VISION_CORS_ORIGINS` (the web app's origin, `http://localhost:5173`).
 
@@ -104,7 +107,7 @@ Set zones before service. After adding a new washing area, restart the runner.
 | `default_zones.json` | The committed default layout ([Zones](#zones)) |
 | `plates.py` | "Start plate": binds the one plate at the plating spot to a ticket, or refuses with the contract's 409 code |
 | `record.py` | Records `frames.jsonl`, `change.npz` and a manifest; deterministic replay; the record CLI |
-| `server.py` | Vision HTTP API (`/plates/start`, `POST /frames`, `/stream.mjpg`, `/health`, `GET` and `PUT /zones`) and `FakeVisionAPI` for outputs |
+| `server.py` | Vision HTTP API (`/plates/start`, `POST /frames`, `/stream.mjpg` with optional `?boxes=true`, `/health`, `GET` and `PUT /zones`) and `FakeVisionAPI` for outputs |
 | `run.py` | Main loop: source → detect → track → zones → `ObservationFrame` + change mask → consumers and the API's status. Also the run CLI and `build_frame_loop()` for running in-process |
 
 ## The experimental motion tracker

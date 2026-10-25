@@ -1,9 +1,14 @@
 /**
- * The live camera with overlays: vision's MJPEG stream, with each entity's latest box drawn over
- * it and colored by its allergen risk.
+ * The live camera with overlays: vision's MJPEG stream, with boxes drawn one of two ways (WEB_FAST_BOXES):
+ * - fast (the default): the detector's own boxes, which vision draws into each frame
+ *   (/stream.mjpg?boxes=true), so they move with the picture at the camera's frame rate. Class and
+ *   confidence only: no entity IDs, no allergen risk.
+ * - entities (WEB_FAST_BOXES=false): each entity's latest box from entity_state, colored by its
+ *   allergen risk, updating only as fast as the state feed.
  *
  * Reads: GET <WEB_VISION_URL>/stream.mjpg; entity_state (latest box, probabilities, unknown).
- * Rules: display only. Only entities tracked now are listed and drawn; a lost track keeps its row in
+ * Rules: display only. Either way, entity identity and every verdict stay in the backend. Only
+ * entities tracked now are counted and, in the entity view, drawn; a lost track keeps its row in
  * the database (and still matters to verdicts) but not its box here. A missing or broken stream
  * shows "camera offline" and changes no verdict; the gate panel's FAULT comes from vision health,
  * not from this picture.
@@ -31,6 +36,15 @@ export function tracked_now(states: EntityState[]): EntityState[] {
   return latest.filter((state) => state.box !== null && now - state.t_ms <= TRACK_LOST_MS);
 }
 
+/**
+ * Whether the camera shows the detector's own boxes, drawn into each frame by vision (fast), instead
+ * of the entity boxes from entity_state. On unless WEB_FAST_BOXES is "false" or "0".
+ */
+export function fast_boxes(): boolean {
+  const value = import.meta.env.WEB_FAST_BOXES;
+  return value !== "false" && value !== "0";
+}
+
 /** Unknown history counts as every allergen; otherwise the strongest allergen sets the color. */
 export function risk_of(state: EntityState): Risk {
   if (state.unknown) return "unknown";
@@ -45,6 +59,8 @@ export function CameraPanel() {
   const states = useTableRows("entity_state");
   const [offline, set_offline] = useState(false);
   const boxes = tracked_now(states);
+  const fast = fast_boxes();
+  const stream = fast ? `${base}/stream.mjpg?boxes=true` : `${base}/stream.mjpg`;
 
   return (
     <section className="rail_section">
@@ -57,10 +73,8 @@ export function CameraPanel() {
         {base && offline && <p className="error">Camera offline. Verdicts don't depend on this picture.</p>}
         {base && !offline && (
           <div className="camera_frame">
-            <img src={`${base}/stream.mjpg`} alt="Live view of the counter" onError={() => set_offline(true)} />
-            {boxes.map((state) => (
-              <EntityBox key={state.entity_id} state={state} />
-            ))}
+            <img src={stream} alt="Live view of the counter" onError={() => set_offline(true)} />
+            {!fast && boxes.map((state) => <EntityBox key={state.entity_id} state={state} />)}
           </div>
         )}
       </div>
