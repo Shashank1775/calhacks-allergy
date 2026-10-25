@@ -14,11 +14,14 @@ Rules: fail closed: /health last_frame_t_ms stops advancing when frames stop, so
        POST /frames never takes the browser's time and never queues: vision stamps the frame, and only the newest
        waits; when pushes stop, frames stop and /health goes stale;
        endpoints never block the frame loop: update() only swaps references, JPEGs are encoded in the HTTP thread;
+       /stream.mjpg?boxes=true is display only: it draws the detector's own boxes for each frame, never entity IDs or
+       risk, and nothing on the verdict path reads it;
        open streams never stall /health or /plates/start: they wait for frames on their own few threads
 
     uv run python -m kitchen.vision.server --fake --port 8002     # FakeVisionAPI: test pattern, no camera or models
     curl localhost:8002/health                                     # {"fps": ..., "detector": ..., "last_frame_t_ms": ...}
     curl -o - localhost:8002/stream.mjpg | head -c 2000            # multipart MJPEG parts
+    curl -o - 'localhost:8002/stream.mjpg?boxes=true' | head -c 2000   # the same, with the detector's boxes drawn
     curl -X POST localhost:8002/plates/start -H 'Content-Type: application/json' -d '{"ticket_id": "t7"}'
     curl localhost:8002/zones                                      # {"zones": [{"zone_id", "kind", "polygon"}, ...]}
     curl -X PUT localhost:8002/zones -H 'Content-Type: application/json' -d @kitchen/vision/default_zones.json
@@ -46,7 +49,7 @@ from kitchen.shared.clock import SystemClock
 from kitchen.shared.config import load_settings
 from kitchen.shared.interfaces import Clock, StateUnavailable
 from kitchen.shared.models import Zone, validate
-from kitchen.vision.common import BadFrame, BindRefused, FrameOutput, VisionSettings
+from kitchen.vision.common import BadFrame, BindRefused, Detection, FrameOutput, VisionSettings
 from kitchen.vision.zones import DEFAULT_ZONES_PATH, ZoneFileError, load_zones, parse_zones, zone_record
 
 MJPEG_BOUNDARY = "frame"
@@ -62,6 +65,11 @@ STREAM_IDLE_S = 5.0
 # /health and /plates/start, so a room full of open streams can't stall the gate's health check or "start plate".
 STREAM_THREADS = 8
 
+# Box colors (RGB) for the fast camera view, by detector class. Neutral on purpose: these boxes say what the detector
+# sees, not allergen risk, so none of them is the red the entity view uses for a risky box.
+BOX_COLORS = {"knife": (255, 170, 0), "spoon": (0, 200, 255), "fork": (190, 120, 255), "bowl": (90, 220, 120)}
+OTHER_BOX_COLOR = (255, 255, 255)
+
 # The contract error code for each HTTP error FastAPI raises itself (unknown path, wrong method).
 HTTP_ERROR_CODES = {404: "not_found", 405: "method_not_allowed"}
 
@@ -73,7 +81,7 @@ class VisionStatus:
 
     update() only swaps references under a short lock, so a slow HTTP client can never hold up the frame loop. The
     RGB array is stored by reference: the frame loop must hand over a fresh array each frame and never write into
-    one it has already passed here.
+    one it has already passed here. The detector's boxes for the frame are kept with it, for the fast camera view.
     """
 
     def __init__(self, detector: str, history_ms: int = VisionSettings.track_lost_ms):
@@ -83,17 +91,18 @@ class VisionStatus:
         self._observation = None
         self._history: deque = deque()  # observations within history_ms of the newest, oldest first
         self._rgb = None
+        self._objects: list[Detection] = []  # the detector's own boxes for the latest frame
         self._frame_number = 0  # counts update() calls; the stream uses it, since frame_id may restart with a source
         self._fps = 0.0
 
-        # Encoding has its own lock so the frame loop never waits on it, and so each frame is encoded at most once
-        # however many clients are streaming.
+        # Encoding has its own lock so the frame loop never waits on it, and so each frame is encoded at most once per
+        # view (plain, or with boxes) however many clients are streaming.
         self._encode_lock = threading.Lock()
-        self._jpeg_frame_number = 0
-        self._jpeg = b""
+        self._jpegs: dict[bool, tuple[int, bytes]] = {}  # with boxes? -> (frame number, JPEG bytes)
 
-    def update(self, output: FrameOutput, rgb: np.ndarray) -> None:
-        """Record one frame from the frame loop: its observation, its RGB pixels and the new fps estimate."""
+    def update(self, output: FrameOutput, rgb: np.ndarray, objects: list[Detection] = ()) -> None:
+        """Record one frame from the frame loop: its observation, its RGB pixels, the detector's boxes for it, and the
+        new fps estimate."""
         observation = output.observation
         with self._new_frame:
             if self._observation is not None:
@@ -104,6 +113,7 @@ class VisionStatus:
             while self._history[0]["t_ms"] < observation["t_ms"] - self.history_ms:
                 self._history.popleft()
             self._rgb = rgb
+            self._objects = list(objects)
             self._frame_number += 1
             self._new_frame.notify_all()
 
@@ -128,8 +138,9 @@ class VisionStatus:
             last_frame_t_ms = None if self._observation is None else self._observation["t_ms"]
             return {"fps": round(self._fps, 1), "detector": self.detector, "last_frame_t_ms": last_frame_t_ms}
 
-    def next_jpeg(self, after: int, timeout_s: float) -> tuple[int, bytes] | None:
-        """Wait for a frame newer than frame number `after` and return (its frame number, its JPEG bytes).
+    def next_jpeg(self, after: int, timeout_s: float, boxes: bool = False) -> tuple[int, bytes] | None:
+        """Wait for a frame newer than frame number `after` and return (its frame number, its JPEG bytes), with the
+        detector's boxes for that frame drawn on it when `boxes` is set.
 
         Returns None if no newer frame arrives within timeout_s. Pass 0 for the first call and the returned frame
         number after that. A client that falls behind skips straight to the latest frame.
@@ -140,12 +151,14 @@ class VisionStatus:
                 return None
             frame_number = self._frame_number
             rgb = self._rgb
+            objects = self._objects
 
         with self._encode_lock:
-            if self._jpeg_frame_number != frame_number:
-                self._jpeg = encode_jpeg(rgb)
-                self._jpeg_frame_number = frame_number
-            return frame_number, self._jpeg
+            cached_number, jpeg = self._jpegs.get(boxes, (0, b""))
+            if cached_number != frame_number:
+                jpeg = encode_jpeg(draw_boxes(rgb, objects) if boxes else rgb)
+                self._jpegs[boxes] = (frame_number, jpeg)
+            return frame_number, jpeg
 
 
 def smoothed_fps(fps: float, interval_ms: int) -> float:
@@ -158,6 +171,45 @@ def smoothed_fps(fps: float, interval_ms: int) -> float:
     return (1 - FPS_SMOOTHING) * fps + FPS_SMOOTHING * instant_fps
 
 
+def draw_boxes(rgb: np.ndarray, objects: list[Detection]) -> np.ndarray:
+    """A copy of the RGB frame with each detection's box and "class confidence" label drawn on it.
+
+    The boxes are the detector's own, for this very frame, so they move with the picture. Display only: no entity IDs,
+    no allergen risk.
+    """
+    import cv2  # the ml extra, as in encode_jpeg
+
+    out = rgb.copy()
+    height, width = out.shape[:2]
+    thickness = max(2, round(min(width, height) / 240))
+    font_scale = max(0.5, min(width, height) / 900)
+    for detection in objects:
+        x1, y1, x2, y2 = detection.box
+        top_left = (round(x1 * width), round(y1 * height))
+        bottom_right = (round(x2 * width), round(y2 * height))
+        color = BOX_COLORS.get(detection.class_name, OTHER_BOX_COLOR)
+        cv2.rectangle(out, top_left, bottom_right, color, thickness)
+
+        label = f"{detection.class_name} {detection.confidence:.2f}"
+        (text_width, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+        # The label sits on a filled strip just above the box, or just inside it at the top edge of the frame.
+        label_y = top_left[1] if top_left[1] > text_height + baseline else top_left[1] + text_height + baseline
+        cv2.rectangle(
+            out, (top_left[0], label_y - text_height - baseline), (top_left[0] + text_width, label_y), color, -1
+        )
+        cv2.putText(
+            out,
+            label,
+            (top_left[0], label_y - baseline),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
+        )
+    return out
+
+
 def encode_jpeg(rgb: np.ndarray) -> bytes:
     """JPEG bytes of an RGB uint8 frame."""
     import cv2  # the ml extra; imported here so the API module loads without it until a stream is asked for
@@ -168,14 +220,17 @@ def encode_jpeg(rgb: np.ndarray) -> bytes:
     return jpeg.tobytes()
 
 
-async def mjpeg_parts(status: VisionStatus, idle_s: float, threads: anyio.CapacityLimiter) -> AsyncIterator[bytes]:
-    """One multipart MJPEG part per new frame, ending once no new frame has come for idle_s.
+async def mjpeg_parts(
+    status: VisionStatus, idle_s: float, threads: anyio.CapacityLimiter, boxes: bool = False
+) -> AsyncIterator[bytes]:
+    """One multipart MJPEG part per new frame, with the detector's boxes drawn when `boxes` is set, ending once no new
+    frame has come for idle_s.
 
     The wait for each frame runs on one of `threads`, never on the event loop (it blocks) or on the default pool.
     """
     frame_number = 0
     while True:
-        frame = await anyio.to_thread.run_sync(status.next_jpeg, frame_number, idle_s, limiter=threads)
+        frame = await anyio.to_thread.run_sync(status.next_jpeg, frame_number, idle_s, boxes, limiter=threads)
         if frame is None:
             return
         frame_number, jpeg = frame
@@ -328,9 +383,10 @@ def create_app(
         return await anyio.to_thread.run_sync(take_frame, jpeg_bytes)
 
     @app.get("/stream.mjpg")
-    def stream():
+    def stream(boxes: bool = False):
+        # boxes=true is the fast camera view: each frame with the detector's own boxes for it, drawn here.
         media_type = f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}"
-        return StreamingResponse(mjpeg_parts(status, stream_idle_s, stream_threads), media_type=media_type)
+        return StreamingResponse(mjpeg_parts(status, stream_idle_s, stream_threads, boxes), media_type=media_type)
 
     return app
 

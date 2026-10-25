@@ -7,7 +7,8 @@ Emits: nothing
 Rules: fail closed: every /plates/start refusal is a 409 with the contract's code and nothing is bound;
        /health last_frame_t_ms stops advancing when frames stop; the frame loop never waits on a slow client;
        a bad PUT /zones is a 422 bad_zones and changes nothing; a bad POST /frames is a 422 bad_frame and pushes
-       nothing, and a runner on its own camera refuses pushed frames (409 not_web_source)
+       nothing, and a runner on its own camera refuses pushed frames (409 not_web_source); /stream.mjpg?boxes=true
+       draws the detector's boxes on a copy, never on the frame loop's array
 """
 
 import json
@@ -26,7 +27,7 @@ from kitchen.shared.clock import FakeClock
 from kitchen.shared.interfaces import StateUnavailable
 from kitchen.vision import server
 from kitchen.vision.camera import PushedFrames
-from kitchen.vision.common import BindRefused, FrameOutput
+from kitchen.vision.common import BindRefused, Detection, FrameOutput
 from kitchen.vision.server import FakeVisionAPI, VisionStatus, create_app, parse_cors_origins
 from kitchen.vision.zones import DEFAULT_ZONES_PATH, ZoneFileError, load_zones, parse_zones
 
@@ -263,6 +264,55 @@ def test_each_frame_is_encoded_at_most_once(monkeypatch):
     assert len(encoded) == 1
     assert first[0] == first[1] == first[2]
     assert status.next_jpeg(first[0][0], 0.05) is None  # nothing newer yet
+
+
+KNIFE_BOX = Detection("knife", (0.25, 0.25, 0.75, 0.75), 0.91)
+
+
+def decoded(jpeg: bytes) -> np.ndarray:
+    """An MJPEG part's JPEG as RGB."""
+    return cv2.cvtColor(cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+
+def test_boxes_draws_the_detectors_boxes_for_the_frame_and_leaves_the_plain_stream_alone():
+    status = VisionStatus("onnx")
+    status.update(frame_output(0, 0), rgb_frame(100), [KNIFE_BOX])
+
+    _, plain = status.next_jpeg(0, 0.1)
+    _, boxed = status.next_jpeg(0, 0.1, boxes=True)
+
+    edge = decoded(boxed)[36, 16]  # on the box's left edge (x = 0.25 of 64 px), below its label
+    assert abs(int(edge[0]) - 255) < 40 and abs(int(edge[1]) - 170) < 40 and int(edge[2]) < 60
+    assert np.abs(decoded(plain).astype(int) - 100).max() < 10  # no box drawn
+    assert np.abs(status._rgb.astype(int) - 100).max() == 0  # the frame loop's array is never drawn on
+
+
+def test_each_view_of_a_frame_is_encoded_at_most_once(monkeypatch):
+    encoded = []
+
+    def counting_encode(rgb):
+        encoded.append(rgb)
+        return b"\xff\xd8\xff\xd9"
+
+    monkeypatch.setattr(server, "encode_jpeg", counting_encode)
+    status = VisionStatus("onnx")
+    status.update(frame_output(0, 0), rgb_frame(), [KNIFE_BOX])
+    for _ in range(3):
+        status.next_jpeg(0, 0.1)
+        status.next_jpeg(0, 0.1, boxes=True)
+    assert len(encoded) == 2
+
+
+def test_stream_with_boxes_true_serves_frames_with_the_boxes_drawn():
+    status = VisionStatus("onnx")
+    status.update(frame_output(0, 0), rgb_frame(100), [KNIFE_BOX])
+    client = client_for(status, stream_idle_s=0.1)
+
+    boxed = client.get("/stream.mjpg?boxes=true").content.split(b"\r\n\r\n", 1)[1].rstrip(b"\r\n")
+    plain = client.get("/stream.mjpg").content.split(b"\r\n\r\n", 1)[1].rstrip(b"\r\n")
+
+    assert abs(int(decoded(boxed)[36, 16][0]) - 255) < 40
+    assert np.abs(decoded(plain).astype(int) - 100).max() < 10
 
 
 @pytest.mark.safety

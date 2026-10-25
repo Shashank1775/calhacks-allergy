@@ -85,7 +85,11 @@ The screens poll the runner's `GET /state` twice a second and show REPLAY, since
 uv run python tools/run_local.py --live --webcam 0 --zones zones.json
 ```
 
-**With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop.
+**With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop. The boxes come one of two ways, set by `WEB_FAST_BOXES` (restart `npm run dev` after changing it):
+- fast (the default): the detector's own boxes, drawn into each frame by vision (`/stream.mjpg?boxes=true`). They move with the picture, labeled with class and confidence only.
+- entities (`WEB_FAST_BOXES=false`): each tracked entity's latest box from `entity_state`, colored by allergen risk. These update only as fast as the state feed, about twice a second.
+
+Either way the backend tracks entities and decides verdicts exactly the same; only the picture changes.
 
 **Video summary**: add `WEB_SUMMARY_URL=http://localhost:8003` and start the summary service in another terminal, then open http://localhost:5173/summary. The service must list the web origin in `SUMMARY_CORS_ORIGINS` (default `http://localhost:5173`). With `WEB_MOCK_API=1` the page uses a mock service instead, and without either it says the service isn't set up.
 

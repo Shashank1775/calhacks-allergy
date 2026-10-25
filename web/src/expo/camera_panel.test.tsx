@@ -1,9 +1,9 @@
 import { fireEvent, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { empty_tables, type StateSource, type Tables } from "../state/state_source";
 import { render_with_source } from "../test_utils";
 import type { EntityState } from "../types/TEMPORARY";
-import { CameraPanel, risk_of, TRACK_LOST_MS, tracked_now } from "./camera_panel";
+import { CameraPanel, fast_boxes, risk_of, TRACK_LOST_MS, tracked_now } from "./camera_panel";
 
 function state(
   entity_id: string,
@@ -38,7 +38,33 @@ function source_with(states: EntityState[]): StateSource {
   };
 }
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("CameraPanel", () => {
+  it("in the fast view shows vision's stream with the detector's boxes drawn in, and no entity boxes", () => {
+    vi.stubEnv("WEB_FAST_BOXES", "true");
+    const { container } = render_with_source(
+      <CameraPanel />,
+      source_with([state("tool-knife-1", [0.1, 0.1, 0.2, 0.3], { peanut: 0.9 })]),
+    );
+
+    expect(screen.getByAltText("Live view of the counter")).toHaveAttribute(
+      "src",
+      "http://vision.test/stream.mjpg?boxes=true",
+    );
+    expect(container.querySelectorAll(".entity_box")).toHaveLength(0);
+    expect(screen.getByText("CAM-01 · 1 tracked")).toBeInTheDocument(); // the backend still tracks it
+  });
+
+  it("is in the fast view unless WEB_FAST_BOXES says false", () => {
+    vi.stubEnv("WEB_FAST_BOXES", "");
+    expect(fast_boxes()).toBe(true);
+    vi.stubEnv("WEB_FAST_BOXES", "false");
+    expect(fast_boxes()).toBe(false);
+    vi.stubEnv("WEB_FAST_BOXES", "0");
+    expect(fast_boxes()).toBe(false);
+  });
+
   it("shows vision's stream with each entity's box colored by risk", () => {
     render_with_source(
       <CameraPanel />,
