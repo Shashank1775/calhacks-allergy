@@ -183,8 +183,9 @@ class LayaPlateCheck(Protocol):
 ```
 
 - **Stricter only.** The verdict adds a `laya_flagged` hold reason for each forbidden allergen with P >= 1 − `pass_threshold`, the same flag rule it applies to the graph's numbers. Laya can never remove a hold reason or cause a PASS.
-- It reads only the edges on a time-forward path to the plate (anything else is dropped first). Raises `LayaCheckUnavailable` on any failure, including more than 10 such edges (longer than anything it was trained on) or an edge whose entity has no node. The verdict then holds with `laya_unavailable` (safety rule: fail closed).
-- **Fake:** `FakeLayaCheck`, which answers with the exact noisy-OR result over the subgraph (a perfect Laya).
+- It reads only the edges on a time-forward path to the plate (anything else is dropped first), up to 15 of them (`MAX_EDGES`, the owner's call; the model was trained on up to 10). A longer history is shortened, never lowering any allergen's reach: transfers that move nothing are dropped, then the oldest events are folded into rounded-up starting values. If the model still has to cut the input to fit its 512 tokens, the history is folded further (10, then 5 events) and asked again.
+- Raises `LayaCheckUnavailable` on any failure: an edge whose entity has no node, an input the model still has to cut at the shortest window, an answer without the model's usage report (so it can't be checked for a cut), or a malformed answer. The verdict then holds with `laya_unavailable` (safety rule: fail closed). Length alone no longer raises.
+- **Fake:** `FakeLayaCheck`, which answers with the exact noisy-OR result (full transfer, k = 1) over the same history the model reads: the subgraph's on-path edges, shortened as above when there are more than 15 (a perfect Laya).
 
 ## Transcriber and Speaker
 
@@ -245,12 +246,15 @@ Owner: **orders** (`kitchen/orders/api.py`). Consumer: **outputs** (tablet scree
 
 ## Vision HTTP API (on the Pi)
 
-Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start plate" button, camera overlays, gate health watch).
+Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start plate" button, camera overlays, gate health watch, zone editor, camera and video frames from the browser).
 
 | Method and path | Body | Returns | Notes |
 |---|---|---|---|
 | `POST /plates/start` | `{"ticket_id": str}` | `{"plate_id": str}` | Binds the plate at the plating spot. Otherwise `409 no_plate_at_spot`, `409 multiple_plates_at_spot` or `409 plate_already_bound`; never guesses |
-| `GET /stream.mjpg` | — | MJPEG | Raw camera stream |
+| `POST /frames` | One frame as `image/jpeg` | `204`, no body | For a runner fed by the web app's camera or video (`--from-web`). Vision stamps each frame with its own clock when it arrives; the browser's time is never used. Only the newest frame waits, so a slow detector never builds a backlog. Otherwise `409 not_web_source` when the runner reads its own camera or video, or `422 bad_frame` when the body isn't a decodable JPEG |
+| `GET /stream.mjpg` | — | MJPEG | Raw camera stream. With `?boxes=true`, each frame comes with the detector's own boxes for that frame drawn in (class and confidence), the fast camera view: display only, with no entity IDs or allergen risk |
 | `GET /health` | — | `{"fps": float, "detector": "onnx"\|"hailo", "last_frame_t_ms": int}` | `detector` is `onnx` until the Hailo is connected. The gate goes to `fault` if this goes stale |
+| `GET /zones` | — | `{"zones": [{"zone_id": str, "kind": str, "polygon": [[x, y], ...]}, ...]}` | The zones in use now, in the zones file format (`kitchen/vision/zones.py`): `kind` as in the `zone` table, points normalized 0..1 like boxes, bin slots named `slot-<n>` |
+| `PUT /zones` | `{"zones": [...]}`, as `GET /zones` returns | The zones now in use, as `GET /zones` | Replaces every zone. A body that isn't a valid zones file, or that gives a zone ID used earlier in this run a different `kind`, is `422 bad_zones` (the message says which zone and why), and nothing changes; to change an area's kind, draw a new zone with a new ID. Otherwise it saves the zones file (`500 internal_error` if it can't, and nothing changes), uses the new zones from the next frame, and replaces the `zone` table (`503 state_unavailable` if the database can't be written, and the old zones stay). Entities keep their IDs and origins: a zone change never renames a bin or makes anything clean |
 
 Overlays are drawn client-side from each entity's latest `entity_state` (box and allergens).

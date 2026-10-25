@@ -1,23 +1,26 @@
-"""Frame sources: a video file, the laptop webcam or the Pi camera, each yielding RGB frames stamped with t_ms.
-Replaying a recording is record.ReplaySource.
+"""Frame sources: a video file, the laptop webcam, the Pi camera, or JPEGs pushed from the web app, each yielding RGB
+frames stamped with t_ms. Replaying a recording is record.ReplaySource.
 
 Owner: vision (agents)
 Step:  vision
-Reads: video files in data/, the webcam (OpenCV), the Pi camera (picamera2, on the Pi only), Clock
+Reads: video files in data/, the webcam (OpenCV), the Pi camera (picamera2, on the Pi only), JPEG frames pushed to
+       POST /frames (PushedFrames), Clock
 Emits: SourceFrame (frame_id from 0, t_ms, RGB uint8 [H, W, 3]) for detect.py
 Rules: time runs forward: t_ms is strictly increasing, even across source restarts (after_t_ms); a source that can't
-       open raises OSError, and a stream that ends just stops: no frame is ever invented
+       open raises OSError, and a stream that ends just stops: no frame is ever invented or repeated
 
 Timestamps:
 - VideoSource uses the file's own timestamps (CAP_PROP_POS_MSEC) offset from the clock time when playback starts, so
   replaying a file is deterministic for a given clock.
-- WebcamSource and PiCameraSource stamp each frame with clock.now_ms() when it arrives.
+- WebcamSource, PiCameraSource and PushedFrames stamp each frame with clock.now_ms() when it arrives (for a pushed
+  frame, when the POST reaches vision: the browser's time is never used).
 - Either way a timestamp that isn't after the previous one is bumped to previous + 1 (forward_t_ms).
 
 Restarting a source: pass the old source's last_t_ms as after_t_ms, and the new one starts after it.
 """
 
 import math
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -25,7 +28,7 @@ import cv2
 import numpy as np
 
 from kitchen.shared.interfaces import Clock
-from kitchen.vision.common import SourceFrame
+from kitchen.vision.common import BadFrame, SourceFrame
 
 
 def forward_t_ms(t_ms: int, last_t_ms: int) -> int:
@@ -40,6 +43,18 @@ def forward_t_ms(t_ms: int, last_t_ms: int) -> int:
 def to_rgb(bgr: np.ndarray) -> np.ndarray:
     """Convert an OpenCV BGR frame to the RGB uint8 [H, W, 3] every SourceFrame carries."""
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def decode_jpeg(jpeg_bytes: bytes) -> np.ndarray:
+    """The RGB uint8 [H, W, 3] frame in `jpeg_bytes`. Raises BadFrame unless they are a JPEG OpenCV can decode."""
+    # A JPEG starts with the SOI marker FF D8; checking it keeps a PNG or another image cv2.imdecode would also read
+    # from passing as a camera frame.
+    if not jpeg_bytes.startswith(b"\xff\xd8"):
+        raise BadFrame("the body is not a JPEG")
+    bgr = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise BadFrame("OpenCV can't decode the JPEG")
+    return to_rgb(bgr)
 
 
 def file_ms(capture: cv2.VideoCapture) -> int:
@@ -163,3 +178,40 @@ class PiCameraSource:
         finally:
             self.camera.stop()
             self.camera.close()
+
+
+class PushedFrames:
+    """Frames pushed in as JPEGs (POST /frames, from the web app's camera or video), each stamped with clock.now_ms()
+    when it is pushed.
+
+    push() runs on the HTTP threads and iterating on the frame loop's. Only the newest frame waits: a frame the loop
+    hasn't taken yet is replaced by the next one, so a slow detector never builds a backlog of old frames. Each frame
+    is yielded once. While no frame comes, iterating waits: frames stop, /health goes stale and the gate shows fault
+    (fail closed). No frame is ever invented or repeated, and the iteration never ends by itself.
+    """
+
+    def __init__(self, clock: Clock, after_t_ms: int = -1):
+        self.clock = clock
+        self.last_t_ms = after_t_ms
+        self._new_frame = threading.Condition()
+        self._waiting: tuple[int, np.ndarray] | None = None  # (t_ms, rgb) of the newest frame not yet yielded
+
+    def push(self, jpeg_bytes: bytes) -> None:
+        """Decode one JPEG and make it the frame that waits, replacing any frame not yet taken. Raises BadFrame on a
+        body that isn't a decodable JPEG, and then changes nothing."""
+        rgb = decode_jpeg(jpeg_bytes)  # outside the lock: decoding takes milliseconds, and the loop mustn't wait on it
+        with self._new_frame:
+            t_ms = forward_t_ms(self.clock.now_ms(), self.last_t_ms)
+            self.last_t_ms = t_ms
+            self._waiting = (t_ms, rgb)
+            self._new_frame.notify()
+
+    def __iter__(self) -> Iterator[SourceFrame]:
+        """Yield each newest frame once, waiting for the next push, forever."""
+        frame_id = 0
+        while True:
+            with self._new_frame:
+                self._new_frame.wait_for(lambda: self._waiting is not None)
+                (t_ms, rgb), self._waiting = self._waiting, None
+            yield SourceFrame(frame_id=frame_id, t_ms=t_ms, rgb=rgb)
+            frame_id += 1

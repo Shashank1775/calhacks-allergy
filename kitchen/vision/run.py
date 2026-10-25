@@ -4,7 +4,8 @@ Owner: vision (agents)
 Step:  vision
 Reads: camera.py, detect.py, tracking.py, zones.py, kitchen/shared/change_mask.py, Clock
 Emits: observation_frame and its change mask to EntityStore.ingest (partner), kitchen/interactions and record.py
-Rules: the frame loop never blocks on a consumer; time runs forward
+Rules: the frame loop never blocks on a consumer; time runs forward; a zone change (PUT /zones) applies from the
+       next frame, never partway through one
 
 FrameLoop.step() runs one frame through the pipeline and hands the FrameOutput to every consumer (the entity store,
 the interactions step, a JSONL writer, a recorder) and to the Vision API's status. A detector error stops the loop
@@ -12,8 +13,11 @@ the interactions step, a JSONL writer, a recorder) and to the Vision API's statu
 still reaches the other consumers and the status, so one broken consumer can't freeze the camera feed.
 
     uv run python -m kitchen.vision.run --video data/recordings/prep.mp4 --zones zones.json --out frames.jsonl
-    uv run python -m kitchen.vision.run --webcam 0 --zones zones.json --serve       # live, with the Vision HTTP API
-    .venv/bin/python -m kitchen.vision.run --picamera --zones zones.json --serve    # on the Pi, from its camera
+    uv run python -m kitchen.vision.run --webcam 0 --serve       # live, with the Vision HTTP API
+    .venv/bin/python -m kitchen.vision.run --picamera --serve    # on the Pi, from its camera
+
+Without --zones, a run uses data/zones.json (zones saved from the web app) if it exists, else the committed
+kitchen/vision/default_zones.json (zones.zones_files), and logs the file and its sha256.
 
 In-process (the local runner's live mode): build a FrameLoop with build_frame_loop() and pass consumers such as
 entity_store_consumer(store); the loop needs nothing else from this module.
@@ -47,8 +51,9 @@ Consumer = Callable[[FrameOutput], None]
 class FrameLoop:
     """One frame at a time through detection, tracking and zones, to an ObservationFrame and its change mask.
 
-    `status` is the Vision API's VisionStatus (or None): it gets every output with its RGB frame, for /health and
-    /stream.mjpg.
+    `status` is the Vision API's VisionStatus (or None): it gets every output with its RGB frame and the detector's own
+    boxes for that frame, for /health and /stream.mjpg (?boxes=true draws them). use_zones() swaps the zone lookup while
+    it runs (PUT /zones).
     """
 
     def __init__(
@@ -79,9 +84,12 @@ class FrameLoop:
         """
         if self._previous_t_ms is not None and frame.t_ms <= self._previous_t_ms:
             raise ValueError(f"frame t_ms {frame.t_ms} does not follow {self._previous_t_ms} (time runs forward)")
+        # Read the lookup once, before anything else: a zone change landing while this frame runs applies from the
+        # next frame, so no frame's detections are ever split between two layouts.
+        zone_of = self.zone_of
         height, width = frame.rgb.shape[:2]
         objects, people = self.detector.detect(frame)
-        detections = self.tracker.update(objects, people, frame.t_ms, self.zone_of, width, height)
+        detections = self.tracker.update(objects, people, frame.t_ms, zone_of, width, height)
 
         observation = {
             "frame_id": frame.frame_id,
@@ -100,8 +108,18 @@ class FrameLoop:
             except Exception:  # one failing consumer must not starve the others or stop the camera
                 logger.exception("frame %s: consumer %r failed", frame.frame_id, consumer)
         if self.status is not None:
-            self.status.update(output, frame.rgb)
+            # The detector's boxes go to the stream as they are, for display only: the fast camera view draws them on the
+            # same frame, with no tracking or entity IDs. Everything above is unchanged by them.
+            self.status.update(output, frame.rgb, objects)
         return output
+
+    def use_zones(self, zone_of: ZoneLookup) -> None:
+        """Assign zones with `zone_of` from the next frame on (zones.LiveZones calls this for PUT /zones).
+
+        One reference swap, so it is atomic between frames. Entities already tracked keep their IDs and origins: the
+        tracker decides those at first sighting and never looks at zones again for them.
+        """
+        self.zone_of = zone_of
 
     def run(self, source: Iterable[SourceFrame], stop: threading.Event | None = None) -> int:
         """Run every frame from the source until it ends or `stop` is set. Returns how many frames ran."""
@@ -222,6 +240,26 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def load_run_zones(zones_arg: Path | None) -> tuple[list, Path, Path]:
+    """The zones a run starts with, the file they came from, and the file PUT /zones saves to (zones.zones_files).
+
+    Logs the file and its sha256, so a run's log says exactly which layout it started on. A bad file raises
+    ZoneFileError: the run never starts on half a layout.
+    """
+    from kitchen.vision.zones import load_zones, zones_files
+
+    load_path, save_path = zones_files(zones_arg)
+    zones = load_zones(load_path)
+    logger.info(
+        "zones: %d from %s (sha256 %s); PUT /zones saves to %s",
+        len(zones),
+        load_path,
+        file_sha256(load_path),
+        save_path,
+    )
+    return zones, load_path, save_path
+
+
 def close_all(closers: list[Callable[[], None]]) -> None:
     """Run each closer once, emptying the list, so a later call (from `finally`) closes nothing twice."""
     while closers:
@@ -258,7 +296,11 @@ def main(argv: list[str] | None = None) -> int:
     source_group.add_argument("--video", type=Path, help="a video file")
     source_group.add_argument("--webcam", type=int, help="a webcam index, e.g. 0")
     source_group.add_argument("--picamera", action="store_true", help="the Raspberry Pi camera (picamera2, on the Pi)")
-    parser.add_argument("--zones", type=Path, help="zones.json (see kitchen/vision/zones.py)")
+    parser.add_argument(
+        "--zones",
+        type=Path,
+        help="a zones file (kitchen/vision/zones.py); default: data/zones.json if saved, else the default layout",
+    )
     parser.add_argument("--out", type=Path, help="write every ObservationFrame to this JSONL file")
     parser.add_argument(
         "--record", type=Path, help="record frames.jsonl, change.npz and manifest.json to this new folder"
@@ -273,15 +315,13 @@ def main(argv: list[str] | None = None) -> int:
     from kitchen.vision.plates import start_plate
     from kitchen.vision.record import Recorder, change_mask_params
     from kitchen.vision.server import VisionStatus, create_app, parse_cors_origins
-    from kitchen.vision.zones import load_zones, push_zones
+    from kitchen.vision.zones import LiveZones, push_zones
 
     settings = load_settings(VisionSettings, "VISION_")
     log_settings(settings)
-    zones = load_zones(args.zones) if args.zones else []
+    zones, zones_path, zones_save_path = load_run_zones(args.zones)
     if not zones:
-        logger.warning(
-            "no zones file: every detection's zone is null, so there are no bins, plating spot or clean stack"
-        )
+        logger.warning("no zones: every detection's zone is null, so there are no bins, plating spot or clean stack")
     # Standalone, zones and plate bindings live in this process's FakeStateClient. In the local runner's live mode the
     # loop is built in-process instead, on the shift's own StateClient.
     state = FakeStateClient()
@@ -303,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.record:
         manifest = {
             "source": source_name(args),
-            "zones_sha256": file_sha256(args.zones) if args.zones else None,
+            "zones_sha256": file_sha256(zones_path),
             "shift_start_ms": settings.shift_start_ms,
             "detector": loop.detector.backend,
             "bundle_dir": settings.bundle_dir,
@@ -315,19 +355,22 @@ def main(argv: list[str] | None = None) -> int:
 
     server = None
     if args.serve:
+        live_zones = LiveZones(zones, zones_save_path, state, loop.use_zones)
 
         def bind(ticket_id: str) -> str:
             return start_plate(
                 state,
                 status.recent_observations(),
-                zones,
+                live_zones.current(),
                 ticket_id,
                 clock.now_ms(),
                 settings.plate_bind_max_age_ms,
                 settings.track_lost_ms,
             )
 
-        app = create_app(status, bind, parse_cors_origins(settings.cors_origins))
+        app = create_app(
+            status, bind, live_zones.current, live_zones.replace, parse_cors_origins(settings.cors_origins)
+        )
         server = serve_in_background(app, settings.port)
         logger.info("vision API on http://localhost:%s", settings.port)
 

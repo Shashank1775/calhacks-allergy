@@ -4,22 +4,29 @@ Owner: vision (agents)
 Step:  vision
 Reads: kitchen.vision.hailo
 Emits: nothing
-Rules: fail closed: a device error raises and returns nothing (safety test); no test needs hailo_platform
+Rules: fail closed: a device error raises and returns nothing, and a detection HEF whose class count isn't the
+       manifest's fails at startup (safety tests); no test needs hailo_platform
 """
 
+import json
 import subprocess
 import sys
+import types
 
 import numpy as np
 import pytest
 
+from kitchen.vision.common import VisionSettings
+from kitchen.vision.detect import decode_objects, detector_classes
 from kitchen.vision.hailo import (
     DFL_BINS,
     KEYPOINTS,
     STRIDES,
     HailoSession,
     anchor_count,
+    check_detection_classes,
     detections_to_onnx,
+    open_sessions,
     pose_heads_to_onnx,
     to_hailo_input,
 )
@@ -164,6 +171,70 @@ def test_device_error_raises_instead_of_returning_detections():
 
     with pytest.raises(RuntimeError, match="HAILO_TIMEOUT"):
         session.run(None, {"images": np.zeros((1, 3, SIZE, SIZE), dtype=np.float32)})
+
+
+def test_a_custom_hef_reports_its_classes_in_class_names_order():
+    """The HEF's NMS lists classes by id in the output order of the ONNX it was compiled from, the order of
+    class_names, and detections_to_onnx keeps class id i on score row 4 + i: so class id i decodes as class_names[i]."""
+    names = ["plate", "bowl", "knife", "spoon", "fork"]
+    per_class = [np.zeros((0, 5))] * len(names)
+    per_class[0] = np.array([[0.0, 0.0, 0.5, 0.5, 0.9]])  # a plate, top left
+    per_class[4] = np.array([[0.5, 0.5, 1.0, 1.0, 0.8]])  # a fork, bottom right
+    session = HailoSession(FakeNetwork({"nms": per_class}, is_nms=True, num_classes=len(names)))
+    check_detection_classes(session, len(names))
+
+    (out,) = session.run(None, {"images": np.zeros((1, 3, SIZE, SIZE), dtype=np.float32)})
+    classes = detector_classes({"classes": len(names), "class_names": names})
+    found = decode_objects(out, (SIZE, SIZE), VisionSettings(input_size=SIZE), classes)
+
+    assert [d.class_name for d in found] == ["plate", "fork"]
+    assert found[0].box == pytest.approx((0.0, 0.0, 0.5, 0.5), abs=1e-6)
+    assert found[1].box == pytest.approx((0.5, 0.5, 1.0, 1.0), abs=1e-6)
+
+
+@pytest.mark.safety
+def test_a_detection_hef_with_another_class_count_than_the_manifest_fails_at_startup():
+    """A stock 80-class HEF left in a custom bundle (or the reverse) would put each class's boxes under another class's
+    name, so the count must match before any frame runs."""
+    session = HailoSession(FakeNetwork({}, is_nms=True, num_classes=80))
+
+    with pytest.raises(ValueError, match="the det HEF scores 80 classes, but the bundle manifest has 5"):
+        check_detection_classes(session, 5)
+    check_detection_classes(session, 80)
+
+
+class FakeVDevice:
+    """Stands in for hailo_platform.VDevice: open_sessions only makes one and hands it to each network."""
+
+    def __init__(self, params):
+        self.params = params
+
+    @staticmethod
+    def create_params():
+        return types.SimpleNamespace()
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(("hef_classes", "opens"), [(5, True), (80, False)])
+def test_open_sessions_checks_the_det_hef_against_the_manifest_class_names(tmp_path, monkeypatch, hef_classes, opens):
+    names = ["plate", "bowl", "knife", "spoon", "fork"]
+    networks = {"det": {"hef": "det.hef", "classes": 5, "class_names": names}, "pose": {"hef": "pose.hef"}}
+    (tmp_path / "manifest.json").write_text(json.dumps({"networks": networks}))
+    scheduling = types.SimpleNamespace(ROUND_ROBIN="round robin")
+    hailo_platform = types.SimpleNamespace(VDevice=FakeVDevice, HailoSchedulingAlgorithm=scheduling)
+    monkeypatch.setitem(sys.modules, "hailo_platform", hailo_platform)
+
+    def fake_network(vdevice, hef_path):
+        is_det = hef_path.name == "det.hef"
+        return FakeNetwork({}, is_nms=is_det, num_classes=hef_classes if is_det else 0)
+
+    monkeypatch.setattr("kitchen.vision.hailo.HailoNetwork", fake_network)
+
+    if opens:
+        assert open_sessions(tmp_path)["det"].get_outputs()[0].shape[1] == 4 + 5
+    else:
+        with pytest.raises(ValueError, match="the det HEF scores 80 classes, but the bundle manifest has 5"):
+            open_sessions(tmp_path)
 
 
 def test_no_hailo_import_by_default():

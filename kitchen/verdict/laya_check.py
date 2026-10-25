@@ -7,7 +7,8 @@ Reads: PlateSubgraph from ProvenanceGraph.subgraph (contracts/schemas/plate_subg
        forbidden allergens
 Emits: {allergen_unit_id: P(reached the plate)}; laya_hold_reasons() turns that into verdict hold reasons
 Rules: fail closed: any failure raises LayaCheckUnavailable, which holds the plate;
-       stricter only: Laya's answer can add a hold reason, and nothing here can remove one or cause a pass
+       stricter only: Laya's answer can add a hold reason, and nothing here can remove one or cause a pass; a history
+       too long to read is shortened only in ways that keep or raise every allergen's reach (shorten)
 
 The plate model is separate from the ticket-note model (kitchen/orders/laya_parser.py): different job, different
 training data. The wording below is what it was fine-tuned on. Don't edit it without retraining.
@@ -32,9 +33,14 @@ UNIT_NAMES = {
     "sesame": "sesame",
 }
 
-# The longest on-path history in the training data, and well inside Laya's 512 tokens. A longer one was never seen
-# in training, so the check refuses it (fail closed) rather than guess.
-MAX_EDGES = 10
+# The longest history the model reads. It was trained on up to 10 edges; 15 is the owner's call, so 11 to 15 edges are
+# longer than anything it saw. Laya is stricter only: a wrong answer there can add a HOLD but never cause a PASS, and
+# the graph's own reachability still decides. A longer history is shortened to fit (shorten).
+MAX_EDGES = 15
+
+# If laya has to cut the input to fit its 512 tokens (folded starting values make the text longer), the check folds
+# the history further, to these many events, and asks again; if it still doesn't fit, it holds (LocalLayaCheck.check).
+SHORTER_WINDOWS = (10, 5)
 
 ACTION_WORDS = {"transfer.contact": "contact", "transfer.scoop": "scoop", "transfer.wipe": "wipe"}
 
@@ -79,19 +85,69 @@ def on_path(subgraph):
     return list(reversed(kept))
 
 
-def readable_history(subgraph):
-    """The on-path edges and the nodes they need, or LayaCheckUnavailable if it's too long or a node is missing."""
+def readable_history(subgraph, limit=MAX_EDGES):
+    """The on-path edges and the nodes they need, shortened to at most `limit` events, or LayaCheckUnavailable if a
+    node is missing. A history that already fits is read exactly as it is."""
     edges = on_path(subgraph)
-    if len(edges) > MAX_EDGES:
-        raise LayaCheckUnavailable(
-            f"{len(edges)} edges on the plate's paths; the model was trained on up to {MAX_EDGES}"
-        )
     nodes = {n["entity_id"]: n for n in subgraph["nodes"]}
     needed = [subgraph["plate_id"]] + [entity for e in edges for entity in (e["a_id"], e["b_id"])]
     missing = sorted({entity for entity in needed if entity not in nodes})
     if missing:
         raise LayaCheckUnavailable(f"the subgraph has edges but no node for {missing}")
+    if len(edges) > limit:
+        edges, nodes = shorten(edges, nodes, limit)
     return edges, nodes
+
+
+# ---------- shortening a long history ----------
+
+
+def shorten(edges, nodes, limit):
+    """At most `limit` events that carry at least as much of every allergen onto the plate as `edges` do.
+
+    First, transfers whose sources carry nothing at that moment are dropped: they move nothing, so no reach changes.
+    Washes are kept. If that's still too long, the oldest events are folded into what each entity carried after them,
+    rounded up to the 2 decimals the model reads, and the model reads those as starting values. Noisy-OR only grows
+    when a starting value grows, so every allergen's reach stays the same or goes up (toward HOLD).
+
+    Merging repeated touches into one edge isn't used: it would lower reach. From a source carrying 0.9, two 0.8
+    touches give 1 - 0.28 ** 2 = 0.92, and a single edge can give at most 0.9.
+    """
+    carried = starting_values(nodes)
+    moving = []
+    for edge in edges:
+        if edge["action"] == "clean.wash" or moves_something(edge, carried):
+            moving.append(edge)
+        apply_edge(edge, carried)
+    if len(moving) <= limit:
+        return moving, nodes
+
+    folded, kept = moving[:-limit], moving[-limit:]
+    start = starting_values(nodes)
+    after = carry(folded, nodes)
+    return kept, {
+        entity: node if after[entity] == start[entity] else folded_node(node, after[entity])
+        for entity, node in nodes.items()
+    }
+
+
+def moves_something(edge, carried):
+    """Whether a transfer's sources carry any allergen at this moment, so it could move something."""
+    return any(carried[src][u] > 0 for src, _ in flows(edge) for u in UNITS)
+
+
+def folded_node(node, carried):
+    """The node starting with what it carried after the folded events, rounded up, never below what it carried."""
+    probabilities = {u: round_up(p) for u, p in carried.items() if p > 0}
+    return dict(node, start={"probabilities": probabilities, "unknown": False, "source": "propagated"})
+
+
+def round_up(p):
+    """p rounded up to 2 decimals, the precision the model reads. Never below p, even after float rounding."""
+    hundredths = round(p * 100)  # the nearest hundredth, one higher if that is below p
+    if hundredths / 100 < p:
+        hundredths += 1
+    return hundredths / 100
 
 
 # ---------- the history as text (the model's input) ----------
@@ -116,9 +172,9 @@ def event_text(number, edge):
     return f"{number}. {ACTION_WORDS[edge['action']]} {a} {src_dst} {edge['b_id']} (p {p:.2f})"
 
 
-def plate_state(subgraph):
-    """The state the plate model reads: who carried what at the start, then the on-path events in order."""
-    edges, nodes = readable_history(subgraph)
+def plate_state(subgraph, limit=MAX_EDGES):
+    """The state the plate model reads: who carried what at the start, then up to `limit` on-path events in order."""
+    edges, nodes = readable_history(subgraph, limit)
     mentioned = [entity for e in edges for entity in (e["a_id"], e["b_id"])] + [subgraph["plate_id"]]
     shown = list(dict.fromkeys(mentioned))  # each entity once, in the order the events first mention it
     return {
@@ -147,23 +203,44 @@ def exact_reach(subgraph):
     """P(each allergen reached the plate) by noisy-OR along time-ordered edges, with full transfer (k = 1).
 
     Same math the partner's graph uses (AGENTS.md, Graph math), with the most conservative efficiency. Used to label
-    training data and by FakeLayaCheck; the verdict's own reachability still comes from the partner's graph.
+    training data and by FakeLayaCheck; the verdict's own reachability still comes from the partner's graph. It reads
+    the same (possibly shortened) history the model reads.
     """
     edges, nodes = readable_history(subgraph)
-    carried = {
+    return carry(edges, nodes)[subgraph["plate_id"]]
+
+
+def starting_values(nodes):
+    """What each entity carried at the start: its profile, or every allergen at 1 for an unknown history."""
+    return {
         entity: {u: 1.0 if node["start"]["unknown"] else node["start"]["probabilities"].get(u, 0.0) for u in UNITS}
         for entity, node in nodes.items()
     }
+
+
+def carry(edges, nodes):
+    """What every entity carries after `edges` in order, starting from its starting values."""
+    carried = starting_values(nodes)
     for edge in edges:
-        p = edge["probability"]
-        if edge["action"] == "clean.wash":
-            carried[edge["a_id"]] = {u: (1.0 - p) * carried[edge["a_id"]][u] for u in UNITS}
-            continue
-        before = {entity: dict(carried[entity]) for entity in (edge["a_id"], edge["b_id"])}  # "both" moves at once
-        for src, dst in flows(edge):
-            for u in UNITS:
+        apply_edge(edge, carried)
+    return carried
+
+
+def apply_edge(edge, carried):
+    """Apply one edge to `carried` in place: a wash keeps (1 - p) of everything, a transfer moves by noisy-OR.
+
+    An allergen the source doesn't carry is skipped, not multiplied by 1: 1 - (1 - x) can differ from x in the last
+    bit, and skipping keeps "an edge that moves nothing changes nothing" exactly true, which shorten relies on.
+    """
+    p = edge["probability"]
+    if edge["action"] == "clean.wash":
+        carried[edge["a_id"]] = {u: (1.0 - p) * carried[edge["a_id"]][u] for u in UNITS}
+        return
+    before = {entity: dict(carried[entity]) for entity in (edge["a_id"], edge["b_id"])}  # "both" moves at once
+    for src, dst in flows(edge):
+        for u in UNITS:
+            if before[src][u] > 0:
                 carried[dst][u] = 1.0 - (1.0 - carried[dst][u]) * (1.0 - p * before[src][u])
-    return carried[subgraph["plate_id"]]
 
 
 # ---------- what the verdict does with the answer ----------
@@ -186,6 +263,14 @@ def laya_hold_reasons(reached, forbidden, pass_threshold):
 # ---------- the real model and the fake ----------
 
 
+def was_cut(usage):
+    """Whether laya cut part of the input to fit its 512 tokens, so the model never read all of the history.
+
+    Any of laya's three signs counts, and a missing one raises (KeyError), so an answer we can't vouch for holds.
+    """
+    return bool(usage["truncated"]) or usage["state_tokens_dropped"] > 0 or bool(usage["truncated_questions"])
+
+
 class LocalLayaCheck:
     """LayaPlateCheck backed by the fine-tuned plate model, loaded from a local folder."""
 
@@ -205,7 +290,14 @@ class LocalLayaCheck:
             if len(forbidden) == 0:
                 return {}
             questions = {f"reached_{u}": reached_question(u) for u in forbidden}
-            answers = self._agent.predict(state, questions)["answers"]
+            result = self._agent.predict(state, questions)
+            for limit in SHORTER_WINDOWS:  # folding further keeps or raises every allergen's reach (shorten)
+                if not was_cut(result["usage"]):
+                    break
+                result = self._agent.predict(plate_state(subgraph, limit), questions)
+            if was_cut(result["usage"]):
+                raise ValueError(f"the plate's history didn't fit the model's input: {result['usage']}")
+            answers = result["answers"]
             reached = {u: float(answers[f"reached_{u}"]["noul"]) for u in forbidden}
             if not all(0.0 <= p <= 1.0 for p in reached.values()):  # also False for NaN
                 raise ValueError(f"impossible probability {reached}")

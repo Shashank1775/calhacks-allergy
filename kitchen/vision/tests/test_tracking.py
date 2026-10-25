@@ -8,6 +8,8 @@ Rules: known-clean source (new ID on re-acquire, origin, IDs never reused) and f
        nothing, no hand from an unsure wrist)
 """
 
+import dataclasses
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -381,7 +383,11 @@ def test_entity_ids_are_never_reused_over_random_track_lifetimes(steps):
 
 @pytest.mark.safety
 @settings(max_examples=100, deadline=None)
-@given(st.lists(st.sampled_from(["knife", "spoon", "fork", "plate", "bin"]), max_size=40))
+@given(
+    st.lists(
+        st.sampled_from(["knife", "spoon", "fork", "plate", "bin", "plate-class", "plate-class-in-slot"]), max_size=40
+    )
+)
 def test_identity_book_never_hands_out_an_id_twice(kinds):
     book = IdentityBook(SETTINGS.shift_start_ms, SETTINGS.track_lost_ms)
     slot = Zone("slot-4", "bin_slot", [])
@@ -391,6 +397,11 @@ def test_identity_book_never_hands_out_an_id_twice(kinds):
             identity = book.object_identity(track_id, "bowl", AFTER_SHIFT_START, slot, maybe_switched=False)
         elif kind == "plate":
             identity = book.object_identity(track_id, "bowl", AFTER_SHIFT_START, None, maybe_switched=False)
+        elif kind.startswith("plate-class"):
+            zone = slot if kind.endswith("in-slot") else None
+            identity = book.object_identity(track_id, "plate", AFTER_SHIFT_START, zone, maybe_switched=False)
+            # Every track ends straight away, so the slot is always free: a plate-class newcomer there is the bin.
+            assert identity.kind == ("bin" if zone is slot else "plate")
         else:
             identity = book.object_identity(track_id, kind, AFTER_SHIFT_START, None, maybe_switched=False)
         # Every track ends straight away, so only the bin slot may hand its ID out again.
@@ -578,3 +589,102 @@ def test_a_camera_stall_longer_than_the_lost_buffer_ends_every_track():
     assert first[0]["entity_id"] == "tool-knife-1"
     assert after_stall[0]["entity_id"] == "tool-knife-2"
     assert after_stall[0]["origin"] == "unknown"
+
+
+def plate(box=SLOT_BOX, confidence=0.9):
+    return Detection("plate", box, confidence)
+
+
+@pytest.mark.safety
+def test_a_plate_detection_first_seen_in_a_bin_slot_is_that_bin():
+    """A fine-tuned detector calls a pie on a board a plate. In slot-4 it must be bin-4, the entity orders keys bin-4's
+    allergen profile by: as a plate it would leave the kitchen with no allergen source (the PASS direction). It is
+    bin-4 again when re-acquired there, with the origin bin-4 was first given."""
+    tracker = Tracker(SETTINGS)
+    first = run(tracker, [([plate()], [])] + gone(LOST_FRAMES + 1))[0]  # the pie at shift start, then lifted away
+
+    back = tracker.update([plate()], [], AFTER_SHIFT_START, zone_of, 640, 640)
+
+    assert [(item["entity_id"], item["kind"], item["class_name"], item["origin"]) for item in first] == [
+        ("bin-4", "bin", "plate", "shift_start")
+    ]
+    assert [(item["entity_id"], item["kind"], item["zone"], item["origin"]) for item in back] == [
+        ("bin-4", "bin", "slot-4", "shift_start")
+    ]
+
+
+@pytest.mark.safety
+def test_a_plate_or_bowl_put_in_a_slot_its_bin_still_holds_is_a_plate():
+    """Two tracks never share bin-4: while the bin's track holds the slot, a newcomer there is a plate."""
+    tracker = Tracker(SETTINGS)
+    tracker.update([plate()], [], 0, zone_of, 640, 640)
+
+    items = tracker.update(
+        [plate(), plate((0.0, 0.1, 0.1, 0.2)), bowl((0.1, 0.0, 0.2, 0.1))], [], FRAME_MS, zone_of, 640, 640
+    )
+
+    assert sorted((item["entity_id"], item["kind"]) for item in items) == [
+        ("bin-4", "bin"),
+        ("plate-1", "plate"),
+        ("plate-2", "plate"),
+    ]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("box", [KNIFE_BOX, CLEAN_STACK_BOX])
+def test_a_plate_detection_outside_a_bin_slot_stays_a_plate(box):
+    tracker = Tracker(SETTINGS)
+    items = tracker.update([plate(box)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+
+    assert [(item["entity_id"], item["kind"]) for item in items] == [("plate-1", "plate")]
+
+
+@pytest.mark.safety
+def test_plates_seen_as_bowls_or_as_plates_share_one_count():
+    tracker = Tracker(SETTINGS)
+    items = tracker.update([bowl((0.5, 0.5, 0.7, 0.7)), plate((0.3, 0.3, 0.4, 0.4))], [], 0, zone_of, 640, 640)
+
+    assert sorted(item["entity_id"] for item in items) == ["plate-1", "plate-2"]
+    assert sorted(item["class_name"] for item in items) == ["bowl", "plate"]
+    assert {item["kind"] for item in items} == {"plate"}
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("tracker_mode", ["iou", "motion"])
+@pytest.mark.parametrize(("seen_as", "then_as"), [("plate", "bowl"), ("bowl", "plate")])
+def test_a_plate_relabeled_as_it_is_carried_into_the_clean_stack_is_unknown(seen_as, then_as, tracker_mode):
+    """The detector may call one plate a plate in one frame and a bowl in the next. A dirty plate carried into the
+    stack under the other label starts a track of the other class while its own is lost: it must not start clean."""
+    tracker = Tracker(dataclasses.replace(SETTINGS, tracker=tracker_mode))
+    tracker.update([detection_of(seen_as, KNIFE_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    moved = tracker.update(
+        [detection_of(then_as, CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640
+    )
+
+    assert moved[0]["kind"] == "plate"
+    assert moved[0]["zone"] == "clean-stack"
+    assert moved[0]["origin"] == "unknown"
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(("lost_as", "newcomer_as"), [("plate", "plate"), ("plate", "bowl"), ("bowl", "plate")])
+def test_a_plate_lost_in_the_clean_stack_taints_the_next_plate_there_under_either_label(lost_as, newcomer_as):
+    tracker = Tracker(SETTINGS)
+    tracker.update([detection_of(lost_as, CLEAN_STACK_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    lose_all(tracker, AFTER_SHIFT_START + FRAME_MS)
+
+    again = tracker.update(
+        [detection_of(newcomer_as, CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + 1000, zone_of, 640, 640
+    )
+
+    assert again[0]["kind"] == "plate"
+    assert again[0]["origin"] == "unknown"
+
+
+def test_a_plate_from_the_clean_stack_starts_clean_while_no_plate_or_bowl_is_missing():
+    tracker = Tracker(SETTINGS)
+    tracker.update([knife(KNIFE_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    # The knife goes missing as the plate appears: a knife can't be a plate, so the plate still starts clean.
+    items = tracker.update([plate(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)
+
+    assert [(item["entity_id"], item["origin"]) for item in items] == [("plate-1", "clean_stack")]

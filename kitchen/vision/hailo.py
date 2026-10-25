@@ -8,13 +8,15 @@ Emits: HailoSession, a drop-in for onnxruntime.InferenceSession whose run() retu
        ([1, 4 + classes, anchors] for detection, [1, 56, anchors] for pose), so detect.py runs one post-processing path
        for both backends; `python -m kitchen.vision.hailo --bundle <dir>` is the device check the owner runs on the Pi
 Rules: fail closed: a device error or timeout raises; it never returns an empty or made-up output, so frames stop,
-       /health goes stale and the gate faults; hailo_platform is imported only when the device is opened, so the
-       laptop, CI and every other module never need it
+       /health goes stale and the gate faults; a detection HEF whose class count isn't the bundle manifest's raises
+       at startup; hailo_platform is imported only when the device is opened, so the laptop, CI and every other
+       module never need it
 
 The two HEFs differ. The detection HEF from Hailo's Model Zoo runs NMS inside HailoRT and returns, per class, rows of
-[y_min, x_min, y_max, x_max, score] normalized to the input. The pose HEF returns nine raw head outputs (box
-distributions, person score and keypoints at strides 8, 16 and 32) that are decoded on the host with the same math as
-Ultralytics' ONNX export.
+[y_min, x_min, y_max, x_max, score] normalized to the input. Its classes come in the output order of the ONNX it was
+compiled from, the order of the manifest's class_names, so class i keeps score row 4 + i. The pose HEF returns nine
+raw head outputs (box distributions, person score and keypoints at strides 8, 16 and 32) that are decoded on the host
+with the same math as Ultralytics' ONNX export.
 """
 
 import argparse
@@ -25,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from kitchen.vision.detect import detector_classes
 
 # YOLOv8 heads: three strides, 16 distance bins per box side (distribution focal loss), 17 keypoints of (x, y, visibility).
 STRIDES = (8, 16, 32)
@@ -219,6 +223,20 @@ class HailoNetwork:
         return {name: bindings.output(name).get_buffer() for name in buffers}
 
 
+def check_detection_classes(session: HailoSession, classes: int) -> None:
+    """Refuse a detection HEF that scores another number of classes than the bundle manifest says (fail closed).
+
+    A stock 80-class HEF left in a custom bundle, or a custom HEF in a stock one, would put each class's boxes under
+    another class's name, so this runs at startup, before any frame.
+    """
+    hef_classes = session.get_outputs()[0].shape[1] - 4
+    if hef_classes != classes:
+        raise ValueError(
+            f"the det HEF scores {hef_classes} classes, but the bundle manifest has {classes}; "
+            "rebuild the HEFs with the bundle's compile.sh"
+        )
+
+
 def read_manifest(bundle_dir: Path) -> dict:
     """The bundle's manifest.json, written by bundle.py."""
     return json.loads((Path(bundle_dir) / "manifest.json").read_text())
@@ -227,18 +245,23 @@ def read_manifest(bundle_dir: Path) -> dict:
 def open_sessions(bundle_dir: Path) -> dict[str, HailoSession]:
     """Open the Hailo-8 once and load every network in a bundle: {"det": HailoSession, "pose": HailoSession}.
 
-    Both networks share one device through HailoRT's round-robin scheduler.
+    Both networks share one device through HailoRT's round-robin scheduler. The detection HEF must score as many
+    classes as the manifest names (check_detection_classes), so bad class names or a mismatched HEF raise here.
     """
     from hailo_platform import HailoSchedulingAlgorithm, VDevice
+
+    bundle_dir = Path(bundle_dir)
+    networks = read_manifest(bundle_dir)["networks"]
+    classes = detector_classes(networks["det"])
 
     params = VDevice.create_params()
     params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
     vdevice = VDevice(params)
-    bundle_dir = Path(bundle_dir)
-    networks = read_manifest(bundle_dir)["networks"]
-    return {
+    sessions = {
         name: HailoSession(HailoNetwork(vdevice, bundle_dir / network["hef"])) for name, network in networks.items()
     }
+    check_detection_classes(sessions["det"], classes.count)
+    return sessions
 
 
 def frames_per_second(sessions: list[HailoSession], frames: np.ndarray, count: int) -> float:

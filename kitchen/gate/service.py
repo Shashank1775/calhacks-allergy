@@ -5,7 +5,8 @@ Owner: outputs (agents)
 Step:  gate and screens
 Reads: StateClient every tick (zones, the plate at the pass, its ticket and verdicts), vision GET /health
 Emits: GateDriver.show, Speaker.say
-Rules: fail closed: fault on silence, stale health or any exception; only a PASS for the current revision opens
+Rules: fail closed: fault on silence, stale health or any exception; only a PASS for the current revision opens;
+       a plate counts at the pass only while vision still tracks it, and one seen in the last 5 s still crowds it
 
 The loop polls rather than subscribes: each tick reads everything afresh, so a database that stops answering shows up
 at once as fault, and nothing depends on a change event arriving. The StateClient must time out its own calls (raise
@@ -33,6 +34,13 @@ class GateSettings:
     state_limit_ms: int = 2000
     # Vision's /health last_frame_t_ms must have advanced within this long.
     health_limit_ms: int = 1000
+    # A plate is at the pass only if seen within this long of vision's newest sighting (see read_pass). A copy of
+    # vision's track_lost_ms (1000 ms, kitchen/vision/common.py), and must change with it: a plate unseen this long
+    # has no track. web/src/gate.ts PLATE_LOST_MS is the same number.
+    plate_lost_ms: int = 1000
+    # A plate seen within this long still counts toward "two plates at the pass", so hiding one plate for over a
+    # second beside a PASS plate doesn't open the gate. web/src/gate.ts LOST_PLATE_CROWDS_MS is the same number.
+    lost_plate_crowds_ms: int = 5000
 
 
 @dataclass(frozen=True)
@@ -102,23 +110,54 @@ def latest_verdict(verdicts: list[dict], plate_id: str) -> dict | None:
     return latest
 
 
-def read_pass(state) -> dict:
+def plates_at_pass(state) -> list[tuple[dict, int]]:
+    """Each plate whose latest zone is a pass zone, with how long it had gone unseen at vision's newest sighting.
+
+    A plate lifted out of view keeps a last row that says pass, and nothing writes another, so its last zone alone
+    can't say it left. Vision ends a track once its object goes unseen for track_lost_ms and never revives it, so
+    read_pass takes a plate unseen for over plate_lost_ms as gone from the pass, and one unseen for up to
+    lost_plate_crowds_ms as maybe still there. Unseen time is measured against the newest last_seen_t_ms of any entity
+    (vision's frame clock), not the gate's clock, so database or sync lag can't age out a plate vision still has.
+    """
+    pass_zones = {zone.zone_id for zone in state.list_zones() if zone.kind == "pass"}
+    entities = state.list_entities()
+    newest_t_ms = max((entity["last_seen_t_ms"] for entity in entities), default=0)
+    return [
+        (entity, newest_t_ms - entity["last_seen_t_ms"])
+        for entity in entities
+        if entity["kind"] == "plate" and entity["zone"] in pass_zones
+    ]
+
+
+def read_pass(state, settings: GateSettings) -> dict:
     """What's at the pass right now, read from the database: plate, its latest verdict, and its ticket.
 
     Returns the GateInputs fields other than the ages. A plate with no ticket has no verdicts the gate can trust, so
     it reads as no verdict (idle, closed).
+
+    Two windows on how long a plate at the pass has gone unseen (plates_at_pass):
+    - Up to plate_lost_ms (vision's track_lost_ms) it is at the pass, and only such a plate's verdict can drive the
+      gate. A lone plate lifted out of view goes idle 1 s after it was last seen.
+    - Up to lost_plate_crowds_ms it still counts toward two plates at the pass (hold). A hand or a missed detection
+      can hide a plate for over a second; vision then ends its track, and the plate, seen again, is a new unbound
+      entity (alone it would show idle). Without this window the gate would open for a PASS plate beside it.
+
+    What's left, on purpose: a plate hidden for over lost_plate_crowds_ms beside a PASS plate lets the gate open for
+    that plate until the hidden one is seen again; the demo keeps one plate at the pass at a time. The cost: after a
+    plate is lifted out, the next plate can't pass for up to lost_plate_crowds_ms. A stale camera is still fault.
     """
-    pass_zones = {zone.zone_id for zone in state.list_zones() if zone.kind == "pass"}
-    plates = [plate for plate in state.list_entities(kind="plate") if plate["zone"] in pass_zones]
+    plates = plates_at_pass(state)
+    crowding = [plate for plate, unseen_ms in plates if unseen_ms <= settings.lost_plate_crowds_ms]
+    at_pass = [plate for plate, unseen_ms in plates if unseen_ms <= settings.plate_lost_ms]
     view = {"plate_id": None, "verdict": None, "current_revision": None, "ticket_number": None, "crowded": False}
-    if len(plates) > 1:
+    if len(crowding) > 1:
         view["crowded"] = True
         return view
-    if not plates or plates[0].get("ticket_id") is None:
-        view["plate_id"] = plates[0]["entity_id"] if plates else None
+    if not at_pass or at_pass[0].get("ticket_id") is None:
+        view["plate_id"] = at_pass[0]["entity_id"] if at_pass else None
         return view
 
-    plate = plates[0]
+    plate = at_pass[0]
     view["plate_id"] = plate["entity_id"]
     view["verdict"] = latest_verdict(state.list_verdicts(plate["ticket_id"]), plate["entity_id"])
     ticket = state.get_ticket(plate["ticket_id"])
@@ -142,6 +181,7 @@ class GateService:
         self.clock = clock
         self.read_health = read_health
         self.settings = settings or GateSettings()
+        logger.info("gate settings: %s", self.settings)
         self._state_ok_ms: int | None = None
         self._last_frame_t_ms: int | None = None
         self._frame_changed_ms: int | None = None
@@ -152,7 +192,7 @@ class GateService:
         now = self.clock.now_ms()
         self._check_health(now)
         try:
-            view = read_pass(self.state)
+            view = read_pass(self.state, self.settings)
             self._state_ok_ms = now
             state_age = 0
         except Exception:  # fail closed: StateUnavailable or anything else shows fault this tick

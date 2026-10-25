@@ -9,6 +9,7 @@ interface ImportMetaEnv {
   readonly WEB_VISION_URL?: string;
   readonly WEB_SUMMARY_URL?: string;
   readonly WEB_MOCK_API?: string;
+  readonly WEB_FAST_BOXES?: string;
 }
 
 interface ImportMeta {

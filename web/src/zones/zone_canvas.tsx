@@ -6,6 +6,8 @@
  * home page's camera or video, before any frame reaches vision); the zones and selection from the layout screen.
  * Emits: the changed zone list, a new zone or a selection, through the screen's callbacks. It saves nothing itself.
  * Rules: with no camera, the zones still draw on a plain 16:9 frame, since points are shares of the frame, not pixels.
+ * Only a plain primary press drags, one pointer at a time, and a move with no button held ends the drag, so a zone never
+ * follows the cursor after the release went missing.
  */
 import { useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { vision_url } from "../api/http";
@@ -24,10 +26,13 @@ import {
 
 const PLAIN_FRAME = 16 / 9;
 
-type Drag =
+type DragShape =
   | { mode: "draw"; kind: ZoneKind; start: Point; end: Point }
   | { mode: "move"; zone_id: string; start: Point; polygon: Point[] }
   | { mode: "resize"; zone_id: string; anchor: Point };
+
+/** A drag belongs to the pointer that started it; another finger can't steer or end it. */
+type Drag = DragShape & { pointer_id: number };
 
 /**
  * A picture to draw the zones on instead of vision's stream: the whole frame vision will get, at its width / height,
@@ -67,10 +72,19 @@ export function ZoneCanvas({ picture, zones, tags, selected_id, adding, on_zones
     ];
   }
 
-  function begin(event: PointerEvent, next: Drag) {
+  /**
+   * Whether this press may start a drag: a plain primary press, while no other finger is dragging. A right-click or
+   * Ctrl-click opens the context menu, which swallows the release, so its drag would never end.
+   */
+  function can_start(event: PointerEvent): boolean {
+    if (event.button !== 0 || event.ctrlKey) return false;
+    return drag === null || drag.pointer_id === event.pointerId;
+  }
+
+  function begin(event: PointerEvent, shape: DragShape) {
     // Keep getting moves while the pointer is outside the frame, so a fast drag doesn't drop the zone.
     frame_ref.current?.setPointerCapture?.(event.pointerId);
-    set_drag(next);
+    set_drag({ ...shape, pointer_id: event.pointerId });
   }
 
   function replace_polygon(zone_id: string, polygon: Point[]) {
@@ -78,6 +92,7 @@ export function ZoneCanvas({ picture, zones, tags, selected_id, adding, on_zones
   }
 
   function on_frame_down(event: PointerEvent) {
+    if (!can_start(event)) return;
     if (adding) {
       const point = point_at(event);
       begin(event, { mode: "draw", kind: adding, start: point, end: point });
@@ -88,20 +103,26 @@ export function ZoneCanvas({ picture, zones, tags, selected_id, adding, on_zones
 
   function on_zone_down(event: PointerEvent, zone: Zone) {
     // While adding, a drag that starts on a zone still draws, so a bin can go inside a bigger area.
-    if (adding) return;
+    if (adding || !can_start(event)) return;
     event.stopPropagation();
     on_select(zone.zone_id);
     begin(event, { mode: "move", zone_id: zone.zone_id, start: point_at(event), polygon: zone.polygon });
   }
 
   function on_handle_down(event: PointerEvent, zone: Zone, corner: number) {
+    if (!can_start(event)) return;
     event.stopPropagation();
     // The opposite corner stays put, whichever way the dragged one goes.
     begin(event, { mode: "resize", zone_id: zone.zone_id, anchor: zone.polygon[(corner + 2) % 4] });
   }
 
   function on_frame_move(event: PointerEvent) {
-    if (!drag) return;
+    if (!drag || event.pointerId !== drag.pointer_id) return;
+    // No button held: the release went somewhere we couldn't see, such as a context menu, so the drag is over.
+    if (event.buttons === 0) {
+      set_drag(null);
+      return;
+    }
     const point = point_at(event);
     if (drag.mode === "draw") set_drag({ ...drag, end: point });
     if (drag.mode === "move") {
@@ -114,8 +135,9 @@ export function ZoneCanvas({ picture, zones, tags, selected_id, adding, on_zones
   }
 
   function on_frame_up(event: PointerEvent) {
+    if (!drag || event.pointerId !== drag.pointer_id) return;
     // Esc mid-drag cancels adding, so the rectangle is dropped.
-    if (drag?.mode === "draw" && adding) {
+    if (drag.mode === "draw" && adding) {
       const end = point_at(event);
       if (big_enough(drag.start, end)) {
         on_add({ zone_id: next_zone_id(drag.kind, zones), kind: drag.kind, polygon: rect_polygon(drag.start, end) });
@@ -206,6 +228,7 @@ export function ZoneCanvas({ picture, zones, tags, selected_id, adding, on_zones
   );
 }
 
-function points_text(polygon: Point[]): string {
+/** A polygon as SVG `points`, in the frame's 0..1 coordinates. */
+export function points_text(polygon: Point[]): string {
   return polygon.map(([x, y]) => `${x},${y}`).join(" ");
 }

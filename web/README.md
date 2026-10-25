@@ -9,7 +9,7 @@ What people see. Servers enter tickets on the tablet; expo sees which plates are
 - **Tablet (`/tablet`):** the server types a note (or speaks it), sees the parsed constraints, answers one-tap questions, and sends. Send stays disabled until the draft is `sendable`.
 - **Video summary (`/summary`):** upload a recorded video to the summary service and read what was on the counter, every touch, and what each tool, hand and plate could carry. It's about a recording, never the live kitchen or a verdict, and says so in a banner that's always on screen.
 - **Kitchen layout (`/zones`):** the camera with every zone drawn over it: bin slots (slot-4 holds bin-4, labeled from the state's bin rows), washing areas, the serving area (`pass`), the plating spot, the clean stack. Pick a kind and drag to draw a rectangle; click a zone to move it, drag a corner to resize it, or delete it. Save sends the whole layout to vision's `PUT /zones`, which uses it from the next frame; a layout vision refuses (`422 bad_zones`) shows vision's message and keeps the edits. Revert loads `GET /zones` again.
-- **Expo board (`/expo`):** tickets, plates and verdicts. For each held plate it shows reasons, flagged allergens and the chain step by step with per-step confidence. A "start plate" button per ticket calls vision's `POST /plates/start`. Camera overlays color entities by allergen risk.
+- **Expo board (`/expo`):** tickets, plates and verdicts. For each held plate it shows reasons, flagged allergens and the chain step by step with per-step confidence. A "start plate" button per ticket calls vision's `POST /plates/start`. Camera overlays color entities by allergen risk. A ZONES button on the camera draws the kitchen's zones (from vision's `GET /zones`, refetched every 3 s) under the boxes; each viewer's choice is remembered in the browser, off by default.
 - We never decide anything and write no database tables. We change state only through the orders and vision HTTP APIs.
 
 ## Layout
@@ -91,7 +91,11 @@ uv run python tools/run_local.py --live --webcam 0 --zones zones.json
 uv run python tools/run_local.py --live --from-web
 ```
 
-**With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop.
+**With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop. The boxes come one of two ways, set by `WEB_FAST_BOXES` (restart `npm run dev` after changing it):
+- fast (the default): the detector's own boxes, drawn into each frame by vision (`/stream.mjpg?boxes=true`). They move with the picture, labeled with class and confidence only.
+- entities (`WEB_FAST_BOXES=false`): each tracked entity's latest box from `entity_state`, colored by allergen risk. These update only as fast as the state feed, about twice a second.
+
+Either way the backend tracks entities and decides verdicts exactly the same; only the picture changes.
 
 **Video summary**: add `WEB_SUMMARY_URL=http://localhost:8003` and start the summary service in another terminal, then open http://localhost:5173/summary. The service must list the web origin in `SUMMARY_CORS_ORIGINS` (default `http://localhost:5173`). With `WEB_MOCK_API=1` the page uses a mock service instead, and without either it says the service isn't set up.
 

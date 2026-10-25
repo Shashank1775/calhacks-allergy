@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import hold_peanut from "../../contracts/fixtures/valid/verdict/hold-peanut.json";
 import pass_clean from "../../contracts/fixtures/valid/verdict/pass-clean.json";
-import { gate_view, plates_at_pass } from "./gate";
+import { gate_view, LOST_PLATE_CROWDS_MS, PLATE_LOST_MS, plates_at_pass } from "./gate";
 import type { EntityState, Ticket, Verdict } from "./types/TEMPORARY";
 
 const hold = hold_peanut as Verdict;
@@ -104,5 +104,58 @@ describe("safety: the gate panel only opens on plate_badge's PASS", () => {
     const tables = kitchen(pass, "pass");
     tables.entity_state.push(at(pass.plate_id, "spot", 5));
     expect(plates_at_pass(tables)).toEqual([]);
+  });
+});
+
+describe("a plate counts at the pass only while vision still tracks it", () => {
+  /** The tables after `plate_id` was last seen at the pass at `t_ms` and lifted out of view, with a bin seen since. */
+  function lifted_out(tables: ReturnType<typeof kitchen>, bin_seen_t_ms: number) {
+    tables.entity_state.push(at("bin-1", "slot-1", bin_seen_t_ms));
+    return tables;
+  }
+
+  /** The held plate last seen at the pass at t_ms 2, and the passing plate beside it seen at `seen_t_ms`. */
+  function beside_a_passing_plate(seen_t_ms: number) {
+    const tables = kitchen(hold, "pass");
+    tables.entity.push({ ...tables.entity[0], entity_id: pass.plate_id });
+    tables.entity_state.push(at(pass.plate_id, "pass", seen_t_ms));
+    tables.plate_binding.push({ plate_id: pass.plate_id, ticket_id: pass.ticket_id, t_ms: 1 });
+    tables.ticket.push(ticket_for(pass));
+    tables.verdict.push(pass);
+    return tables;
+  }
+
+  it("lets a lone plate lifted out of view go once unseen for longer than vision's track_lost_ms", () => {
+    expect(gate_view("live", "ok", lifted_out(kitchen(hold, "pass"), 2 + PLATE_LOST_MS)).state).toBe("hold");
+
+    const gone = lifted_out(kitchen(hold, "pass"), 2 + PLATE_LOST_MS + 1);
+    expect(plates_at_pass(gone)).toEqual([{ plate_id: hold.plate_id, unseen_ms: PLATE_LOST_MS + 1 }]);
+    expect(gate_view("live", "ok", gone).state).toBe("idle");
+  });
+
+  it("safety: holds a PASS plate while one beside it was seen within LOST_PLATE_CROWDS_MS", () => {
+    // The other plate is hidden by a hand (vision ended its track after 1 s), or was just lifted out.
+    expect(gate_view("live", "ok", beside_a_passing_plate(2 + 1200)).state).toBe("hold");
+    expect(gate_view("live", "ok", beside_a_passing_plate(2 + LOST_PLATE_CROWDS_MS)).state).toBe("hold");
+  });
+
+  it("safety: the gap left on purpose: a plate unseen for over LOST_PLATE_CROWDS_MS lets the gate open beside it", () => {
+    // Also how the next plate passes once the last one has been gone 5 s. See kitchen/gate/README.md.
+    const view = gate_view("live", "ok", beside_a_passing_plate(2 + LOST_PLATE_CROWDS_MS + 1));
+    expect(view.state).toBe("pass");
+    expect(view.plate_id).toBe(pass.plate_id);
+  });
+
+  it("safety: holds two plates at the pass both seen within the limit", () => {
+    const tables = kitchen(pass, "pass");
+    tables.entity.push({ ...tables.entity[0], entity_id: "plate-other" });
+    tables.entity_state.push(at("plate-other", "pass", 2 + PLATE_LOST_MS));
+    expect(plates_at_pass(tables)).toHaveLength(2);
+    expect(gate_view("live", "ok", tables).state).toBe("hold");
+  });
+
+  it("safety: still faults on a stale camera after a plate leaves", () => {
+    const tables = lifted_out(kitchen(pass, "pass"), 2 + PLATE_LOST_MS + 1);
+    expect(gate_view("live", "stale", tables).state).toBe("fault");
   });
 });

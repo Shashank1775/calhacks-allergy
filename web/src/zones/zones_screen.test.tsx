@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw/http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { example_zones } from "../api/mocks/handlers";
 import { server, TEST_VISION_URL } from "../api/mocks/server";
-import { empty_tables, type StateSource } from "../state/state_source";
+import { empty_tables, type StateSource, type Tables } from "../state/state_source";
 import { render_with_source } from "../test_utils";
 import { ZonesScreen } from "./zones_screen";
 
@@ -22,10 +22,25 @@ function frame() {
   return screen.getByLabelText("Counter picture with zones");
 }
 
+/** A press, a move and a release with the primary button, as a mouse or one finger makes them. */
 function drag(start_on: Element, from: [number, number], to: [number, number]) {
-  fireEvent.pointerDown(start_on, { clientX: from[0], clientY: from[1], pointerId: 1 });
-  fireEvent.pointerMove(frame(), { clientX: to[0], clientY: to[1], pointerId: 1 });
-  fireEvent.pointerUp(frame(), { clientX: to[0], clientY: to[1], pointerId: 1 });
+  fireEvent.pointerDown(start_on, { clientX: from[0], clientY: from[1], pointerId: 1, button: 0, buttons: 1 });
+  fireEvent.pointerMove(frame(), { clientX: to[0], clientY: to[1], pointerId: 1, buttons: 1 });
+  fireEvent.pointerUp(frame(), { clientX: to[0], clientY: to[1], pointerId: 1, button: 0, buttons: 0 });
+}
+
+/** A state source that holds these tables and never changes. */
+function source_with(fill: (tables: Tables) => void): StateSource {
+  const tables = empty_tables();
+  fill(tables);
+  return {
+    label: "test",
+    is_replay: true,
+    rows: (table) => tables[table],
+    feed_status: () => "live",
+    subscribe: () => () => {},
+    start: () => {},
+  };
 }
 
 function points_of(zone_id: string) {
@@ -57,19 +72,12 @@ describe("ZonesScreen", () => {
   });
 
   it("labels a bin slot with its bin from the state", async () => {
-    const tables = empty_tables();
-    tables.entity = [
-      { entity_id: "bin-1", kind: "bin", label: "satay sauce", origin: "shift_start", first_seen_t_ms: 0 },
-    ];
-    tables.bin_profile = [{ entity_id: "bin-1", probabilities: { peanut: 0.98 }, unknown: false, source: "manual" }];
-    const source: StateSource = {
-      label: "test",
-      is_replay: true,
-      rows: (table) => tables[table],
-      feed_status: () => "live",
-      subscribe: () => () => {},
-      start: () => {},
-    };
+    const source = source_with((tables) => {
+      tables.entity = [
+        { entity_id: "bin-1", kind: "bin", label: "satay sauce", origin: "shift_start", first_seen_t_ms: 0 },
+      ];
+      tables.bin_profile = [{ entity_id: "bin-1", probabilities: { peanut: 0.98 }, unknown: false, source: "manual" }];
+    });
 
     await open_screen(source);
 
@@ -123,7 +131,11 @@ describe("ZonesScreen", () => {
     await user.click(screen.getByRole("button", { name: "Delete pass" }));
     await user.click(screen.getByRole("button", { name: "SAVE" }));
 
-    expect(await screen.findByText(/^Saved\./)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Saved. The kitchen uses this layout from the next frame. A new washing area starts washing after the runner restarts.",
+      ),
+    ).toBeInTheDocument();
     const kept = example_zones().filter((zone) => zone.zone_id !== "pass");
     const new_pass = {
       zone_id: "pass-2",
@@ -223,5 +235,109 @@ describe("ZonesScreen", () => {
 
     expect(screen.getByText(/Camera offline\. Zones are drawn on a plain 16:9 frame\./)).toBeInTheDocument();
     expect(screen.getByLabelText("zone pass")).toBeInTheDocument();
+  });
+
+  it("warns about a bin with no slot, but still saves", async () => {
+    const user = userEvent.setup();
+    const bodies = record_saves();
+    const source = source_with((tables) => {
+      tables.bin_profile = [
+        { entity_id: "bin-1", probabilities: { peanut: 0.98, soy: 0.9 }, unknown: false, source: "manual" },
+        { entity_id: "bin-9", probabilities: { milk: 0.99 }, unknown: false, source: "manual" },
+      ];
+    });
+    await open_screen(source);
+
+    const warnings = screen.getByRole("list", { name: "Bins with no slot" });
+    expect(warnings).toHaveTextContent("bin-9 (Milk) has no slot: a bowl there will count as a clean plate.");
+    expect(warnings).not.toHaveTextContent("bin-1");
+
+    await user.click(screen.getByRole("button", { name: "Delete slot-1" }));
+    expect(warnings).toHaveTextContent(
+      "bin-1 (Peanuts, Soybeans) has no slot: a bowl there will count as a clean plate.",
+    );
+
+    await user.click(screen.getByRole("button", { name: "SAVE" }));
+    expect(await screen.findByText(/^Saved\./)).toBeInTheDocument();
+    expect(bodies).toHaveLength(1);
+  });
+});
+
+describe("ZonesScreen drags", () => {
+  it("starts only on a plain primary press, never a right-click or Ctrl-click", async () => {
+    const user = userEvent.setup();
+    await open_screen();
+    const slot_1 = points_of("slot-1");
+
+    // A right-click or Ctrl-click opens the context menu, which swallows the release.
+    fireEvent.pointerDown(screen.getByLabelText("zone slot-1"), {
+      clientX: 100,
+      clientY: 75,
+      pointerId: 1,
+      button: 2,
+      buttons: 2,
+    });
+    fireEvent.pointerMove(frame(), { clientX: 200, clientY: 125, pointerId: 1, buttons: 2 });
+    fireEvent.pointerDown(screen.getByLabelText("zone slot-1"), {
+      clientX: 100,
+      clientY: 75,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+      ctrlKey: true,
+    });
+    fireEvent.pointerMove(frame(), { clientX: 200, clientY: 125, pointerId: 1, buttons: 1 });
+    expect(points_of("slot-1")).toBe(slot_1);
+
+    await user.click(screen.getByRole("button", { name: "Bin" }));
+    fireEvent.pointerDown(frame(), { clientX: 100, clientY: 300, pointerId: 1, button: 2, buttons: 2 });
+    fireEvent.pointerMove(frame(), { clientX: 300, clientY: 450, pointerId: 1, buttons: 2 });
+    fireEvent.pointerUp(frame(), { clientX: 300, clientY: 450, pointerId: 1, button: 2, buttons: 0 });
+    expect(screen.queryByLabelText("zone slot-4")).toBeNull();
+  });
+
+  it("follows only the pointer that started it", async () => {
+    await open_screen();
+    const slot_2 = points_of("slot-2");
+
+    fireEvent.pointerDown(screen.getByLabelText("zone slot-1"), {
+      clientX: 100,
+      clientY: 75,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    // A second finger can't steer, end or replace the drag.
+    fireEvent.pointerMove(frame(), { clientX: 500, clientY: 400, pointerId: 2, buttons: 1 });
+    fireEvent.pointerDown(screen.getByLabelText("zone slot-2"), {
+      clientX: 300,
+      clientY: 75,
+      pointerId: 2,
+      button: 0,
+      buttons: 1,
+    });
+    fireEvent.pointerUp(frame(), { clientX: 500, clientY: 400, pointerId: 2, button: 0, buttons: 0 });
+    expect(points_of("slot-1")).toBe("0.04,0.05 0.2,0.05 0.2,0.25 0.04,0.25");
+    expect(points_of("slot-2")).toBe(slot_2);
+
+    fireEvent.pointerMove(frame(), { clientX: 200, clientY: 125, pointerId: 1, buttons: 1 });
+    expect(points_of("slot-1")).toBe("0.14,0.15 0.3,0.15 0.3,0.35 0.14,0.35");
+  });
+
+  it("ends when a move comes with no button held, so a lost release can't drag the zone around", async () => {
+    await open_screen();
+
+    fireEvent.pointerDown(screen.getByLabelText("zone slot-1"), {
+      clientX: 100,
+      clientY: 75,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    // The release never arrives; the next move has no button held.
+    fireEvent.pointerMove(frame(), { clientX: 200, clientY: 125, pointerId: 1, buttons: 0 });
+    fireEvent.pointerMove(frame(), { clientX: 300, clientY: 175, pointerId: 1, buttons: 1 });
+
+    expect(points_of("slot-1")).toBe("0.04,0.05 0.2,0.05 0.2,0.25 0.04,0.25");
   });
 });

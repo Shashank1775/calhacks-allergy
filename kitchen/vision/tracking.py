@@ -17,7 +17,9 @@ Association, per class group (each object class, and pose people), ByteTrack sty
     4. unmatched high detections start new tracks; unmatched low ones are dropped.
 
 The tracks a frame leaves unmatched are handed to identity.py with every new track that frame: a new track then may be
-one of those objects under a new ID (an ID switch), so it can't claim a clean origin.
+one of those objects under a new ID (an ID switch), so it can't claim a clean origin. Bowls and plates share this
+guard: a detector with a plate class may call one plate a plate in one frame and a bowl in the next, so a relabeled
+dirty plate carried into the clean stack can't start clean.
 
 VISION_TRACKER picks one of two trackers. "iou" (the default) matches each detection to a track's last box, as above.
 "motion" is experimental, off until real overhead footage shows it helps (compare_trackers.py). It adds to the above:
@@ -46,9 +48,8 @@ import numpy as np
 
 from kitchen.shared.models import Zone
 from kitchen.vision.common import Box, Detection, Keypoint, Person, VisionSettings, ZoneLookup
-from kitchen.vision.identity import BOWL, TOOL_CLASSES, Identity, IdentityBook
+from kitchen.vision.identity import DISH_CLASSES, OBJECT_CLASSES, TOOL_CLASSES, Identity, IdentityBook
 
-OBJECT_CLASSES = (*TOOL_CLASSES, BOWL)
 TRACKERS = ("iou", "motion")
 
 # Motion mode: how much each new measured velocity moves a track's velocity (an exponential moving average).
@@ -466,11 +467,17 @@ class Tracker:
 
         # A detector can call one utensil a knife in one frame and a spoon in the next. Motion mode treats a missing
         # track of any tool class as a possible switch for a new tool of any class, so the relabel can't start clean.
+        # Both modes do the same for plates and bowls: a plate relabeled as it is carried must not start clean either.
         any_tool_missing = any(results[class_name][2] for class_name in TOOL_CLASSES)
+        any_dish_missing = any(results[class_name][2] for class_name in DISH_CLASSES)
 
         items = []
         for class_name, (detections, owners, missing) in results.items():
-            maybe_switched = bool(missing) or (self.strict and class_name in TOOL_CLASSES and any_tool_missing)
+            maybe_switched = (
+                bool(missing)
+                or (class_name in DISH_CLASSES and any_dish_missing)
+                or (self.strict and class_name in TOOL_CLASSES and any_tool_missing)
+            )
             for index, track_id in owners.items():
                 detection = detections[index]
                 zone = zone_of(box_centre(detection.box))

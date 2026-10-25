@@ -3,11 +3,13 @@ LiveRisk, verdict and the gate, on one FakeStateClient and a FakeClock.
 
 Owner: platform (agents)
 Step:  end-to-end harness
-Reads: tools/run_local.py (LiveRunner, InteractionsSlot, loaded by path); a scripted detector instead of a camera
+Reads: tools/run_local.py (LiveRunner, InteractionsSlot, loaded by path); a scripted detector instead of a camera;
+       JPEGs POSTed to the Vision API, as the web app sends them (--from-web)
 Emits: nothing
 Rules: fail closed: with the interactions step missing, broken or behind, every plate holds, and when frames stop the
        gate faults; plain-code verdict: what passes or holds comes from kitchen.verdict on the partner's graph, and the
-       allergens LiveRisk writes for the camera overlays change neither the verdict nor the gate
+       allergens LiveRisk writes for the camera overlays change neither the verdict nor the gate; frames from the web
+       app start the shift at the first frame and are refused by a runner on its own camera
 """
 
 import importlib.util
@@ -16,11 +18,12 @@ import threading
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from kitchen.shared.clock import FakeClock
+from kitchen.shared.clock import FakeClock, HeldClock
 from kitchen.shared.models import Zone
 from kitchen.vision.common import Detection, SourceFrame, VisionSettings
 
@@ -124,13 +127,19 @@ def peanut_knife_step(state, clock):
 
 
 class Shift:
-    """A LiveRunner on a FakeClock, fed scripted frames, with a peanut-allergy ticket for table 1."""
+    """A LiveRunner on a FakeClock (or `clock`), fed scripted frames, with a peanut-allergy ticket for table 1."""
 
-    def __init__(self, interactions):
-        self.clock = FakeClock(0)
+    def __init__(self, interactions, zones_path: Path | None = None, clock=None, from_web: bool = False):
+        self.clock = clock or FakeClock(0)
         self.detector = ScriptedDetector()
         self.runner = run_local.LiveRunner(
-            self.clock, ZONES, vision_settings=SETTINGS, detector=self.detector, interactions=interactions
+            self.clock,
+            ZONES,
+            vision_settings=SETTINGS,
+            detector=self.detector,
+            interactions=interactions,
+            zones_path=zones_path,
+            from_web=from_web,
         )
         self.orders = TestClient(self.runner.app)
         self._frame_id = 0
@@ -414,3 +423,77 @@ def test_live_mode_reads_the_pi_camera_when_asked(monkeypatch):
     args = Namespace(video=None, webcam=None, picamera=True)
 
     assert isinstance(run_local.live_source(args, FakeClock(0)), PiCameraSource)
+
+
+def test_a_zone_change_from_the_web_app_reaches_the_zone_table_and_the_next_frame(tmp_path):
+    """PUT /zones on the runner's Vision API: the pass moved under the knife shows in GET /state's zone table (what the
+    gate and the screens read) and in the knife's next entity row, and the knife and bin keep their IDs."""
+    shift = Shift(quiet_step, zones_path=tmp_path / "zones.json")
+    vision = TestClient(shift.runner.vision_app)
+    shift.frames(3, [BIN, KNIFE])
+    assert shift.overlay_row("tool-knife-1")["zone"] is None
+
+    moved_pass = [[0.2, 0.7], [0.4, 0.7], [0.4, 1.0], [0.2, 1.0]]  # under the knife, centre (0.275, 0.875)
+    layout = {"zones": [zone for zone in vision.get("/zones").json()["zones"] if zone["zone_id"] != "pass"]}
+    layout["zones"].append({"zone_id": "pass", "kind": "pass", "polygon": moved_pass})
+    assert vision.put("/zones", json=layout).status_code == 200
+
+    zone_table = {row["zone_id"]: row for row in shift.orders.get("/state").json()["tables"]["zone"]}
+    assert zone_table["pass"]["polygon"] == moved_pass
+    shift.frames(1, [BIN, KNIFE])
+    assert shift.overlay_row("tool-knife-1")["zone"] == "pass"
+    assert shift.overlay_row("bin-1")["zone"] == "slot-1"
+    assert (tmp_path / "zones.json").exists()
+
+
+# ---------- frames from the web app (--from-web) ----------
+
+JPEG_HEADERS = {"Content-Type": "image/jpeg"}
+
+
+def jpeg_frame() -> bytes:
+    """A small gray JPEG, as the web app sends one; the scripted detector decides what is on the counter."""
+    ok, jpeg = cv2.imencode(".jpg", np.full((96, 128, 3), 90, dtype=np.uint8))
+    assert ok
+    return jpeg.tobytes()
+
+
+@pytest.mark.safety
+def test_frames_posted_from_the_web_app_reach_the_entity_store_and_start_the_shift():
+    """--from-web: JPEGs POSTed to the Vision API run through the frame loop into the entity store. The shift starts at
+    the first good frame (t_ms 0), not when the runner started: the time spent boxing zones doesn't use up the clean
+    window, so the knife on the counter starts clean. Until a frame comes the gate shows fault."""
+    clock = HeldClock()
+    shift = Shift(quiet_step, clock=clock, from_web=True)
+    shift.detector.objects = [BIN, KNIFE]
+    vision = TestClient(shift.runner.vision_app)
+    frames = iter(shift.runner.pushed_frames)  # what main_live hands the frame loop's thread
+
+    time.sleep(0.1)  # the user boxes the zones before pressing Start
+    assert shift.runner.tick() == "fault"  # no frames yet
+    assert vision.post("/frames", content=b"not a jpeg", headers=JPEG_HEADERS).status_code == 422
+    assert clock.now_ms() == 0  # neither the wait nor a bad frame started the shift
+
+    t_values = []
+    for _ in range(3):
+        assert vision.post("/frames", content=jpeg_frame(), headers=JPEG_HEADERS).status_code == 204
+        t_values.append(shift.runner.step_frame(next(frames)).observation["t_ms"])
+        time.sleep(0.02)
+    shift.runner.sync()
+
+    assert t_values[0] == 0
+    assert t_values == sorted(set(t_values))
+    assert t_values[-1] < 1000  # counted from the first frame, on vision's clock
+    assert vision.get("/health").json()["last_frame_t_ms"] == t_values[-1]
+    knife = shift.runner.state.get_entity("tool-knife-1")
+    assert knife["origin"] == "shift_start"
+    assert shift.runner.state.get_entity("bin-1") is not None
+
+
+@pytest.mark.safety
+def test_a_runner_on_its_own_camera_refuses_frames_from_the_web_app():
+    shift = Shift(quiet_step)
+    response = TestClient(shift.runner.vision_app).post("/frames", content=jpeg_frame(), headers=JPEG_HEADERS)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "not_web_source"
