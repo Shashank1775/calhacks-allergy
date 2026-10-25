@@ -107,8 +107,9 @@ describe("HomeScreen kitchen run", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/can't play this video/);
   });
 
-  it("feeds the kitchen after START, with the stations a new tab away, and STOP goes back to the layout", async () => {
+  it("feeds the kitchen after START, opens the stations in their own windows, and STOP goes back to the layout", async () => {
     const user = userEvent.setup();
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
     render(<HomeScreen />);
     await use_a_video(user);
     await waitFor(() => expect(screen.getByRole("button", { name: "START" })).toBeEnabled());
@@ -116,10 +117,14 @@ describe("HomeScreen kitchen run", () => {
     await user.click(screen.getByRole("button", { name: "START" }));
 
     expect(screen.getByRole("heading", { name: "Feeding the kitchen" })).toBeInTheDocument();
-    expect(screen.getByText(/Keep this tab open/)).toBeInTheDocument();
-    for (const name of ["OPEN EXPO ↗", "OPEN TABLET ↗"]) {
-      expect(screen.getByRole("link", { name })).toHaveAttribute("target", "_blank");
-    }
+    expect(screen.getByText(/Keep this tab open and in front/)).toBeInTheDocument();
+    // A new tab would hide this one, and a hidden tab's video can stop.
+    await user.click(screen.getByRole("link", { name: "OPEN EXPO WINDOW ↗" }));
+    await user.click(screen.getByRole("link", { name: "OPEN TABLET WINDOW ↗" }));
+    expect(open.mock.calls.map(([path, name, features]) => [path, name, String(features).split(",")[0]])).toEqual([
+      ["/expo", "expo", "popup"],
+      ["/tablet", "tablet", "popup"],
+    ]);
 
     await user.click(screen.getByRole("button", { name: "STOP" }));
     expect(screen.getByRole("heading", { name: "Box the kitchen" })).toBeInTheDocument();

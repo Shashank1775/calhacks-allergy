@@ -109,17 +109,15 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
           STEP 3 OF 3 · {running ? `LIVE · ${status?.fps ?? 0} frames/s · ${status?.sent ?? 0} sent` : "STOPPED"}
         </span>
       </div>
-      <p className="bold">Keep this tab open: it is the kitchen's camera. Open the stations in new tabs.</p>
+      <p className="bold">
+        Keep this tab open and in front: it is the kitchen's camera. The stations open in windows of their own.
+      </p>
       <div className="option_row">
         <button type="button" className="btn" onClick={() => set_phase("layout")}>
           {running ? "STOP" : "BACK TO LAYOUT"}
         </button>
-        <a className="btn btn_ghost" href="/expo" target="_blank" rel="noopener">
-          OPEN EXPO ↗
-        </a>
-        <a className="btn btn_ghost" href="/tablet" target="_blank" rel="noopener">
-          OPEN TABLET ↗
-        </a>
+        <StationWindowLink path="/expo" name="EXPO" />
+        <StationWindowLink path="/tablet" name="TABLET" />
       </div>
       {running && status?.error && (
         <p role="alert" className="error">
@@ -138,6 +136,25 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Opens a station in a window of its own rather than a tab: a new tab would hide this one, and a browser can pause a
+ * hidden tab's video. The link still works as a link (middle-click, keyboard) if script can't open the window.
+ */
+function StationWindowLink({ path, name }: { path: string; name: string }) {
+  return (
+    <a
+      className="btn btn_ghost"
+      href={path}
+      target={name.toLowerCase()}
+      onClick={(event) => {
+        if (window.open(path, name.toLowerCase(), "popup,width=1200,height=900")) event.preventDefault();
+      }}
+    >
+      OPEN {name} WINDOW ↗
+    </a>
   );
 }
 

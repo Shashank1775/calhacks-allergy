@@ -69,10 +69,29 @@ export function start_frame_sender(
     on_status({ fps: taken_at.length, sent, error });
   }
 
-  const timer = setInterval(() => void tick(), 1000 / TARGET_FPS);
+  const stop_ticker = start_ticker(1000 / TARGET_FPS, () => void tick());
   return () => {
     stopped = true;
-    clearInterval(timer);
+    stop_ticker();
+  };
+}
+
+/**
+ * Calls `tick` every `interval_ms`, from a timer in a Web Worker. A browser slows a background tab's own timers to
+ * once a second (measured: 1 frame/s, so START PLATE found vision's newest frame too old), but not a worker's.
+ * Where there are no workers (tests), it's a plain interval.
+ */
+function start_ticker(interval_ms: number, tick: () => void): () => void {
+  if (typeof Worker === "undefined" || typeof URL.createObjectURL !== "function") {
+    const timer = setInterval(tick, interval_ms);
+    return () => clearInterval(timer);
+  }
+  const script = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${interval_ms});`]));
+  const worker = new Worker(script);
+  worker.onmessage = tick;
+  return () => {
+    worker.terminate();
+    URL.revokeObjectURL(script);
   };
 }
 

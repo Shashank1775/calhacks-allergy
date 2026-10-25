@@ -85,7 +85,7 @@ The screens poll the runner's `GET /state` twice a second and show REPLAY, since
 uv run python tools/run_local.py --live --webcam 0 --zones zones.json
 ```
 
-**Live, from this browser's camera or a video file** (no camera access needed for Python): run the runner with `--live --from-web` and set `WEB_VISION_URL`, then open http://localhost:5173/. Pick a video (USE THIS VIDEO) or ADD CAMERA, box the kitchen over its picture, SAVE, then START. That tab sends the frames to vision (`POST /frames`) and must stay open; open `/expo` and `/tablet` in other tabs. The shift starts at the first frame, so put the props in view before START. The browser opens a camera only on `http://localhost` or HTTPS.
+**Live, from this browser's camera or a video file** (no camera access needed for Python): run the runner with `--live --from-web` and set `WEB_VISION_URL`, then open http://localhost:5173/. Pick a video (USE THIS VIDEO) or ADD CAMERA, box the kitchen over its picture, SAVE, then START. That tab sends the frames to vision (`POST /frames`) and must stay open and in front; its OPEN EXPO WINDOW and OPEN TABLET WINDOW buttons open the stations in windows of their own (a new tab would hide it, and a browser can pause a hidden tab's video). The sender's timer runs in a Web Worker, since a browser slows a background tab's own timers to once a second. The shift starts at the first frame, so put the props in view before START. The browser opens a camera only on `http://localhost` or HTTPS.
 
 ```bash
 uv run python tools/run_local.py --live --from-web
