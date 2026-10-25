@@ -9,12 +9,13 @@ import { useState } from "react";
 import { allergen_name } from "../allergens";
 import { GATE_TEXT, gate_view } from "../gate";
 import { reason_label } from "../reasons";
-import { useFeedStatus, useTableRows } from "../state/hooks";
+import { useFeedStatus, useStateSource, useTableRows } from "../state/hooks";
 import { useVisionHealth } from "../vision_health";
 import { speech_available, useSpokenHolds } from "../voice";
 
 export function GatePanel() {
   const feed = useFeedStatus();
+  const source = useStateSource();
   const vision = useVisionHealth();
   const tables = {
     zone: useTableRows("zone"),
@@ -24,7 +25,9 @@ export function GatePanel() {
     ticket: useTableRows("ticket"),
     verdict: useTableRows("verdict"),
   };
-  const view = gate_view(feed, vision, tables);
+  // A replay's rows run on the scenario's clock, not vision's, so only live rows are aged by its frames.
+  const newest_frame_t_ms = source?.is_replay ? null : vision.last_frame_t_ms;
+  const view = gate_view(feed, vision.health, tables, newest_frame_t_ms);
 
   const [voice_on, set_voice_on] = useState(false);
   useSpokenHolds(view.state === "hold" ? view.verdict : undefined, view.ticket?.number, voice_on);

@@ -33,7 +33,16 @@ export const GATE_TEXT: Record<GateState, string> = {
 
 type GateTables = Pick<Tables, "zone" | "entity" | "entity_state" | "plate_binding" | "ticket" | "verdict">;
 
-export function gate_view(feed: FeedStatus, vision: VisionHealth, tables: GateTables): GateView {
+/**
+ * `newest_frame_t_ms` is vision's /health last_frame_t_ms (vision's frame clock), or null to age
+ * plates by the rows alone; see plates_at_pass.
+ */
+export function gate_view(
+  feed: FeedStatus,
+  vision: VisionHealth,
+  tables: GateTables,
+  newest_frame_t_ms: number | null = null,
+): GateView {
   const closed = (state: GateState, note: string | null): GateView => ({
     state,
     note,
@@ -46,7 +55,7 @@ export function gate_view(feed: FeedStatus, vision: VisionHealth, tables: GateTa
   if (vision === "stale") return closed("fault", "The camera stopped sending frames");
 
   // The two windows on how long a plate at the pass has gone unseen; see plates_at_pass.
-  const plates = plates_at_pass(tables);
+  const plates = plates_at_pass(tables, newest_frame_t_ms);
   const crowding = plates.filter((plate) => plate.unseen_ms <= LOST_PLATE_CROWDS_MS);
   const at_pass = plates.filter((plate) => plate.unseen_ms <= PLATE_LOST_MS);
   if (crowding.length > 1) return closed("hold", "Two plates at the pass: one at a time");
@@ -92,17 +101,25 @@ export type PlateAtPass = { plate_id: string; unseen_ms: number };
  * What's left, on purpose: a plate hidden for over LOST_PLATE_CROWDS_MS beside a PASS plate lets
  * the gate open for that plate until the hidden one is seen again; the demo keeps one plate at the
  * pass at a time. The cost: after a plate is lifted out, the next plate can't pass for up to
- * LOST_PLATE_CROWDS_MS. Unseen time is measured against the newest row of any entity, not this
- * browser's clock: rows carry vision's frame times, so feed lag can't age out a plate vision
- * still has.
+ * LOST_PLATE_CROWDS_MS.
+ *
+ * Unseen time is measured on vision's frame clock, not this browser's: rows carry vision's frame
+ * times, so feed lag can't age out a plate vision still has. "Now" on that clock is the later of
+ * the newest row of any entity and `newest_frame_t_ms` (null: the rows alone). The rows alone
+ * can't advance while vision sees nothing, so when frames resume on a scene without the plate,
+ * its last row would still count until the first new rows landed; the frame time ages it out at
+ * once.
  */
-export function plates_at_pass(tables: Pick<GateTables, "zone" | "entity" | "entity_state">): PlateAtPass[] {
+export function plates_at_pass(
+  tables: Pick<GateTables, "zone" | "entity" | "entity_state">,
+  newest_frame_t_ms: number | null = null,
+): PlateAtPass[] {
   const pass_zones = new Set(tables.zone.filter((zone) => zone.kind === "pass").map((zone) => zone.zone_id));
   const plate_ids = new Set(
     tables.entity.filter((entity) => entity.kind === "plate").map((entity) => entity.entity_id),
   );
   const latest = latest_states(tables.entity_state);
-  const newest_t_ms = newest_sighting(latest);
+  const newest_t_ms = Math.max(newest_sighting(latest), newest_frame_t_ms ?? -Infinity);
   const plates: PlateAtPass[] = [];
   for (const [entity_id, state] of latest) {
     const at_pass = state.zone !== null && pass_zones.has(state.zone);

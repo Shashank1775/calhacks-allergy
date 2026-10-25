@@ -111,7 +111,34 @@ def test_gate_service_feed_loss_vision():
     limit = world.service.settings.health_limit_ms
     assert world.at(3000 + limit, frame=False) == "pass"
     assert world.at(3000 + limit + 1, frame=False) == "fault"
-    assert world.at(3000 + limit + 250) == "pass"  # frames are back
+    world.plate_to_pass("plate-t2", 3000 + limit + 250)  # frames are back, and the plate is in them
+    assert world.at(3000 + limit + 250) == "pass"
+
+
+@pytest.mark.safety
+def test_a_stale_plate_leaves_the_pass_the_moment_frames_resume():
+    """Fail closed: a plate PASSes at the pass, frames stop (fault), then frames of a scene without it resume. Its last
+    row still says pass and nothing newer has landed yet, but vision's newest frame is over plate_lost_ms later, so the
+    gate goes straight from fault to idle, never back to pass."""
+    world = World("wash-resets-knife")
+    world.plate_to_pass("plate-t2", 3000)
+    assert world.at(3000) == "pass"
+    assert world.at(5000, frame=False) == "fault"
+
+    assert world.at(6000) == "idle"  # the first frame back, before any of its rows land
+    world.knife_seen(6200)  # its rows: the plate isn't in them
+    assert world.at(6250) == "idle"
+
+
+@pytest.mark.parametrize("health_lead_ms", [-150, 200])
+def test_a_tracked_plate_stays_at_the_pass_when_health_and_rows_differ_a_little(health_lead_ms):
+    """A plate seen in every frame stays at the pass whether /health's newest frame lags its rows (read a moment
+    before they landed) or leads them (the entity store syncs at 5 Hz): the later of the two never ages it out."""
+    world = World("wash-resets-knife")
+    for t_ms in range(3000, 6001, 250):
+        world.plate_to_pass("plate-t2", t_ms)
+        world.frame_t_ms = t_ms + health_lead_ms
+        assert world.at(t_ms, frame=False) == "pass", t_ms
 
 
 @pytest.mark.safety
