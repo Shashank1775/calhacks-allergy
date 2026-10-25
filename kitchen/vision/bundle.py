@@ -7,15 +7,19 @@ Emits: data/models/<name>/ with det.onnx and pose.onnx (byte-identical copies), 
        manifest.json, and either det.hef and pose.hef (stock COCO weights: Hailo Model Zoo's precompiled files) or
        compile.sh, which builds them from custom weights on an x86-64 Linux machine with Hailo's Dataflow Compiler
 Rules: the bundle's ONNX files are the exact files the local backend loads (sha256 in the manifest); stock HEFs are
-       only used with stock-shaped ONNX files (80 classes, 17 keypoints, 640x640); nothing here goes in git (data/
-       is ignored)
+       only used with stock-shaped ONNX files (80 classes, 17 keypoints, 640x640); custom weights name one class per
+       detector class, in output order (networks.det.class_names, which detect.py reads), and a stock bundle names
+       none (it is COCO); nothing here goes in git (data/ is ignored)
 
 Usage:
   uv run python -m kitchen.vision.bundle --name kitchen-v1 --weights stock \
       --det-onnx yolov8s.onnx --pose-onnx yolov8s-pose.onnx --video data/recordings/prep.mp4
+  uv run python -m kitchen.vision.bundle --name kitchen-v2 --weights custom --class-names plate,bowl,knife,spoon,fork \
+      --det-onnx best.onnx --pose-onnx yolov8s-pose.onnx --video data/recordings/prep.mp4
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import shutil
@@ -26,6 +30,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import onnxruntime
+
+from kitchen.vision.detect import detector_classes
 
 # The Model Zoo release that pairs with HailoRT 4.23 on Raspberry Pi OS Trixie (docs/decisions/hailo-models.md).
 MODEL_ZOO_VERSION = "v2.18.0"
@@ -65,10 +71,23 @@ def sha256(path: Path) -> str:
 
 
 def inspect_onnx(path: Path) -> dict:
-    """The input size and output channels of an Ultralytics ONNX file, read with ONNX Runtime."""
+    """The input size and output channels of an Ultralytics ONNX file, read with ONNX Runtime, and the class names
+    Ultralytics' export writes into its metadata, in output order (None if it has none)."""
     session = onnxruntime.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     _, _, height, width = session.get_inputs()[0].shape
-    return {"height": height, "width": width, "channels": session.get_outputs()[0].shape[1]}
+    names = session.get_modelmeta().custom_metadata_map.get("names")
+    return {
+        "height": height,
+        "width": width,
+        "channels": session.get_outputs()[0].shape[1],
+        "class_names": metadata_class_names(names) if names is not None else None,
+    }
+
+
+def metadata_class_names(names: str) -> list[str]:
+    """Ultralytics' names metadata ("{0: 'plate', 1: 'bowl'}") as a list in class-index order."""
+    by_index = ast.literal_eval(names)
+    return [by_index[index] for index in sorted(by_index)]
 
 
 def check_stock(det: dict, pose: dict) -> None:
@@ -79,6 +98,34 @@ def check_stock(det: dict, pose: dict) -> None:
                 f"{name}.onnx is not a stock COCO model (input {info['height']}x{info['width']}, "
                 f"{info['channels']} output channels); use --weights custom and compile.sh"
             )
+
+
+def check_class_names(weights: str, class_names: list[str] | None, det: dict) -> None:
+    """Refuse class names that don't fit the weights: stock weights are COCO and take none, and custom weights need
+    exactly one per class det.onnx scores, in output order, since vision reads class i's score as class_names[i].
+
+    When det.onnx carries Ultralytics' own class names, they must be the same list in the same order: names in the
+    wrong order would read one class as another, such as every plate as a knife or every knife as a plate.
+    """
+    classes = det["channels"] - 4
+    if weights == "stock":
+        if class_names is not None:
+            raise SystemExit("--class-names is only for --weights custom; a stock bundle is the 80 COCO classes")
+        return
+    if class_names is None:
+        raise SystemExit(
+            "--weights custom needs --class-names, the detector's classes in output order "
+            "(e.g. plate,bowl,knife,spoon,fork)"
+        )
+    if len(class_names) != classes:
+        raise SystemExit(f"det.onnx scores {classes} classes, but --class-names names {len(class_names)}")
+    own_names = det.get("class_names")
+    if own_names is not None and own_names != class_names:
+        raise SystemExit(f"det.onnx's metadata names its classes {own_names}, but --class-names says {class_names}")
+    try:
+        detector_classes({"classes": classes, "class_names": class_names})
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
 
 def letterbox(frame: np.ndarray, height: int, width: int) -> np.ndarray:
@@ -122,12 +169,24 @@ def fetch_zoo_hef(model: str, dest: Path) -> str:
 
 
 def build_bundle(
-    out: Path, weights: str, det_onnx: Path, pose_onnx: Path, video: Path, calib_count: int, parity_count: int
+    out: Path,
+    weights: str,
+    det_onnx: Path,
+    pose_onnx: Path,
+    video: Path,
+    calib_count: int,
+    parity_count: int,
+    class_names: list[str] | None = None,
 ) -> dict:
-    """Write the bundle folder and return its manifest. See the module docstring for what goes in it."""
+    """Write the bundle folder and return its manifest. See the module docstring for what goes in it.
+
+    `class_names` is the custom detector's classes in output order (None for stock weights). Every check runs before
+    anything is written.
+    """
     det, pose = inspect_onnx(det_onnx), inspect_onnx(pose_onnx)
     if weights == "stock":
         check_stock(det, pose)
+    check_class_names(weights, class_names, det)
     if (det["height"], det["width"]) != (pose["height"], pose["width"]):
         raise SystemExit("det.onnx and pose.onnx must take the same input size")
     height, width = det["height"], det["width"]
@@ -138,6 +197,8 @@ def build_bundle(
         shutil.copyfile(source, out / f"{name}.onnx")
         networks[name] = {"onnx": f"{name}.onnx", "onnx_sha256": sha256(out / f"{name}.onnx"), "hef": f"{name}.hef"}
     networks["det"]["classes"] = det["channels"] - 4
+    if class_names is not None:
+        networks["det"]["class_names"] = class_names
 
     frames = sample_frames(video, calib_count, height, width)
     (out / "calib").mkdir(exist_ok=True)
@@ -173,6 +234,11 @@ def build_bundle(
     return manifest
 
 
+def class_name_list(value: str) -> list[str]:
+    """--class-names as a list: comma-separated, spaces around each name ignored."""
+    return [name.strip() for name in value.split(",")]
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point; see the module docstring."""
     parser = argparse.ArgumentParser(description="Build the Hailo deploy bundle in data/models/<name>/.")
@@ -184,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-root", type=Path, default=Path("data/models"))
     parser.add_argument("--calib-frames", type=int, default=256)
     parser.add_argument("--parity-frames", type=int, default=32)
+    parser.add_argument(
+        "--class-names",
+        type=class_name_list,
+        help="custom weights only: the detector's classes in output order, comma-separated (plate,bowl,knife,...)",
+    )
     args = parser.parse_args(argv)
     manifest = build_bundle(
         args.out_root / args.name,
@@ -193,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         args.video,
         args.calib_frames,
         args.parity_frames,
+        args.class_names,
     )
     print(json.dumps(manifest, indent=2))
     return 0

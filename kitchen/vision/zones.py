@@ -195,8 +195,8 @@ class LiveZones:
     the old kind: a former wash would still wash there, which leans toward PASS. Set zones before service.
 
     Entities keep their IDs and origins. Origin is decided only at an entity's first sighting (identity.py), so a zone
-    change can't make an object that is already tracked clean, and a bowl tracked as bin-<n> stays bin-<n> wherever
-    the slots are drawn now. A bowl lost and re-acquired is named by the slot it reappears in, as always.
+    change can't make an object that is already tracked clean, and a bowl or plate tracked as bin-<n> stays bin-<n>
+    wherever the slots are drawn now. A bowl or plate lost and re-acquired is named by the slot it reappears in.
     """
 
     def __init__(
