@@ -5,11 +5,13 @@
  * Reads: GET <WEB_VISION_URL>/stream.mjpg (the picture only); the zones and selection from the layout screen.
  * Emits: the changed zone list, a new zone or a selection, through the screen's callbacks. It saves nothing itself.
  * Rules: with no camera, the zones still draw on a plain 16:9 frame, since points are shares of the frame, not pixels.
+ * The picture comes back by itself once vision does, with no reload (camera_stream.ts).
  * Only a plain primary press drags, one pointer at a time, and a move with no button held ends the drag, so a zone never
  * follows the cursor after the release went missing.
  */
 import { useRef, useState, type PointerEvent } from "react";
 import { vision_url } from "../api/http";
+import { useCameraStream } from "../camera_stream";
 import type { Zone } from "../types/TEMPORARY";
 import {
   big_enough,
@@ -49,9 +51,9 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
   const base = vision_url();
   const frame_ref = useRef<HTMLDivElement>(null);
   const [drag, set_drag] = useState<Drag | null>(null);
-  const [camera_offline, set_camera_offline] = useState(false);
+  const camera = useCameraStream();
   const [camera_aspect, set_camera_aspect] = useState(PLAIN_FRAME);
-  const show_camera = Boolean(base) && !camera_offline;
+  const show_camera = Boolean(base) && !camera.offline;
   const selected = zones.find((zone) => zone.zone_id === selected_id) ?? null;
 
   /** Where the pointer is, as a share of the frame (0..1 across and down), like every zone point. */
@@ -154,6 +156,7 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
       >
         {show_camera && (
           <img
+            key={camera.connection}
             src={`${base}/stream.mjpg`}
             alt="Live view of the counter"
             draggable={false}
@@ -162,7 +165,7 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
               if (image.naturalWidth && image.naturalHeight)
                 set_camera_aspect(image.naturalWidth / image.naturalHeight);
             }}
-            onError={() => set_camera_offline(true)}
+            onError={camera.on_error}
           />
         )}
 
@@ -211,7 +214,8 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
       </div>
       {!show_camera && (
         <p className="zone_no_camera">
-          {base ? "Camera offline." : "No camera set (WEB_VISION_URL)."} Zones are drawn on a plain 16:9 frame.
+          {base ? "Camera offline, trying again." : "No camera set (WEB_VISION_URL)."} Zones are drawn on a plain 16:9
+          frame.
         </p>
       )}
     </div>

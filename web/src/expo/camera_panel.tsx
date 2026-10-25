@@ -12,26 +12,21 @@
  * entities tracked now are counted and, in the entity view, drawn; a lost track keeps its row in
  * the database (and still matters to verdicts) but not its box here. A missing or broken stream
  * shows "camera offline" and changes no verdict; the gate panel's FAULT comes from vision health,
- * not from this picture. The picture comes back by itself once vision does, with no reload: a
- * broken stream is asked for again every STREAM_RETRY_MS, and a stream that froze because vision
- * restarted reconnects when vision's GET /health says frames are flowing again.
+ * not from this picture. The picture comes back by itself once vision does, with no reload
+ * (camera_stream.ts).
  */
-import { useEffect, useRef, useState } from "react";
 import { allergen_name } from "../allergens";
 import { vision_url } from "../api/http";
+import { useCameraStream } from "../camera_stream";
 import { latest_states } from "../gate";
 import { useTableRows } from "../state/hooks";
 import type { EntityState } from "../types/TEMPORARY";
-import { useVisionHealth } from "../vision_health";
 import { useShowZones, ZonesOverlay, ZonesToggle } from "./zones_overlay";
 
 export type Risk = "unknown" | "high" | "some" | "clean";
 
 /** Vision's `track_lost_ms`: an entity unseen for longer than this has lost its track for good. */
 export const TRACK_LOST_MS = 1000;
-
-/** How long "camera offline" stays up before the stream is asked for again. */
-export const STREAM_RETRY_MS = 2000;
 
 /**
  * The entities the camera sees now, each at its latest box. "Now" is the newest t_ms among the
@@ -62,37 +57,10 @@ export function risk_of(state: EntityState): Risk {
   return "clean";
 }
 
-/**
- * A count that goes up each time vision's frames come back after stopping. A stream cut mid-way (vision restarted)
- * fires no error in the browser: the picture just freezes on its last frame. Keying the picture on this count opens
- * a new stream instead.
- */
-function useReconnects(): number {
-  const health = useVisionHealth();
-  const [reconnects, set_reconnects] = useState(0);
-  const seen_ok = useRef(false);
-
-  useEffect(() => {
-    if (health !== "ok") return;
-    // The first "ok" belongs to the stream the page just opened; only a return after a stop needs a new one.
-    if (seen_ok.current) set_reconnects((count) => count + 1);
-    seen_ok.current = true;
-  }, [health]);
-
-  return reconnects;
-}
-
 export function CameraPanel() {
   const base = vision_url();
   const states = useTableRows("entity_state");
-  const [offline, set_offline] = useState(false);
-  // Offline lasts STREAM_RETRY_MS: then the picture mounts again, which opens a new stream request.
-  useEffect(() => {
-    if (!offline) return;
-    const timer = setTimeout(() => set_offline(false), STREAM_RETRY_MS);
-    return () => clearTimeout(timer);
-  }, [offline]);
-  const reconnects = useReconnects();
+  const camera = useCameraStream();
   const boxes = tracked_now(states);
   const fast = fast_boxes();
   const stream = fast ? `${base}/stream.mjpg?boxes=true` : `${base}/stream.mjpg`;
@@ -109,12 +77,12 @@ export function CameraPanel() {
       </div>
       <div className="camera_box">
         {!base && <p className="muted">No camera set: start vision and set WEB_VISION_URL to see the counter.</p>}
-        {base && offline && (
+        {base && camera.offline && (
           <p className="error">Camera offline, trying again. Verdicts don't depend on this picture.</p>
         )}
-        {base && !offline && (
-          <div className="camera_frame" key={reconnects}>
-            <img src={stream} alt="Live view of the counter" onError={() => set_offline(true)} />
+        {base && !camera.offline && (
+          <div className="camera_frame" key={camera.connection}>
+            <img src={stream} alt="Live view of the counter" onError={camera.on_error} />
             {/* Before the boxes, so they draw over the zones and stay readable. */}
             {show_zones && <ZonesOverlay />}
             {!fast && boxes.map((state) => <EntityBox key={state.entity_id} state={state} />)}

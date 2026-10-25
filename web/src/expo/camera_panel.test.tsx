@@ -1,11 +1,12 @@
 import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { STREAM_RETRY_MS } from "../camera_stream";
 import { StateSourceContext } from "../state/hooks";
 import { empty_tables, type StateSource, type Tables } from "../state/state_source";
 import { render_with_source } from "../test_utils";
 import type { EntityState } from "../types/TEMPORARY";
 import type { VisionHealth } from "../vision_health";
-import { CameraPanel, fast_boxes, risk_of, STREAM_RETRY_MS, TRACK_LOST_MS, tracked_now } from "./camera_panel";
+import { CameraPanel, fast_boxes, risk_of, TRACK_LOST_MS, tracked_now } from "./camera_panel";
 
 // Vision's health, set by each test: "ok" while frames flow, "stale" once they stop.
 const vision = vi.hoisted(() => ({ health: "ok" as VisionHealth }));
