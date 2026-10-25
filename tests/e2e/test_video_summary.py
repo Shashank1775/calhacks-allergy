@@ -226,7 +226,7 @@ def test_a_run_with_no_touches_says_so_without_calling_anything_clean(tmp_path):
 
 
 @pytest.mark.safety
-def test_an_object_that_arrives_after_the_shift_start_has_unknown_history(tmp_path):
+def test_an_object_that_arrives_after_the_shift_start_has_unknown_origin_and_no_allergen_without_a_touch(tmp_path):
     def spoon_arrives(t_ms):
         return [BIN, KNIFE, PLATE] + ([SPOON] if t_ms >= 1500 else [])
 
@@ -235,11 +235,11 @@ def test_an_object_that_arrives_after_the_shift_start_has_unknown_history(tmp_pa
     spoon = next(entity for entity in summary["entities"] if entity["label"] == "spoon")
     assert spoon["origin"] == "unknown"
     assert spoon["first_seen_t_ms"] >= SETTINGS.shift_start_ms
-    assert exposure_of(summary, spoon["entity_id"])["unknown_history"] is True
-    assert exposure_of(summary, "tool-knife-1")["unknown_history"] is False
+    assert exposure_of(summary, spoon["entity_id"])["unknown_history"] is False
+    assert exposure_of(summary, spoon["entity_id"])["allergens"] == []
     assert (
-        f"{spoon['entity_id']} first appeared after the first 0:01 of video, so its history is unknown and it could "
-        "carry any allergen." in summary["text"]
+        f"{spoon['entity_id']} first appeared after the first 0:01 of video, so its origin is unknown; only a touch "
+        "seen here can give it an allergen." in summary["text"]
     )
 
 

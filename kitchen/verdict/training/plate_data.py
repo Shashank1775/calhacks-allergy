@@ -65,10 +65,9 @@ def make_subgraph(nodes, edges, plate_id, as_of_t_ms):
 
 
 def node(entity_id, kind, label, origin="shift_start", probabilities=None):
-    """A subgraph node with its starting allergen profile."""
-    if origin == "unknown":
-        start = {"probabilities": {}, "unknown": True, "source": "unknown_history"}
-    elif kind == "bin":
+    """A subgraph node with its starting allergen profile, as the graph starts it: a tool, hand or plate clean whatever
+    its origin, a bin with its profile."""
+    if kind == "bin":
         start = {"probabilities": dict(probabilities or {}), "unknown": False, "source": "manual"}
     else:
         start = {"probabilities": {}, "unknown": False, "source": "shift_start_clean"}
@@ -76,7 +75,7 @@ def node(entity_id, kind, label, origin="shift_start", probabilities=None):
 
 
 def random_kitchen(rng):
-    """Bins, tools, hands and one plate. Now and then a tool with unknown history."""
+    """Bins, tools, hands and one plate. Now and then a tool of unknown origin, which starts clean like the rest."""
     slots = rng.sample(range(1, 9), rng.randint(2, 4))
     bins = []
     for slot in slots:

@@ -5,11 +5,11 @@ Step:  provenance graph
 Reads: the shift (entities and interaction edges) from a StateClient through graph.read_shift, propagated by
        propagate.py; a Clock; the interaction table's change feed (only to learn that something landed)
 Emits: entity_state rows (probabilities, unknown, caused_by) via StateClient.move_entity
-Rules: known-clean source: an unknown-history entity shows unknown: true until a wash, and a wash is the only thing
-       that lowers a shown number; fail closed: an error writes nothing, so a failed update leaves the screen as it
-       was and never shows a clean entity, an entity the database doesn't hold yet is waited for rather than shown as
-       it would be once registered clean, and a row is never rounded down to zero; the verdict is untouched: it asks
-       ProvenanceGraph directly, and no row here can change what the graph computes (see below)
+Rules: known-clean source: a tool, hand or plate shows only what an edge gave it, whatever its origin, and a wash
+       is the only thing that lowers a shown number; fail closed: an error writes nothing, so a failed update leaves
+       the screen as it was and never shows a clean entity, an entity the database doesn't hold yet is waited for
+       rather than shown as it would be once registered clean, and a row is never rounded down to zero; the verdict
+       is untouched: it asks ProvenanceGraph directly, and no row here can change what the graph computes (see below)
 
 The camera overlays color each box from its latest entity_state row. Nothing else writes allergens into those rows
 for a tool, hand or plate, so without this a knife that just scooped satay would show clean. LiveRisk runs
@@ -36,9 +36,9 @@ Bins get no rows, so a bin a dirty tool dipped into still shows its own profile 
 affected: the graph carries the contact on to the plate). The graph starts a bin from the allergen profile the database
 joins to it (graph.start_profile), so a row here would become the bin's starting profile and the graph would count the
 contact twice on its next query. Showing it needs a read of the bin's own profile, which the StateClient doesn't offer.
-Tools, hands and plates start clean (or unknown) from their origin alone, so their rows are never read back as a start.
-The unknown flag follows the same rule: it is true only for an entity whose origin is unknown, never for one that merely
-touched such an entity, since the graph would read the flag back as an unknown start.
+Tools, hands and plates start clean whatever their origin, so their rows are never read back as a start. The unknown
+flag is true only for an entity of unknown origin that starts unknown, never for one that merely touched such an entity;
+since only a bin can start unknown and bins get no rows, a row never sets it.
 """
 
 import logging
@@ -168,9 +168,8 @@ class LiveRisk:
             up_to_date = True
             for entity_id, caused_by in latest_edge_per_entity(edges).items():
                 if entity_id not in registered:
-                    # An edge can land before the entity store registers the entity. The placeholder the graph makes
-                    # for it shows the same unknown-history risk as an untouched one, so comparing would skip it; once
-                    # registered, a clean-stack plate or tool shows clean, whatever the edge gave it.
+                    # An edge can land before the entity store registers the entity. Its row can't be written
+                    # until then, so wait for it rather than remember a row that never landed.
                     up_to_date = False
                     continue
                 entity = entities[entity_id]

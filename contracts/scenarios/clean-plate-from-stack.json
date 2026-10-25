@@ -1,6 +1,6 @@
 {
   "scenario_id": "clean-plate-from-stack",
-  "description": "A plate first appears mid-shift, taken from the clean-plate stack zone, is bound to a ticket and goes to the pass with no contacts. It starts clean (the known-clean-source exception), so it passes. Contrast with unknown-tool-mid-shift.",
+  "description": "A plate first appears mid-shift, taken from the clean-plate stack zone, is bound to a ticket and goes to the pass with no contacts. It starts clean and nothing touches it, so it passes.",
   "tags": [
     "known-clean-source"
   ],

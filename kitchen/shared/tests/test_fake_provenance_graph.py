@@ -8,6 +8,8 @@ Rules: fail closed (an unknown plate raises, ground truth reports probability 1)
        a plate before its chain has happened)
 """
 
+import json
+
 import pytest
 
 from kitchen.shared.fakes import GOLDEN_SCENARIO_PATHS, FakeProvenanceGraph
@@ -47,10 +49,16 @@ def test_nothing_reaches_the_plate_before_its_chain_has_happened():
 
 
 def test_unknown_ancestors_appear_once_the_entity_is_seen():
-    graph = FakeProvenanceGraph(SCENARIO_DIR / "unknown-tool-mid-shift.json")
+    """A bin nobody declared, first seen mid-shift, is the one unknown ancestor left (a tool of unknown origin starts
+    clean). The fake names it once a scenario expecting an unknown_history hold has seen it."""
+    scenario = json.loads((SCENARIO_DIR / "unknown-tool-mid-shift.json").read_text())
+    scenario["late_entities"] = [{"entity_id": "bin-9", "first_seen_t_ms": 1500, "origin": "unknown"}]
+    scenario["events"][0]["a_id"] = "bin-9"
+    scenario["expected"][0].update(decision="hold", allergens_reached=["sesame"], reason_codes=["unknown_history"])
+    graph = FakeProvenanceGraph(scenario)
 
     assert graph.unknown_ancestors("plate-t4", 1000) == []
-    assert graph.unknown_ancestors("plate-t4", 3000) == ["tool-spoon-9"]
+    assert graph.unknown_ancestors("plate-t4", 3000) == ["bin-9"]
 
 
 @pytest.mark.safety

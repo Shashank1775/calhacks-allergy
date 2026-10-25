@@ -11,7 +11,7 @@ The graph math the agents assume (from the original spec):
 - **Noisy-OR along transfer edges.** For allergen *a* over an edge with probability *p* and action efficiency *k*: `P_dst(a) ← 1 − (1 − P_dst(a)) · (1 − k · p · P_src(a))`. Honor `direction` (`a_to_b`, `b_to_a`, `both`).
 - **Wash reset.** A `clean.wash` edge is a self-loop (`a_id == b_id`) and sets `P(a) ← (1 − p) · P(a)` for every unit.
 - **Time forward.** Process edges in time order, so every path is time-forward (invariant 5). Ties default to `t_start_ms`, then `t_end_ms`, then `event_id`, and a wash tied with a transfer is applied **before** it, so a tie can never erase contamination (OQ-17, yours to decide).
-- **Start states (invariant 8).** Entities with `origin: shift_start` or `clean_stack` start clean. `origin: unknown` starts at probability 1 for every unit until a wash (OQ-13 default; yours to decide).
+- **Start states (invariant 8).** Tools, hands and plates start clean whatever their `origin`, `unknown` included: only an edge gives one risk, so a plate holds only on a path (the owner's call, 2026-10-24). A bin starts with its profile; a bin with none starts at probability 1 for every unit until a wash.
 
 ## What agents will check
 
@@ -20,9 +20,9 @@ These live in `kitchen/shared/contract_tests/` (written by platform). Your graph
 - `reach` results validate against `allergen_reach`; chains run source → plate with strictly increasing `t_ms`.
 - `subgraph` validates against `plate_subgraph` and contains only time-forward ancestors.
 - Shuffling the input order of edges never changes the result. An edge into a source after that source's outgoing edge never contaminates.
-- `unknown_ancestors` lists every unwashed `origin: unknown` ancestor, and nothing else.
+- `unknown_ancestors` lists every unwashed `origin: unknown` ancestor whose start is unknown (a bin with no profile), and nothing else. A tool, hand or plate of unknown origin is never one.
 - Any internal failure raises `GraphUnavailable`; it never returns an empty "clean" answer.
-- All six golden scenarios in [`contracts/scenarios/`](../../contracts/scenarios/) give the expected `allergens_reached` and chains for any `k` in (0, 1].
+- All seven golden scenarios in [`contracts/scenarios/`](../../contracts/scenarios/) give the expected `allergens_reached` and chains for any `k` in (0, 1].
 - Sim's long-shift scenario (≈ 5,000 edges, ≥ 100 plates) for performance.
 
 ## How it's built
@@ -30,13 +30,13 @@ These live in `kitchen/shared/contract_tests/` (written by platform). Your graph
 - `graph.py`: `ProvenanceGraph(state)` over any `StateClient`. Every query reads the shift again (entities, then edges up to `as_of_t_ms`, `unimportant` dropped, sorted with the tie rule above), so there's no cache to go stale. About 90 ms per verdict at 5,000 edges.
 - `propagate.py`: the noisy-OR above, with `k = 1` for every action (the most cautious value, and what Laya's exact plate check uses). A `both` edge moves both ways at once, from the state before it.
 - `reachability.py`: `reach` (every allergen above 0, with its strongest chain from a bin), `unknown_ancestors`, and `subgraph` (the edges on time-forward paths into the plate, plus a node for each entity they touch).
-- **Chains.** A chain starts at a bin. A wash ends the washed entity's chains, since what's left is residue. Allergens from residue or unknown history get an empty chain; their probability still counts, and `unknown_ancestors` names the unknown-history entities.
-- **Fail closed.** Any error, or a plate the database doesn't hold, raises `GraphUnavailable`. An edge naming an entity the database doesn't hold treats that entity as unknown history.
+- **Chains.** A chain starts at a bin. A wash ends the washed entity's chains, since what's left is residue. Allergens from residue or a bin with no profile get an empty chain; their probability still counts, and `unknown_ancestors` names such a bin if its origin is unknown.
+- **Fail closed.** Any error, or a plate the database doesn't hold, raises `GraphUnavailable`. An edge naming an entity the database doesn't hold yet treats it as unknown origin: a tool, hand or plate starts clean, a bin may carry anything.
 - `risk.py`: `LiveRisk(state, clock, write_lock)`, the live `entity_state` rows for the camera overlays. It is not part of the verdict path.
   Whenever an interaction edge lands (a flag set from the change feed, so nothing heavy runs on the camera's frame-loop thread), a
   background thread at about 5 Hz reads the shift with `read_shift`, runs `propagate`, and appends one row for each tool, hand and
   plate whose shown risk changed: probabilities rounded to 3 decimals (never rounded down to 0), `unknown: true` only for an
-  unwashed `origin: unknown` entity, and `caused_by` set to the latest edge touching it (without `caused_by` the joins ignore the
+  unwashed `origin: unknown` entity that started unknown (only a bin can, and bins get no rows), and `caused_by` set to the latest edge touching it (without `caused_by` the joins ignore the
   allergens). The row copies `zone`, `box` and `t_ms` from the entity's newest row, so it moves nothing: `last_seen_t_ms` stays
   put and a plate at the pass isn't judged again. Reading the entity and writing the row happen under `write_lock`, which
   whoever writes the entity store's rows takes around each row (`tools/run_local.py` does), so a store row never lands between
