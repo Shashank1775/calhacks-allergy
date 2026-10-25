@@ -5,9 +5,11 @@ Owner: platform (agents)
 Step:  end-to-end harness (the same shift as tests/e2e, served over HTTP on a live clock)
 Reads: one golden scenario (contracts/scenarios/<name>.json); Kitchen from tests/e2e/conftest.py (the wiring);
        Orders HTTP API requests from the tablet; ORDERS_CORS_ORIGINS; LAYA_MODEL_DIR and LAYA_PLATE_MODEL_DIR (the
-       fine-tuned Laya checkpoints, optional); live: camera or video frames, a zones file, VISION_ settings
+       fine-tuned Laya checkpoints, optional); live: camera or video frames, a zones file (--zones, else
+       data/zones.json if saved from the web app, else kitchen/vision/default_zones.json), VISION_ settings
 Emits: the Orders HTTP API, plus GET /state: a read-only snapshot of every table in contracts/state-tables.md, with
-       mode "replay" or "live"; gate states and spoken holds on stdout (FakeGate, FakeSpeaker); live: the Vision API
+       mode "replay" or "live"; gate states and spoken holds on stdout (FakeGate, FakeSpeaker); live: the Vision API,
+       whose PUT /zones saves the zones file and replaces the zones everywhere (kitchen.vision.zones.LiveZones)
 Rules: fail closed: every verdict comes from kitchen.verdict, and the gate ticks every TICK_MS even after a failed
        scenario step, so it never freezes on its last state; no unanswered questions: the scenario's tickets are
        typed through the Orders API and its questions, like any tablet ticket; late changes recheck everything:
@@ -30,11 +32,14 @@ partner's EntityStore and the interactions step, the partner's ProvenanceGraph r
 service judges each plate that reaches the pass, and the gate watches vision's health. The partner's LiveRisk writes
 each tool, hand and plate's propagated allergens into entity_state, so the camera overlays on /expo color a knife that
 just scooped satay (display only: verdicts ask the graph directly). It serves the Vision API
-(stream, health, start plate) on VISION_PORT next to the Orders API and GET /state:
+(stream, health, start plate, zones) on VISION_PORT next to the Orders API and GET /state:
 
-    uv run python tools/run_local.py --live --webcam 0 --zones zones.json          # web/: WEB_VISION_URL=:8002 too
+    uv run python tools/run_local.py --live --webcam 0                       # web/: WEB_VISION_URL=:8002 too
     uv run python tools/run_local.py --live --video data/recordings/prep.mp4 --zones zones.json
-    VISION_DETECTOR=hailo .venv/bin/python tools/run_local.py --live --picamera --zones zones.json   # on the Pi
+    VISION_DETECTOR=hailo .venv/bin/python tools/run_local.py --live --picamera   # on the Pi
+
+Without --zones, live mode uses the zones saved from the web app (data/zones.json) if there are any, else the
+committed default layout (kitchen/vision/default_zones.json), and logs the file and its sha256.
 
 The interactions step plugs in by name (--interactions, default kitchen.interactions.events:live_consumer): a
 factory called with (state, clock) that returns a frame consumer writing edges with StateClient.record_interaction.
@@ -413,6 +418,7 @@ class LiveRunner:
         interactions=INTERACTIONS_STEP,
         cors_origins: list[str] | None = None,
         vision_cors_origins: list[str] | None = None,
+        zones_path: Path | None = None,
     ) -> None:
         from kitchen.entities.store import EntityStore
         from kitchen.gate.driver import FakeGate
@@ -427,10 +433,9 @@ class LiveRunner:
         from kitchen.vision import server as vision_server
         from kitchen.vision.common import VisionSettings
         from kitchen.vision.run import build_frame_loop, entity_store_consumer
-        from kitchen.vision.zones import push_zones
+        from kitchen.vision.zones import SAVED_ZONES_PATH, LiveZones, push_zones
 
         self.clock = clock
-        self.zones = zones
         self.settings = vision_settings or VisionSettings()
         self.state = FakeStateClient()
         self.mirror = StateMirror(self.state)  # subscribed before anything is written
@@ -453,6 +458,8 @@ class LiveRunner:
         )
         self.status = vision_server.VisionStatus(self.loop.detector.backend, self.settings.track_lost_ms)
         self.loop.status = self.status
+        # PUT /zones saves to zones_path and swaps the zones in the frame loop, the zone table and "start plate".
+        self.zones = LiveZones(zones, zones_path or SAVED_ZONES_PATH, self.state, self.loop.use_zones)
 
         self.gate = FakeGate(quiet=True)
         self.speaker = FakeSpeaker(quiet=True)
@@ -461,7 +468,9 @@ class LiveRunner:
         desk = TicketDesk(parser or FakeLayaParser(), self.state, clock)
         self.app = create_app(desk, FakeTranscriber(), cors_origins=cors_origins or [])
         self.app.add_api_route("/state", self.state_snapshot, methods=["GET"])
-        self.vision_app = vision_server.create_app(self.status, self.bind, vision_cors_origins or [])
+        self.vision_app = vision_server.create_app(
+            self.status, self.bind, self.zones.current, self.zones.replace, vision_cors_origins or []
+        )
 
     def last_frame_t_ms(self) -> int | None:
         """Vision's /health last_frame_t_ms, read in-process for the gate."""
@@ -474,7 +483,7 @@ class LiveRunner:
         return start_plate(
             self.state,
             self.status.recent_observations(),
-            self.zones,
+            self.zones.current(),
             ticket_id,
             self.clock.now_ms(),
             self.settings.plate_bind_max_age_ms,
@@ -563,13 +572,12 @@ def main_live(args, origins: list[str], parser, plate_check) -> int:
     from kitchen.shared.config import load_settings, log_settings
     from kitchen.vision.common import VisionSettings
     from kitchen.vision.detect import open_detector
-    from kitchen.vision.run import serve_in_background
+    from kitchen.vision.run import load_run_zones, serve_in_background
     from kitchen.vision.server import parse_cors_origins
-    from kitchen.vision.zones import load_zones
 
     settings = load_settings(VisionSettings, "VISION_")
     log_settings(settings)
-    zones = load_zones(args.zones)
+    zones, _, zones_save_path = load_run_zones(args.zones)
     # The clock starts once the detector has loaded (seconds, for ONNX), as in vision's own CLI: otherwise the load
     # would use up shift_start_ms and every object on the counter would start with unknown history.
     detector = open_detector(settings)
@@ -584,6 +592,7 @@ def main_live(args, origins: list[str], parser, plate_check) -> int:
         interactions=args.interactions,
         cors_origins=origins,
         vision_cors_origins=parse_cors_origins(settings.cors_origins),
+        zones_path=zones_save_path,
     )
     runner.start()
     serve_in_background(runner.vision_app, settings.port)
@@ -637,11 +646,15 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--webcam", type=int, help="live: a webcam index, e.g. 0")
     source.add_argument("--video", type=Path, help="live: a video file, played like a live camera")
     source.add_argument("--picamera", action="store_true", help="live: the Raspberry Pi camera (on the Pi)")
-    cli.add_argument("--zones", type=Path, help="live: zones.json (kitchen/vision/zones.py)")
+    cli.add_argument(
+        "--zones",
+        type=Path,
+        help="live: a zones file (kitchen/vision/zones.py); default: data/zones.json if saved, else the default layout",
+    )
     cli.add_argument("--interactions", default=INTERACTIONS_STEP, help="live: the interactions step's factory")
     args = cli.parse_args(argv)
-    if args.live and (args.zones is None or (args.webcam is None and args.video is None and not args.picamera)):
-        cli.error("--live needs --zones and one of --webcam, --video or --picamera")
+    if args.live and args.webcam is None and args.video is None and not args.picamera:
+        cli.error("--live needs one of --webcam, --video or --picamera")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # the scenario's own Orders API calls, one line each
