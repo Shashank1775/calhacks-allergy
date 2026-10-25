@@ -1,12 +1,14 @@
-"""The Pi's HTTP API (POST /plates/start, GET /stream.mjpg, GET /health) and FakeVisionAPI for outputs.
+"""The Pi's HTTP API (POST /plates/start, GET /stream.mjpg, GET /health, GET and PUT /zones) and FakeVisionAPI.
 
 Owner: vision (agents)
 Step:  vision
 Reads: the latest FrameOutput and RGB frame (VisionStatus, updated by the frame loop), a start_plate callable
-       (zones.py binding), VISION_PORT, VISION_DETECTOR and VISION_CORS_ORIGINS (CLI only)
+       (plates.py binding), get_zones and put_zones callables (zones.LiveZones), VISION_PORT, VISION_DETECTOR and
+       VISION_CORS_ORIGINS (CLI only)
 Emits: the Vision HTTP API (contracts/apis.md), with the standard error body and CORS for VISION_CORS_ORIGINS only
 Rules: fail closed: /health last_frame_t_ms stops advancing when frames stop, so the gate can go to fault;
        /plates/start never guesses, every refusal is a 409 with the contract's code;
+       PUT /zones changes nothing unless the whole layout is valid and saved (422 bad_zones, 500, 503);
        endpoints never block the frame loop: update() only swaps references, JPEGs are encoded in the HTTP thread;
        open streams never stall /health or /plates/start: they wait for frames on their own few threads
 
@@ -14,9 +16,12 @@ Rules: fail closed: /health last_frame_t_ms stops advancing when frames stop, so
     curl localhost:8002/health                                     # {"fps": ..., "detector": ..., "last_frame_t_ms": ...}
     curl -o - localhost:8002/stream.mjpg | head -c 2000            # multipart MJPEG parts
     curl -X POST localhost:8002/plates/start -H 'Content-Type: application/json' -d '{"ticket_id": "t7"}'
+    curl localhost:8002/zones                                      # {"zones": [{"zone_id", "kind", "polygon"}, ...]}
+    curl -X PUT localhost:8002/zones -H 'Content-Type: application/json' -d @kitchen/vision/default_zones.json
 """
 
 import argparse
+import json
 import logging
 import threading
 import time
@@ -25,7 +30,7 @@ from collections.abc import AsyncIterator, Callable
 
 import anyio
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -35,8 +40,9 @@ from starlette.exceptions import HTTPException
 from kitchen.shared.clock import SystemClock
 from kitchen.shared.config import load_settings
 from kitchen.shared.interfaces import Clock, StateUnavailable
-from kitchen.shared.models import validate
+from kitchen.shared.models import Zone, validate
 from kitchen.vision.common import BindRefused, FrameOutput, VisionSettings
+from kitchen.vision.zones import DEFAULT_ZONES_PATH, ZoneFileError, load_zones, parse_zones, zone_record
 
 MJPEG_BOUNDARY = "frame"
 
@@ -195,17 +201,26 @@ class StartPlateRequest(BaseModel):
     ticket_id: str = Field(pattern=r"\S")
 
 
+def zones_body(zones: list[Zone]) -> dict:
+    """The GET and PUT /zones body: {"zones": [...]}, in the zones file format."""
+    return {"zones": [zone_record(zone) for zone in zones]}
+
+
 def create_app(
     status: VisionStatus,
     start_plate: Callable[[str], str],
+    get_zones: Callable[[], list[Zone]],
+    put_zones: Callable[[object], list[Zone]],
     cors_origins: list[str],
     stream_idle_s: float = STREAM_IDLE_S,
 ) -> FastAPI:
-    """The Vision HTTP API over a VisionStatus and a start_plate(ticket_id) -> plate_id binding function.
+    """The Vision HTTP API over a VisionStatus, a start_plate(ticket_id) -> plate_id binding function, and the zones
+    in use (get_zones) and their replacement (put_zones(parsed JSON) -> the zones now in use; zones.LiveZones).
 
     start_plate raises BindRefused (409 with its code) or StateUnavailable (503); any other error is a 500
-    internal_error. The API never picks a plate itself. Every error uses the contract's error body, and CORS is
-    sent only for cors_origins.
+    internal_error. The API never picks a plate itself. put_zones raises ZoneFileError (422 bad_zones) or
+    StateUnavailable (503); any other error, such as the zones file not being writable, is a 500 internal_error.
+    Every error uses the contract's error body, and CORS is sent only for cors_origins.
     """
     if "*" in cors_origins:
         # contracts/apis.md HTTP conventions: browsers may call this API only from the listed screens.
@@ -214,7 +229,10 @@ def create_app(
     app = FastAPI(title="Vision API")
     stream_threads = anyio.CapacityLimiter(STREAM_THREADS)
     app.add_middleware(
-        CORSMiddleware, allow_origins=cors_origins, allow_methods=["GET", "POST"], allow_headers=["Content-Type"]
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Content-Type"],
     )
 
     @app.exception_handler(BindRefused)
@@ -224,6 +242,10 @@ def create_app(
     @app.exception_handler(StateUnavailable)
     def state_unavailable(request, exc):
         return error_response(503, "state_unavailable", str(exc))
+
+    @app.exception_handler(ZoneFileError)
+    def bad_zones(request, exc):
+        return error_response(422, "bad_zones", str(exc))
 
     @app.exception_handler(RequestValidationError)
     def bad_request(request, exc):
@@ -250,6 +272,32 @@ def create_app(
     def health():
         return status.health()
 
+    @app.get("/zones")
+    def zones_get():
+        return zones_body(get_zones())
+
+    def replace_zones(data: object):
+        try:
+            zones = put_zones(data)
+        except (ZoneFileError, StateUnavailable):
+            raise  # their handlers answer 422 and 503 with the contract code
+        except Exception as error:
+            # The zones file couldn't be written, or a bug: put_zones has changed nothing. Answered here, inside the
+            # CORS middleware, so the zone editor can read why.
+            logger.exception("PUT /zones failed")
+            return error_response(500, "internal_error", f"the zones were not changed: {error}")
+        return zones_body(zones)
+
+    @app.put("/zones")
+    async def zones_put(request: Request):
+        # The body is read raw, so a body that isn't JSON at all is a bad zones file (422) like any other.
+        try:
+            data = json.loads(await request.body())
+        except ValueError:
+            return error_response(422, "bad_zones", "the body is not JSON")
+        # Writing the file and swapping the lookup block, so they run off the event loop.
+        return await anyio.to_thread.run_sync(replace_zones, data)
+
     @app.get("/stream.mjpg")
     def stream():
         media_type = f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}"
@@ -271,10 +319,12 @@ class FakeSceneRequest(BaseModel):
 class FakeVisionAPI:
     """The Vision HTTP API without a camera or models, so the web app can be built against it.
 
-    `app` serves the three contract endpoints. Frames are a moving test pattern pushed by push_frame() (the CLI
-    calls it on a timer). /plates/start follows the real refusal rules against `plates_at_spot` and an in-memory
-    binding. The fake-only POST /fake/scene sets the plates at the spot and stops or restarts frames, so outputs
-    can exercise every 409 and the gate's stale-health fault.
+    `app` serves the contract endpoints. Frames are a moving test pattern pushed by push_frame() (the CLI calls it
+    on a timer). /plates/start follows the real refusal rules against `plates_at_spot` and an in-memory binding.
+    GET /zones starts on the committed default layout, and PUT /zones checks a layout exactly as the real one does
+    (422 bad_zones, nothing changed) and keeps it in memory: no file, no zone table. The fake-only POST /fake/scene
+    sets the plates at the spot and stops or restarts frames, so outputs can exercise every 409 and the gate's
+    stale-health fault.
     """
 
     def __init__(
@@ -283,9 +333,11 @@ class FakeVisionAPI:
         detector: str = "onnx",
         cors_origins: list[str] | None = None,
         clock: Clock | None = None,
+        zones: list[Zone] | None = None,
     ):
         self.plates_at_spot = ["plate-1"] if plates_at_spot is None else list(plates_at_spot)
         self.bindings: dict[str, str] = {}  # plate_id -> ticket_id
+        self.zones = load_zones(DEFAULT_ZONES_PATH) if zones is None else list(zones)
         self.frames_running = True
         self.status = VisionStatus(detector)
         self.clock = clock or SystemClock()
@@ -293,7 +345,7 @@ class FakeVisionAPI:
         self._frame_id = 0
 
         origins = [VisionSettings.cors_origins] if cors_origins is None else cors_origins
-        self.app = create_app(self.status, self.start_plate, origins)
+        self.app = create_app(self.status, self.start_plate, self.get_zones, self.put_zones, origins)
 
         @self.app.post("/fake/scene")
         def fake_scene(body: FakeSceneRequest):
@@ -312,6 +364,18 @@ class FakeVisionAPI:
                 raise BindRefused("plate_already_bound", f"{plate_id} is already bound to {bound_to}")
             self.bindings[plate_id] = ticket_id
             return plate_id
+
+    def get_zones(self) -> list[Zone]:
+        """The fake's zones in use."""
+        with self._lock:
+            return list(self.zones)
+
+    def put_zones(self, data: object) -> list[Zone]:
+        """Replace the fake's zones with the zones file `data`, or raise ZoneFileError and keep the old ones."""
+        zones = parse_zones(data)
+        with self._lock:
+            self.zones = zones
+            return list(zones)
 
     def set_scene(self, plates_at_spot: list[str] | None, frames_running: bool | None) -> dict:
         """Change the plates at the spot and whether frames flow; returns the scene as it now is."""

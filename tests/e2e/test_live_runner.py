@@ -126,11 +126,16 @@ def peanut_knife_step(state, clock):
 class Shift:
     """A LiveRunner on a FakeClock, fed scripted frames, with a peanut-allergy ticket for table 1."""
 
-    def __init__(self, interactions):
+    def __init__(self, interactions, zones_path: Path | None = None):
         self.clock = FakeClock(0)
         self.detector = ScriptedDetector()
         self.runner = run_local.LiveRunner(
-            self.clock, ZONES, vision_settings=SETTINGS, detector=self.detector, interactions=interactions
+            self.clock,
+            ZONES,
+            vision_settings=SETTINGS,
+            detector=self.detector,
+            interactions=interactions,
+            zones_path=zones_path,
         )
         self.orders = TestClient(self.runner.app)
         self._frame_id = 0
@@ -414,3 +419,24 @@ def test_live_mode_reads_the_pi_camera_when_asked(monkeypatch):
     args = Namespace(video=None, webcam=None, picamera=True)
 
     assert isinstance(run_local.live_source(args, FakeClock(0)), PiCameraSource)
+
+
+def test_a_zone_change_from_the_web_app_reaches_the_zone_table_and_the_next_frame(tmp_path):
+    """PUT /zones on the runner's Vision API: the pass moved under the knife shows in GET /state's zone table (what the
+    gate and the screens read) and in the knife's next entity row, and the knife and bin keep their IDs."""
+    shift = Shift(quiet_step, zones_path=tmp_path / "zones.json")
+    vision = TestClient(shift.runner.vision_app)
+    shift.frames(3, [BIN, KNIFE])
+    assert shift.overlay_row("tool-knife-1")["zone"] is None
+
+    moved_pass = [[0.2, 0.7], [0.4, 0.7], [0.4, 1.0], [0.2, 1.0]]  # under the knife, centre (0.275, 0.875)
+    layout = {"zones": [zone for zone in vision.get("/zones").json()["zones"] if zone["zone_id"] != "pass"]}
+    layout["zones"].append({"zone_id": "pass", "kind": "pass", "polygon": moved_pass})
+    assert vision.put("/zones", json=layout).status_code == 200
+
+    zone_table = {row["zone_id"]: row for row in shift.orders.get("/state").json()["tables"]["zone"]}
+    assert zone_table["pass"]["polygon"] == moved_pass
+    shift.frames(1, [BIN, KNIFE])
+    assert shift.overlay_row("tool-knife-1")["zone"] == "pass"
+    assert shift.overlay_row("bin-1")["zone"] == "slot-1"
+    assert (tmp_path / "zones.json").exists()

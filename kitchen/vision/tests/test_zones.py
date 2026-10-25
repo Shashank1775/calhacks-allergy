@@ -2,10 +2,11 @@
 
 Owner: vision (agents)
 Step:  vision
-Reads: kitchen.vision.zones, tests/fixtures/zones.sample.json, FakeStateClient
+Reads: kitchen.vision.zones, tests/fixtures/zones.sample.json, kitchen/vision/default_zones.json, FakeStateClient
 Emits: nothing
-Rules: fail closed (a point in no zone gets None; bad files are refused); known-clean source depends on the clean_stack
-       zone being found exactly, so overlaps must resolve the same way every time
+Rules: fail closed (a point in no zone gets None; bad files are refused; a zone change applies whole or not at all);
+       known-clean source depends on the clean_stack zone being found exactly, so overlaps must resolve the same way
+       every time
 """
 
 import json
@@ -19,7 +20,11 @@ from hypothesis import strategies as st
 from kitchen.shared.fakes import FakeStateClient
 from kitchen.shared.interfaces import StateUnavailable
 from kitchen.shared.models import Zone
+from kitchen.vision import zones as zones_module
 from kitchen.vision.zones import (
+    DEFAULT_ZONES_PATH,
+    SAVED_ZONES_PATH,
+    LiveZones,
     ZoneFileError,
     add_zone,
     load_zones,
@@ -31,6 +36,8 @@ from kitchen.vision.zones import (
     push_zones,
     save_zones,
     zone_lookup,
+    zone_record,
+    zones_files,
 )
 
 SAMPLE = Path(__file__).parent / "fixtures" / "zones.sample.json"
@@ -291,6 +298,170 @@ def test_push_passes_state_unavailable_through():
     state.set_unavailable()
     with pytest.raises(StateUnavailable):
         push_zones(state, load_zones(SAMPLE))
+
+
+# the default layout and which zones file a run uses
+
+
+def test_the_default_layout_is_the_shared_kitchen():
+    """The layout every test and the dummy kitchen share: five bin slots across the top, the utensil rack and the
+    clean plates on the right, the plating spot in the middle, wash bottom left, pass bottom right."""
+    expected = {
+        "slot-1": ("bin_slot", (0.02, 0.04, 0.16, 0.30)),
+        "slot-2": ("bin_slot", (0.18, 0.04, 0.32, 0.30)),
+        "slot-3": ("bin_slot", (0.34, 0.04, 0.48, 0.30)),
+        "slot-4": ("bin_slot", (0.50, 0.04, 0.64, 0.30)),
+        "slot-5": ("bin_slot", (0.66, 0.04, 0.80, 0.30)),
+        "rack": ("clean_stack", (0.82, 0.04, 0.99, 0.36)),
+        "plate-stack": ("clean_stack", (0.82, 0.40, 0.99, 0.74)),
+        "plating": ("plating_spot", (0.40, 0.40, 0.60, 0.74)),
+        "wash": ("wash", (0.02, 0.72, 0.18, 0.98)),
+        "pass": ("pass", (0.70, 0.78, 0.99, 0.99)),
+    }
+    zones = load_zones(DEFAULT_ZONES_PATH)
+    assert {zone.zone_id: (zone.kind, zone.polygon) for zone in zones} == {
+        zone_id: (kind, rect(*corners)) for zone_id, (kind, corners) in expected.items()
+    }
+
+
+def test_the_default_layout_is_written_as_save_zones_writes_it(tmp_path):
+    """So saving the default layout from the web app unchanged gives a byte-identical data/zones.json."""
+    save_zones(tmp_path / "zones.json", load_zones(DEFAULT_ZONES_PATH))
+    assert (tmp_path / "zones.json").read_text() == DEFAULT_ZONES_PATH.read_text()
+
+
+def test_without_zones_a_run_uses_the_default_layout_and_saves_to_data(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert zones_files(None) == (DEFAULT_ZONES_PATH, SAVED_ZONES_PATH)
+
+
+def test_zones_saved_from_the_web_app_come_before_the_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_zones(SAVED_ZONES_PATH, load_zones(SAMPLE))
+    assert zones_files(None) == (SAVED_ZONES_PATH, SAVED_ZONES_PATH)
+
+
+def test_an_explicit_zones_file_wins_and_is_where_changes_are_saved(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_zones(SAVED_ZONES_PATH, load_zones(SAMPLE))
+    assert zones_files(tmp_path / "mine.json") == (tmp_path / "mine.json", tmp_path / "mine.json")
+
+
+@pytest.mark.safety
+def test_a_failed_save_leaves_the_old_file_whole(tmp_path, monkeypatch):
+    """A save that fails partway must not leave half a file that fails to load at the next start."""
+    path = tmp_path / "zones.json"
+    save_zones(path, load_zones(SAMPLE))
+    before = path.read_text()
+
+    def failing_replace(source, destination):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(zones_module.os, "replace", failing_replace)
+    with pytest.raises(OSError):
+        save_zones(path, load_zones(DEFAULT_ZONES_PATH))
+    assert path.read_text() == before
+    assert sorted(item.name for item in tmp_path.iterdir()) == ["zones.json"]
+
+
+# replacing the zones while the camera runs (LiveZones, PUT /zones)
+
+
+class LiveKitchen:
+    """A LiveZones on the sample layout, a saved zones file, a FakeStateClient and a recorded lookup swap."""
+
+    def __init__(self, save_path: Path):
+        self.zones = load_zones(SAMPLE)
+        self.state = FakeStateClient()
+        push_zones(self.state, self.zones)
+        save_zones(save_path, self.zones)
+        self.save_path = save_path
+        self.lookups = []
+        self.live = LiveZones(self.zones, save_path, self.state, self.lookups.append)
+
+    def assert_unchanged(self, file_text: str) -> None:
+        """Nothing changed anywhere: the zones in use, the frame loop's lookup, the file and the zone table."""
+        assert self.live.current() == self.zones
+        assert self.lookups == []
+        assert self.save_path.read_text() == file_text
+        assert sorted(self.state.list_zones(), key=lambda zone: zone.zone_id) == sorted(
+            self.zones, key=lambda zone: zone.zone_id
+        )
+
+
+def layout_body(zones: list[Zone]) -> dict:
+    """A PUT /zones body for `zones`."""
+    return {"zones": [zone_record(zone) for zone in zones]}
+
+
+def test_a_good_layout_is_saved_used_from_the_next_frame_and_pushed(tmp_path):
+    kitchen = LiveKitchen(tmp_path / "zones.json")
+    new_layout = load_zones(DEFAULT_ZONES_PATH)
+
+    assert kitchen.live.replace(layout_body(new_layout)) == new_layout
+
+    assert kitchen.live.current() == new_layout
+    assert load_zones(kitchen.save_path) == new_layout
+    assert sorted(kitchen.state.list_zones(), key=lambda zone: zone.zone_id) == sorted(
+        new_layout, key=lambda zone: zone.zone_id
+    )
+    [lookup] = kitchen.lookups
+    assert lookup((0.85, 0.2)).zone_id == "rack"  # in no zone of the sample layout
+
+
+BAD_LAYOUTS = [
+    None,
+    [],
+    {"zones": "slot-1"},
+    {"zones": [zone_entry(kind="fridge")]},
+    {"zones": [zone_entry(), zone_entry()]},
+    {"zones": [zone_entry(zone_id="bin-1")]},
+    {"zones": [zone_entry(polygon=[[0.1, 0.1], [0.5, 0.5], [0.1, 0.5], [0.5, 0.1]])]},  # a bow-tie
+    {"zones": [zone_entry(polygon=[[0.1, 0.1], [1.5, 0.1], [0.1, 0.5]])]},
+    {"zones": [{**zone_entry(), "colour": "red"}]},
+    {"zones": [zone_entry()], "version": 2},
+]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("data", BAD_LAYOUTS)
+def test_a_bad_layout_changes_nothing(tmp_path, data):
+    """Bad zones never half-apply: the lookup, the file and the zone table all keep the old layout."""
+    kitchen = LiveKitchen(tmp_path / "zones.json")
+    file_text = kitchen.save_path.read_text()
+    with pytest.raises(ZoneFileError):
+        kitchen.live.replace(data)
+    kitchen.assert_unchanged(file_text)
+
+
+@pytest.mark.safety
+def test_a_layout_that_cant_be_saved_changes_nothing(tmp_path):
+    (tmp_path / "not-a-folder").write_text("")
+    kitchen = LiveKitchen(tmp_path / "zones.json")
+    file_text = kitchen.save_path.read_text()
+    kitchen.live.save_path = tmp_path / "not-a-folder" / "zones.json"
+
+    with pytest.raises(OSError):
+        kitchen.live.replace(layout_body(load_zones(DEFAULT_ZONES_PATH)))
+    kitchen.assert_unchanged(file_text)
+
+
+@pytest.mark.safety
+def test_when_the_zone_table_cant_be_written_the_lookup_and_file_go_back(tmp_path):
+    """The gate and the verdict service would still see the old pass, so the frame loop must use it too."""
+    kitchen = LiveKitchen(tmp_path / "zones.json")
+    file_text = kitchen.save_path.read_text()
+    kitchen.state.fail_next(1)
+
+    with pytest.raises(StateUnavailable):
+        kitchen.live.replace(layout_body(load_zones(DEFAULT_ZONES_PATH)))
+
+    assert kitchen.live.current() == kitchen.zones
+    assert load_zones(kitchen.save_path) == kitchen.zones
+    assert kitchen.save_path.read_text() == file_text
+    new_lookup, restored_lookup = kitchen.lookups
+    assert new_lookup((0.85, 0.2)).zone_id == "rack"
+    assert restored_lookup((0.85, 0.2)) is None  # the sample layout again
 
 
 # the calibration tool's logic (the window itself needs a display)

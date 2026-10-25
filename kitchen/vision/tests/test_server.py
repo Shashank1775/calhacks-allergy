@@ -5,9 +5,11 @@ Step:  vision
 Reads: kitchen.vision.server, FakeClock
 Emits: nothing
 Rules: fail closed: every /plates/start refusal is a 409 with the contract's code and nothing is bound;
-       /health last_frame_t_ms stops advancing when frames stop; the frame loop never waits on a slow client
+       /health last_frame_t_ms stops advancing when frames stop; the frame loop never waits on a slow client;
+       a bad PUT /zones is a 422 bad_zones and changes nothing
 """
 
+import json
 import threading
 import time
 
@@ -23,6 +25,7 @@ from kitchen.shared.interfaces import StateUnavailable
 from kitchen.vision import server
 from kitchen.vision.common import BindRefused, FrameOutput
 from kitchen.vision.server import FakeVisionAPI, VisionStatus, create_app, parse_cors_origins
+from kitchen.vision.zones import DEFAULT_ZONES_PATH, ZoneFileError, load_zones, parse_zones
 
 ORIGIN = "http://localhost:5173"
 REFUSAL_CODES = ["no_plate_at_spot", "multiple_plates_at_spot", "plate_already_bound"]
@@ -39,9 +42,24 @@ def rgb_frame(value: int = 100) -> np.ndarray:
     return np.full((48, 64, 3), value, dtype=np.uint8)
 
 
+def no_zones() -> list:
+    """get_zones for tests that don't look at zones."""
+    return []
+
+
+def refuse_zones(data):
+    """put_zones for tests that don't change zones."""
+    raise AssertionError("PUT /zones was not expected")
+
+
+def app_for(status: VisionStatus, start_plate=lambda ticket_id: "plate-1", **kwargs):
+    """create_app with the default web origin and no zones."""
+    return create_app(status, start_plate, no_zones, refuse_zones, [ORIGIN], **kwargs)
+
+
 def client_for(status: VisionStatus, start_plate=lambda ticket_id: "plate-1", **kwargs) -> TestClient:
     """A TestClient over create_app with the default web origin."""
-    return TestClient(create_app(status, start_plate, [ORIGIN], **kwargs))
+    return TestClient(app_for(status, start_plate, **kwargs))
 
 
 def assert_error(response, status_code: int, code: str) -> None:
@@ -249,7 +267,7 @@ def test_many_open_streams_never_stall_health_or_start_plate():
     """Fail closed needs /health answered on time: more open streams than the default thread pool has threads must
     not hold up the gate's health check or the tablet's "start plate"."""
     status = VisionStatus("onnx")
-    app = create_app(status, lambda ticket_id: "plate-1", [ORIGIN], stream_idle_s=1.0)
+    app = app_for(status, stream_idle_s=1.0)
 
     async def shrink_default_pool():
         # The default pool has 40 threads; 4 keeps the test small. The streams have their own STREAM_THREADS.
@@ -283,6 +301,75 @@ def test_recent_observations_keep_only_the_history_window():
     assert [observation["t_ms"] for observation in status.recent_observations()] == [150, 201]
 
 
+# ---------- GET and PUT /zones ----------
+
+DEFAULT_LAYOUT = json.loads(DEFAULT_ZONES_PATH.read_text())
+
+
+def zones_client(put_zones, get_zones=lambda: load_zones(DEFAULT_ZONES_PATH)) -> TestClient:
+    """A TestClient over create_app with these zone callables."""
+    return TestClient(create_app(VisionStatus("onnx"), lambda ticket_id: "plate-1", get_zones, put_zones, [ORIGIN]))
+
+
+def test_get_zones_returns_the_zones_in_use_in_the_zones_file_format():
+    response = zones_client(refuse_zones).get("/zones")
+    assert response.status_code == 200
+    assert response.json() == DEFAULT_LAYOUT
+
+
+def test_put_zones_hands_over_the_parsed_body_and_returns_the_zones_now_in_use():
+    received = []
+
+    def put_zones(data):
+        received.append(data)
+        return parse_zones(data)
+
+    response = zones_client(put_zones).put("/zones", json=DEFAULT_LAYOUT)
+    assert response.status_code == 200
+    assert response.json() == DEFAULT_LAYOUT
+    assert received == [DEFAULT_LAYOUT]
+
+
+@pytest.mark.safety
+def test_put_zones_bad_layout_is_a_422_bad_zones_with_the_reason():
+    def put_zones(data):
+        raise ZoneFileError("zone 'slot-1': kind 'fridge' is not one of ...")
+
+    response = zones_client(put_zones).put("/zones", json={"zones": []}, headers={"Origin": ORIGIN})
+    assert_error(response, 422, "bad_zones")
+    assert "fridge" in response.json()["error"]["message"]
+    assert response.headers["access-control-allow-origin"] == ORIGIN
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("body", [b"{not json", b"", b"\xff\xfe"])
+def test_put_zones_body_that_isnt_json_is_a_422_and_changes_nothing(body):
+    received = []
+    client = zones_client(lambda data: received.append(data) or [])
+    response = client.put("/zones", content=body, headers={"Content-Type": "application/json"})
+    assert_error(response, 422, "bad_zones")
+    assert received == []
+
+
+@pytest.mark.safety
+def test_put_zones_that_cant_be_saved_is_a_500_with_the_error_body_and_cors():
+    def put_zones(data):
+        raise OSError("read-only file system: 'data/zones.json'")
+
+    response = zones_client(put_zones).put("/zones", json=DEFAULT_LAYOUT, headers={"Origin": ORIGIN})
+    assert_error(response, 500, "internal_error")
+    assert "read-only" in response.json()["error"]["message"]
+    assert response.headers["access-control-allow-origin"] == ORIGIN
+
+
+@pytest.mark.safety
+def test_put_zones_without_the_database_is_a_503():
+    def put_zones(data):
+        raise StateUnavailable("database down")
+
+    assert_error(zones_client(put_zones).put("/zones", json=DEFAULT_LAYOUT), 503, "state_unavailable")
+
+
 # ---------- CORS ----------
 
 
@@ -301,9 +388,23 @@ def test_cors_only_for_listed_origins():
     assert "access-control-allow-origin" not in preflight.headers
 
 
+def test_cors_preflight_allows_put_zones_from_listed_origins_only():
+    """The web zone editor saves with PUT, which browsers preflight."""
+    client = client_for(VisionStatus("onnx"))
+    request = {"Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "Content-Type"}
+
+    allowed = client.options("/zones", headers={"Origin": ORIGIN, **request})
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == ORIGIN
+    assert "PUT" in allowed.headers["access-control-allow-methods"]
+
+    other = client.options("/zones", headers={"Origin": "http://evil.example", **request})
+    assert "access-control-allow-origin" not in other.headers
+
+
 def test_cors_wildcard_is_refused():
     with pytest.raises(ValueError):
-        create_app(VisionStatus("onnx"), lambda ticket_id: "plate-1", ["*"])
+        create_app(VisionStatus("onnx"), lambda ticket_id: "plate-1", no_zones, refuse_zones, ["*"])
 
 
 def test_parse_cors_origins_splits_and_trims():
@@ -393,6 +494,24 @@ def test_fake_api_scene_changes_the_plates_at_the_spot():
     fake, client = fake_client(["plate-1"])
     client.post("/fake/scene", json={"plates_at_spot": []})
     assert_error(client.post("/plates/start", json={"ticket_id": "t7"}), 409, "no_plate_at_spot")
+
+
+def test_fake_api_serves_the_default_layout_and_keeps_a_good_put():
+    fake, client = fake_client(["plate-1"])
+    assert client.get("/zones").json() == DEFAULT_LAYOUT
+
+    plating_only = {"zones": [zone for zone in DEFAULT_LAYOUT["zones"] if zone["kind"] == "plating_spot"]}
+    assert client.put("/zones", json=plating_only).json() == plating_only
+    assert client.get("/zones").json() == plating_only
+    assert fake.get_zones() == parse_zones(plating_only)
+
+
+@pytest.mark.safety
+def test_fake_api_refuses_a_bad_put_exactly_as_the_real_one_and_keeps_its_zones():
+    fake, client = fake_client(["plate-1"])
+    bad = {"zones": [{**DEFAULT_LAYOUT["zones"][0], "kind": "fridge"}]}
+    assert_error(client.put("/zones", json=bad), 422, "bad_zones")
+    assert client.get("/zones").json() == DEFAULT_LAYOUT
 
 
 def test_fake_api_streams_its_test_pattern():
