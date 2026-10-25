@@ -17,7 +17,7 @@ import random
 from collections import Counter
 from pathlib import Path
 
-from kitchen.verdict.laya_check import MAX_EDGES, UNITS, exact_reach, on_path, plate_state, reached_question
+from kitchen.verdict.laya_check import UNITS, exact_reach, on_path, plate_state, reached_question
 
 SCENARIOS = Path(__file__).resolve().parents[3] / "contracts" / "scenarios"
 
@@ -39,6 +39,10 @@ BIN_POOL = [
 ]
 TOOLS = ["knife", "spoon", "tongs", "ladle", "spatula", "whisk"]
 GOLD_FLOOR = 0.001  # keep soft targets off exact 0 and 1
+
+# The longest history in plate-v2's training rows. The check reads up to MAX_EDGES (15, the owner's call); raising
+# this too changes the rows a seed gives, so do it only for a retrain.
+TRAINED_MAX_EDGES = 10
 
 
 # ---------- the plate's subgraph ----------
@@ -187,8 +191,8 @@ def random_row(rng, index):
     bins, tools, hands, plate = random_kitchen(rng)
     edges, as_of = random_edges(rng, bins, tools, hands, plate)
     subgraph = make_subgraph(bins + tools + hands + [plate], edges, plate["entity_id"], as_of)
-    if len(subgraph["edges"]) > MAX_EDGES:
-        return None  # longer than the check will ever read
+    if len(subgraph["edges"]) > TRAINED_MAX_EDGES:
+        return None
     return row_for(f"plate-{index}", subgraph)
 
 
