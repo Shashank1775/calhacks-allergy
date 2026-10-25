@@ -33,3 +33,24 @@ export function put_zones(zones: Zone[]) {
     body: JSON.stringify({ zones }),
   });
 }
+
+/**
+ * POST /frames: one frame from this tab's camera or video, as a JPEG. Vision stamps it with its own clock when it
+ * arrives and keeps only the newest one, so a slow detector never builds a backlog. 204, no body.
+ */
+export function post_frame(jpeg: Blob) {
+  return fetch_api<null>(vision_url(), "/frames", {
+    method: "POST",
+    headers: { "Content-Type": "image/jpeg" },
+    body: jpeg,
+  });
+}
+
+/** Why vision didn't take a frame, in words for the camera screen. */
+export const FRAME_ERRORS: Record<string, string> = {
+  not_web_source: "Vision reads its own camera. Restart the runner with --live --from-web to feed it from here.",
+  bad_frame: "Vision couldn't read the frame as a JPEG.",
+  network_error: "Can't reach vision. Is the runner still running?",
+  not_configured: "No vision set: set WEB_VISION_URL.",
+  no_picture: "The browser couldn't take a picture from the video.",
+};

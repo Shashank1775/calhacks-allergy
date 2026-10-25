@@ -2,11 +2,12 @@
  * The camera picture with the zones drawn over it, and the mouse or finger work on them: drag to draw a rectangle,
  * drag a zone to move it, drag a corner handle to resize it.
  *
- * Reads: GET <WEB_VISION_URL>/stream.mjpg (the picture only); the zones and selection from the layout screen.
+ * Reads: GET <WEB_VISION_URL>/stream.mjpg (the picture only), unless the screen hands it a picture of its own (the
+ * home page's camera or video, before any frame reaches vision); the zones and selection from the layout screen.
  * Emits: the changed zone list, a new zone or a selection, through the screen's callbacks. It saves nothing itself.
  * Rules: with no camera, the zones still draw on a plain 16:9 frame, since points are shares of the frame, not pixels.
  */
-import { useRef, useState, type PointerEvent } from "react";
+import { useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { vision_url } from "../api/http";
 import type { Zone } from "../types/TEMPORARY";
 import {
@@ -28,7 +29,14 @@ type Drag =
   | { mode: "move"; zone_id: string; start: Point; polygon: Point[] }
   | { mode: "resize"; zone_id: string; anchor: Point };
 
+/**
+ * A picture to draw the zones on instead of vision's stream: the whole frame vision will get, at its width / height,
+ * so a zone point lines up with the same spot in the frames sent later.
+ */
+export type Picture = { element: ReactNode; aspect: number };
+
 type Props = {
+  picture?: Picture;
   zones: Zone[];
   /** The text on each zone's tag, by zone_id. */
   tags: Record<string, string>;
@@ -40,13 +48,14 @@ type Props = {
   on_add: (zone: Zone) => void;
 };
 
-export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_select, on_add }: Props) {
+export function ZoneCanvas({ picture, zones, tags, selected_id, adding, on_zones, on_select, on_add }: Props) {
   const base = vision_url();
   const frame_ref = useRef<HTMLDivElement>(null);
   const [drag, set_drag] = useState<Drag | null>(null);
   const [camera_offline, set_camera_offline] = useState(false);
   const [camera_aspect, set_camera_aspect] = useState(PLAIN_FRAME);
-  const show_camera = Boolean(base) && !camera_offline;
+  const show_camera = !picture && Boolean(base) && !camera_offline;
+  const aspect = picture ? picture.aspect : show_camera ? camera_aspect : PLAIN_FRAME;
   const selected = zones.find((zone) => zone.zone_id === selected_id) ?? null;
 
   /** Where the pointer is, as a share of the frame (0..1 across and down), like every zone point. */
@@ -123,7 +132,7 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
       <div
         ref={frame_ref}
         className={adding ? "zone_frame zone_frame_adding" : "zone_frame"}
-        style={{ aspectRatio: show_camera ? camera_aspect : PLAIN_FRAME }}
+        style={{ aspectRatio: aspect }}
         aria-label="Counter picture with zones"
         onPointerDown={on_frame_down}
         onPointerMove={on_frame_move}
@@ -143,6 +152,7 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
             onError={() => set_camera_offline(true)}
           />
         )}
+        {picture?.element}
 
         <svg className="zone_svg" viewBox="0 0 1 1" preserveAspectRatio="none">
           {zones.map((zone) => (
@@ -187,7 +197,7 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
             />
           ))}
       </div>
-      {!show_camera && (
+      {!picture && !show_camera && (
         <p className="zone_no_camera">
           {base ? "Camera offline." : "No camera set (WEB_VISION_URL)."} Zones are drawn on a plain 16:9 frame.
         </p>

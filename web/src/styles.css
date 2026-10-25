@@ -680,7 +680,8 @@ a {
   cursor: crosshair;
 }
 
-.zone_frame img {
+.zone_frame img,
+.zone_frame video {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -811,4 +812,46 @@ a {
 
 .zone_message {
   margin: 0 0 0 8px;
+}
+
+/* A link that looks like a button: the running camera tab opens the stations in new tabs. */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* The "add a camera" popup, over the home page. */
+.dialog_backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(22 22 22 / 60%);
+}
+
+.dialog {
+  width: min(640px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  padding: 20px 22px;
+}
+
+.dialog_field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  font-weight: 700;
+}
+
+.dialog_field select {
+  border: 2px solid var(--ink);
+  background: #fff;
+  padding: 0 8px;
 }

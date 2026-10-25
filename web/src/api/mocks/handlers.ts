@@ -23,6 +23,8 @@ let frame_t_ms = 0;
 const summary_polls = new Map<string, number>();
 /** The kitchen layout vision uses now. */
 let zone_layout: Zone[] = example_zones();
+/** How many frames POST /frames has taken. */
+let frames_taken = 0;
 
 function fresh_draft(): ParseResult {
   return structuredClone(parse_example.response) as ParseResult;
@@ -42,6 +44,12 @@ export function reset_orders_mock(): void {
 /** Puts the example layout back between tests. */
 export function reset_vision_mock(): void {
   zone_layout = example_zones();
+  frames_taken = 0;
+}
+
+/** How many frames the mock vision has taken since the last reset. */
+export function vision_frames_taken(): number {
+  return frames_taken;
 }
 
 /** Forgets summary jobs between tests. */
@@ -119,6 +127,17 @@ export function vision_handlers(base: string) {
       if (problem) return HttpResponse.json({ error: { code: "bad_zones", message: problem } }, { status: 422 });
       zone_layout = structuredClone(body.zones);
       return HttpResponse.json({ zones: zone_layout });
+    }),
+
+    http.post(`${base}/frames`, async ({ request }) => {
+      // Like vision: the body must be a JPEG, which starts with the bytes FF D8.
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const is_jpeg = request.headers.get("Content-Type") === "image/jpeg" && bytes[0] === 0xff && bytes[1] === 0xd8;
+      if (!is_jpeg) {
+        return HttpResponse.json({ error: { code: "bad_frame", message: "The body isn't a JPEG." } }, { status: 422 });
+      }
+      frames_taken += 1;
+      return new HttpResponse(null, { status: 204 });
     }),
   ];
 }

@@ -8,7 +8,7 @@ Last updated: 2026-10-24.
 
 | Path | Screen | State |
 |---|---|---|
-| `/` | Home: what this is, the two sources (video file, live camera), links to the stations | Built. Video is picked and previewed locally only |
+| `/` | Home: what this is, the two sources (video file, live camera), links to the stations. Picking a source turns the tab into the kitchen's camera: box the kitchen, then START sends its frames to vision | Built against MSW mocks of `POST /frames`; the endpoint itself is vision's (`--live --from-web`) |
 | `/tablet` | New ticket (note → Laya parse → one-tap questions → send), and changing a sent ticket | Built; checked against the local runner's orders API |
 | `/expo` | The gate panel, tickets on the rail, plates on the pass, why a plate is held, start plate, the live camera | Built; the gate panel checked against the local runner |
 | `/zones` | Kitchen layout: the zones over the camera; add a bin, washing area, serving area, plating spot, clean stack or other zone by dragging a rectangle; move, resize and delete; save to vision | Built against the Vision API's `GET`/`PUT /zones` |
@@ -33,7 +33,7 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 - **Tablet: changing a ticket** (`tablet/amend_ticket.tsx`): pick a sent ticket, type the change, answer Laya's questions, send. It uses the same send gate, plus a message for `409 ticket_changed`.
 - **Live camera** (`expo/camera_panel.tsx`): vision's `GET /stream.mjpg`, with each entity's latest box from `entity_state` colored by risk (unknown history and strong allergens red, weak amber, clean green). Only entities tracked now are listed and drawn: the newest `entity_state` time is "now", and an entity last seen more than 1 s before it (vision's `track_lost_ms`) has lost its track, so its last box is dropped. A broken stream says "camera offline" and changes no verdict.
 - **Kitchen layout** (`zones/`): `GET /zones` drawn over the camera (or a plain 16:9 frame with no camera), one color per kind, bin slots labeled with their bin from the state. A new bin takes the lowest free `slot-<n>`; other kinds get `wash`, `pass`, `plating`, `clean-stack`, `other`, then `-2`, `-3`. Drawn zones are rectangles with corner handles; other shapes from the zones file draw as they are and can be moved or deleted. Save is `PUT /zones` and stays off until a layout has loaded; a `422 bad_zones` shows vision's message and keeps the edits; Revert reloads.
-- **Home.** Video picker with local preview and a REPLAY marker; live camera card stamped 86'd.
+- **Home.** Video picker with local preview and a REPLAY marker, and USE THIS VIDEO. ADD CAMERA opens a popup (`home/camera_dialog.tsx`) that lists the computer's cameras with a live preview. Either source goes to the layout step (`home/kitchen_run.tsx`): the `/zones` editor over the source's own picture, with START off until vision has exactly the layout on screen. Then this tab sends the picture to vision's `POST /frames` (`home/frame_sender.ts`): about 15 JPEG frames a second, at most 1280 px wide, one request in flight; never a paused, ended or stopped picture. STOP, a closed tab, a video that ends or a camera that stops all stop the frames, and the gate shows FAULT.
 - **Tests.** Vitest, with the ones guarding a safety rule named `safety: …`.
 - **CI.** The `web` job in `.github/workflows/ci.yml` runs on every PR and every push to `main`: `npm ci`, the tests, the type check and build (`npm run build`), lint, and Prettier on `src`.
 
@@ -43,8 +43,6 @@ Each of these is drawn on screen with a "To be implemented" marker.
 
 | Item | Where | Waiting on |
 |---|---|---|
-| Send an uploaded video to vision | `home/video_source.tsx` | The Vision HTTP API has no upload endpoint. Needs a contracts change (vision, Director). Until then, run vision on the file locally |
-| Live camera on the home page | `home/camera_source.tsx` | Nothing: `/expo` already shows the stream; this card is still the 86'd placeholder |
 | Voice ticket entry (`POST /transcribe`) | `tablet/ticket_entry.tsx` | HTTPS on the iPad, for the microphone |
 
 ## Not started

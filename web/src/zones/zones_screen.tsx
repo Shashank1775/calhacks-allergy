@@ -7,6 +7,9 @@
  * Emits: PUT <WEB_VISION_URL>/zones with the whole layout; vision uses it from the next frame.
  * Rules: vision checks every layout. A refused one (422 bad_zones) shows vision's message and keeps every edit. Save
  * stays off until a layout has loaded, so a failed load can never overwrite the kitchen's zones with an empty list.
+ *
+ * The home page reuses this screen as its "box the kitchen" step, over its own camera or video picture, and starts the
+ * kitchen only once `on_ready` says vision has exactly the layout on screen.
  */
 import { useEffect, useState } from "react";
 import { vision_url } from "../api/http";
@@ -14,11 +17,18 @@ import { get_zones, put_zones } from "../api/vision";
 import { useTableRows } from "../state/hooks";
 import type { Zone } from "../types/TEMPORARY";
 import { bin_label, is_rectangle, kind_name, next_zone_id, ZONE_KINDS, type ZoneKind } from "./layout";
-import { ZoneCanvas } from "./zone_canvas";
+import { ZoneCanvas, type Picture } from "./zone_canvas";
 
 type Message = { tone: "error" | "ok"; text: string };
 
-export function ZonesScreen() {
+type Props = {
+  /** Draw the zones on this picture instead of vision's stream. */
+  picture?: Picture;
+  /** Told whether vision has exactly the layout on screen: loaded or saved, with no edits since. */
+  on_ready?: (ready: boolean) => void;
+};
+
+export function ZonesScreen({ picture, on_ready }: Props = {}) {
   const base = vision_url();
   const entities = useTableRows("entity");
   const bin_profiles = useTableRows("bin_profile");
@@ -31,7 +41,10 @@ export function ZonesScreen() {
   const [message, set_message] = useState<Message | null>(null);
 
   const changed = saved_json !== null && JSON.stringify(zones) !== saved_json;
+  const ready = saved_json !== null && !changed;
   const selected = zones.find((zone) => zone.zone_id === selected_id) ?? null;
+
+  useEffect(() => on_ready?.(ready), [ready]);
 
   /** Loads the layout vision uses now, replacing any edits. */
   async function load(done_text?: string) {
@@ -150,6 +163,7 @@ export function ZonesScreen() {
 
       <div className="zone_layout">
         <ZoneCanvas
+          picture={picture}
           zones={zones}
           tags={tags}
           selected_id={selected_id}
