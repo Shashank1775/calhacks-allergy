@@ -246,12 +246,15 @@ Owner: **orders** (`kitchen/orders/api.py`). Consumer: **outputs** (tablet scree
 
 ## Vision HTTP API (on the Pi)
 
-Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start plate" button, camera overlays, gate health watch).
+Owner: **vision** (`kitchen/vision/server.py`). Consumer: **outputs** ("start plate" button, camera overlays, gate health watch, zone editor, camera and video frames from the browser).
 
 | Method and path | Body | Returns | Notes |
 |---|---|---|---|
 | `POST /plates/start` | `{"ticket_id": str}` | `{"plate_id": str}` | Binds the plate at the plating spot. Otherwise `409 no_plate_at_spot`, `409 multiple_plates_at_spot` or `409 plate_already_bound`; never guesses |
+| `POST /frames` | One frame as `image/jpeg` | `204`, no body | For a runner fed by the web app's camera or video (`--from-web`). Vision stamps each frame with its own clock when it arrives; the browser's time is never used. Only the newest frame waits, so a slow detector never builds a backlog. Otherwise `409 not_web_source` when the runner reads its own camera or video, or `422 bad_frame` when the body isn't a decodable JPEG |
 | `GET /stream.mjpg` | — | MJPEG | Raw camera stream |
 | `GET /health` | — | `{"fps": float, "detector": "onnx"\|"hailo", "last_frame_t_ms": int}` | `detector` is `onnx` until the Hailo is connected. The gate goes to `fault` if this goes stale |
+| `GET /zones` | — | `{"zones": [{"zone_id": str, "kind": str, "polygon": [[x, y], ...]}, ...]}` | The zones in use now, in the zones file format (`kitchen/vision/zones.py`): `kind` as in the `zone` table, points normalized 0..1 like boxes, bin slots named `slot-<n>` |
+| `PUT /zones` | `{"zones": [...]}`, as `GET /zones` returns | The zones now in use, as `GET /zones` | Replaces every zone. A body that isn't a valid zones file, or that gives a zone ID used earlier in this run a different `kind`, is `422 bad_zones` (the message says which zone and why), and nothing changes; to change an area's kind, draw a new zone with a new ID. Otherwise it saves the zones file (`500 internal_error` if it can't, and nothing changes), uses the new zones from the next frame, and replaces the `zone` table (`503 state_unavailable` if the database can't be written, and the old zones stay). Entities keep their IDs and origins: a zone change never renames a bin or makes anything clean |
 
 Overlays are drawn client-side from each entity's latest `entity_state` (box and allergens).

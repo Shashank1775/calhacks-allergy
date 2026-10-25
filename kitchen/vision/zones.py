@@ -1,11 +1,14 @@
-"""Zones: the zones file, a click-to-calibrate tool, zone assignment for a point, and pushing zones to the database.
+"""Zones: the zones file, a click-to-calibrate tool, zone assignment for a point, pushing zones to the database, and
+replacing the zones while the camera runs (Vision API PUT /zones).
 
 Owner: vision (agents)
 Step:  vision
-Reads: zones.json; a still camera image (calibration)
-Emits: list[Zone]; a ZoneLookup (point -> Zone or None) for tracking.py; StateClient.set_zones
+Reads: zones.json (an explicit path, data/zones.json saved from the web app, or the committed default_zones.json); a
+       still camera image (calibration)
+Emits: list[Zone]; a ZoneLookup (point -> Zone or None) for tracking.py; StateClient.set_zones; the saved zones file
 Rules: fail closed: a point in no zone gets None, never the nearest zone; overlapping zones resolve the same way every
-       time (smallest area, then zone_id); a bad zones file fails loudly at load, never half-loads
+       time (smallest area, then zone_id); a bad zones file fails loudly at load, never half-loads; a zone change
+       applies whole or not at all, from the next frame, and never changes an entity's ID or origin (LiveZones)
 
 The zones file:
     {"zones": [{"zone_id": "slot-1", "kind": "bin_slot", "polygon": [[x, y], [x, y], [x, y]]}, ...]}
@@ -19,8 +22,11 @@ Usage:
 
 import argparse
 import json
+import os
 import re
 import sys
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from kitchen.shared.interfaces import StateClient
@@ -36,6 +42,12 @@ ZONE_FIELDS = {"zone_id", "kind", "polygon"}
 
 # Points closer than this to an edge count as on it (normalized units; far below one pixel of any camera).
 EDGE_TOLERANCE = 1e-9
+
+# The committed layout that every test, the dummy kitchen and a fresh checkout share (README.md has a sketch of it).
+DEFAULT_ZONES_PATH = Path(__file__).with_name("default_zones.json")
+
+# Where zones designated in the web app are saved (PUT /zones). data/ is gitignored, so they stay on this machine.
+SAVED_ZONES_PATH = Path("data/zones.json")
 
 
 class ZoneFileError(ValueError):
@@ -119,21 +131,136 @@ def load_zones(path: str | Path) -> list[Zone]:
         raise ZoneFileError(f"{path}: {error}") from error
 
 
+def zones_files(zones_arg: Path | None) -> tuple[Path, Path]:
+    """Which zones file a run loads, and which file PUT /zones saves to.
+
+    An explicit --zones path is both. Otherwise the zones saved from the web app (data/zones.json) if there are any,
+    else the committed default layout; either way saves go to data/zones.json, so the default is never overwritten.
+    A saved file that is bad fails at load like any zones file, rather than quietly falling back to the default, which
+    may not match the counter.
+    """
+    if zones_arg is not None:
+        return zones_arg, zones_arg
+    if SAVED_ZONES_PATH.exists():
+        return SAVED_ZONES_PATH, SAVED_ZONES_PATH
+    return DEFAULT_ZONES_PATH, SAVED_ZONES_PATH
+
+
+def zone_record(zone: Zone) -> dict:
+    """One zone as a zones file and the Vision API write it: {"zone_id", "kind", "polygon": [[x, y], ...]}."""
+    return {"zone_id": zone.zone_id, "kind": zone.kind, "polygon": [[x, y] for x, y in zone.polygon]}
+
+
 def save_zones(path: str | Path, zones: list[Zone]) -> None:
     """Check `zones` and write them as a zones file, so a file this writes always loads again. One zone per line, so
-    a person can read and diff the file."""
+    a person can read and diff the file.
+
+    The file is written next to its final name and then renamed over it, so a failed write (a full disk) leaves the
+    old file whole, never half a file that fails to load at the next start. Raises OSError if it can't be written.
+    """
     check_zones(zones)
-    lines = [
-        json.dumps({"zone_id": zone.zone_id, "kind": zone.kind, "polygon": [[x, y] for x, y in zone.polygon]})
-        for zone in zones
-    ]
-    Path(path).write_text('{"zones": [\n  ' + ",\n  ".join(lines) + "\n]}\n")
+    lines = [json.dumps(zone_record(zone)) for zone in zones]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text('{"zones": [\n  ' + ",\n  ".join(lines) + "\n]}\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def push_zones(state: StateClient, zones: list[Zone]) -> None:
     """Check `zones` and replace the database's calibration with them. StateUnavailable passes through to the caller."""
     check_zones(zones)
     state.set_zones(zones)
+
+
+class LiveZones:
+    """The zones a running kitchen uses, and replacing them while the camera runs (Vision API GET and PUT /zones).
+
+    replace() applies a new layout to the frame loop, the zones file and the zone table (the gate's and the verdict
+    service's pass zones) together or not at all:
+    - Bad zones never half-apply. They are refused before anything changes.
+    - The zones file is written whole or not at all (save_zones), and a failed write changes nothing else.
+    - The frame loop takes the new lookup from its next frame on (use_lookup is FrameLoop.use_zones), never partway
+      through a frame.
+    - The zone table is replaced last. If that fails, the lookup and the file go back to the old zones.
+
+    It does not reach the partner's interactions step. That step builds its zone_id -> kind map once, at its first
+    frame (kitchen/interactions/events.py, live_consumer), and never reads it again. So moving or resizing an existing
+    zone works at once, but a new zone ID only counts after the runner restarts and loads the saved file. Until then
+    its kind there is "other": a newly drawn second washing area (wash-2) produces no wash edges, which leans toward
+    HOLD. A zone ID can never change kind within a run (check_kinds_kept), because the interactions step would keep
+    the old kind: a former wash would still wash there, which leans toward PASS. Set zones before service.
+
+    Entities keep their IDs and origins. Origin is decided only at an entity's first sighting (identity.py), so a zone
+    change can't make an object that is already tracked clean, and a bowl tracked as bin-<n> stays bin-<n> wherever
+    the slots are drawn now. A bowl lost and re-acquired is named by the slot it reappears in, as always.
+    """
+
+    def __init__(
+        self,
+        zones: list[Zone],
+        save_path: Path,
+        state: StateClient,
+        use_lookup: Callable[[ZoneLookup], None],
+    ):
+        check_zones(zones)
+        self.save_path = Path(save_path)
+        self._state = state
+        self._use_lookup = use_lookup
+        self._zones = list(zones)
+        # The kind of every zone_id used in this run, including ones a later PUT removed (check_kinds_kept).
+        self._kinds = {zone.zone_id: zone.kind for zone in zones}
+        self._lock = threading.Lock()  # one replace at a time
+
+    def current(self) -> list[Zone]:
+        """The zones in use now."""
+        return list(self._zones)
+
+    def replace(self, data: object) -> list[Zone]:
+        """Replace every zone with the zones file `data` (parsed JSON) and return the zones now in use.
+
+        Raises ZoneFileError if `data` is not a valid zones file or gives a zone_id used in this run another kind,
+        OSError if the file can't be written, and StateUnavailable if the zone table can't be: each before anything
+        has changed, or after putting it back.
+        """
+        zones = parse_zones(data)
+        with self._lock:
+            check_kinds_kept(zones, self._kinds)
+            previous = self._zones
+            save_zones(self.save_path, zones)
+            self._use_lookup(zone_lookup(zones))
+            try:
+                push_zones(self._state, zones)
+            except Exception:
+                # The gate and the verdict service still see the old pass zones, so the frame loop goes back to the
+                # old layout too, and so does the file the next start loads.
+                self._use_lookup(zone_lookup(previous))
+                save_zones(self.save_path, previous)
+                raise
+            self._zones = zones
+            self._kinds.update({zone.zone_id: zone.kind for zone in zones})
+        return list(zones)
+
+
+def check_kinds_kept(zones: list[Zone], kinds: dict[str, str]) -> None:
+    """Raise ZoneFileError if a zone gives a zone_id from `kinds` (every zone_id used in this run) another kind.
+
+    The partner's interactions step learns zone kinds once, at its first frame. A zone_id redrawn with another kind,
+    in one PUT or by deleting it in one and adding it back in a later one, would keep its old kind there: a former
+    wash would still wash the tools and hands put down in it, which leans toward PASS. A new zone_id is safe, since
+    the interactions step counts it as "other" until a restart, which leans toward HOLD.
+    """
+    for zone in zones:
+        known_kind = kinds.get(zone.zone_id)
+        if known_kind is not None and known_kind != zone.kind:
+            raise ZoneFileError(
+                f"zone {zone.zone_id!r} is a {known_kind} zone in this run, and its kind can't change; delete it and "
+                f"draw a new one with a new zone_id to give it kind {zone.kind!r} (the interactions step learns zone "
+                "kinds only at startup)"
+            )
 
 
 def polygon_area(polygon: list[tuple[float, float]]) -> float:
