@@ -4,8 +4,8 @@ VisionSettings, the one home for vision's thresholds and safety constants.
 Owner: vision (agents)
 Step:  vision
 Reads: VISION_* environment variables (through kitchen.shared.config.load_settings)
-Emits: Box, Detection, Person, SourceFrame, FrameOutput, ZoneLookup, BindRefused, VisionSettings, COCO_OBJECTS,
-       KEYPOINTS
+Emits: Box, Detection, Person, SourceFrame, FrameOutput, ZoneLookup, BindRefused, BadFrame, VisionSettings,
+       COCO_OBJECTS, KEYPOINTS
 Rules: every box here is normalized [x1, y1, x2, y2] to the original camera frame (contracts: common.schema.json box);
        the change mask is computed on the frame letterboxed to clip_size, exactly as kitchen/shared/clips.py expects
 
@@ -47,6 +47,10 @@ class BindRefused(Exception):  # noqa: N818  (the name says what happened, like 
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+class BadFrame(ValueError):  # noqa: N818  (the name says what happened, like the contract's 422 code)
+    """A frame pushed to POST /frames that isn't a JPEG OpenCV can decode (contracts/apis.md: 422 bad_frame)."""
 
 
 @dataclass(frozen=True)

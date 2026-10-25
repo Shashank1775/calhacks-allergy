@@ -2,12 +2,14 @@
 
 Owner: platform (agents)
 Step:  shared
-Reads: the system monotonic clock (SystemClock only)
-Emits: SystemClock (live), FakeClock (tests and replay; advanced by hand)
+Reads: the system monotonic clock (SystemClock and HeldClock)
+Emits: SystemClock (live), HeldClock (live, held at 0 until the first frame), FakeClock (tests and replay; advanced
+       by hand)
 Rules: logic never calls time.time() or datetime.now(); it takes a Clock (AGENTS.md, Engineering conventions);
-       time runs forward, so neither clock ever goes backwards
+       time runs forward, so no clock ever goes backwards
 """
 
+import threading
 import time
 
 
@@ -23,6 +25,32 @@ class SystemClock:
     def now_ms(self) -> int:
         """Return t_ms: whole milliseconds since this clock was created."""
         return (time.monotonic_ns() - self._start_ns) // 1_000_000
+
+
+class HeldClock:
+    """A live clock that reads 0 until start(), then counts milliseconds since start() like SystemClock.
+
+    The local runner fed from the web app (--from-web) uses it: the user boxes the kitchen zones before pressing Start,
+    and shift start (and the clean window after it) must begin at the first frame, not when the process started. A
+    second start() is a no-op, so the clock never jumps back to 0 (time runs forward).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._start_ns: int | None = None
+
+    def start(self) -> None:
+        """Start counting from now. Safe to call from several threads; only the first call counts."""
+        with self._lock:
+            if self._start_ns is None:
+                self._start_ns = time.monotonic_ns()
+
+    def now_ms(self) -> int:
+        """Return t_ms: 0 before start(), then whole milliseconds since start()."""
+        start_ns = self._start_ns
+        if start_ns is None:
+            return 0
+        return (time.monotonic_ns() - start_ns) // 1_000_000
 
 
 class FakeClock:

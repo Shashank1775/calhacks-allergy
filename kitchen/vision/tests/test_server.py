@@ -2,11 +2,12 @@
 
 Owner: vision (agents)
 Step:  vision
-Reads: kitchen.vision.server, FakeClock
+Reads: kitchen.vision.server, kitchen.vision.camera.PushedFrames, FakeClock
 Emits: nothing
 Rules: fail closed: every /plates/start refusal is a 409 with the contract's code and nothing is bound;
        /health last_frame_t_ms stops advancing when frames stop; the frame loop never waits on a slow client;
-       a bad PUT /zones is a 422 bad_zones and changes nothing
+       a bad PUT /zones is a 422 bad_zones and changes nothing; a bad POST /frames is a 422 bad_frame and pushes
+       nothing, and a runner on its own camera refuses pushed frames (409 not_web_source)
 """
 
 import json
@@ -14,6 +15,7 @@ import threading
 import time
 
 import anyio
+import cv2
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +25,7 @@ from hypothesis import strategies as st
 from kitchen.shared.clock import FakeClock
 from kitchen.shared.interfaces import StateUnavailable
 from kitchen.vision import server
+from kitchen.vision.camera import PushedFrames
 from kitchen.vision.common import BindRefused, FrameOutput
 from kitchen.vision.server import FakeVisionAPI, VisionStatus, create_app, parse_cors_origins
 from kitchen.vision.zones import DEFAULT_ZONES_PATH, ZoneFileError, load_zones, parse_zones
@@ -370,6 +373,62 @@ def test_put_zones_without_the_database_is_a_503():
     assert_error(zones_client(put_zones).put("/zones", json=DEFAULT_LAYOUT), 503, "state_unavailable")
 
 
+# ---------- POST /frames ----------
+
+JPEG_HEADERS = {"Content-Type": "image/jpeg"}
+
+
+def jpeg_frame(value: int = 100) -> bytes:
+    """A small solid frame as JPEG bytes, as the web app sends it."""
+    ok, jpeg = cv2.imencode(".jpg", rgb_frame(value))
+    assert ok
+    return jpeg.tobytes()
+
+
+def test_post_frames_takes_the_jpeg_and_answers_204_with_no_body():
+    frames = PushedFrames(FakeClock(start_ms=40))
+    client = client_for(VisionStatus("onnx"), push_frame=frames.push)
+
+    response = client.post("/frames", content=jpeg_frame(), headers=JPEG_HEADERS)
+
+    assert response.status_code == 204
+    assert response.content == b""
+    frame = next(iter(frames))
+    assert frame.t_ms == 40  # vision's clock when the frame arrived
+    assert frame.rgb.shape == (48, 64, 3)
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("body", [b"", b"not a jpeg", b"\xff\xd8 broken"], ids=["empty", "text", "broken-jpeg"])
+def test_post_frames_bad_jpeg_is_a_422_bad_frame_and_pushes_nothing(body):
+    frames = PushedFrames(FakeClock())
+    client = client_for(VisionStatus("onnx"), push_frame=frames.push)
+
+    assert_error(client.post("/frames", content=body, headers=JPEG_HEADERS), 422, "bad_frame")
+    assert frames.last_t_ms == -1
+
+
+@pytest.mark.safety
+def test_post_frames_to_a_runner_on_its_own_camera_is_a_409_not_web_source():
+    """Frames pushed into a runner that reads a camera or video would mix two cameras' pictures, so they're refused."""
+    assert_error(
+        client_for(VisionStatus("onnx")).post("/frames", content=jpeg_frame(), headers=JPEG_HEADERS),
+        409,
+        "not_web_source",
+    )
+
+
+def test_post_frames_unexpected_error_is_a_500_with_the_error_body_and_cors():
+    def push_frame(jpeg_bytes):
+        raise RuntimeError("bug")
+
+    client = client_for(VisionStatus("onnx"), push_frame=push_frame)
+    response = client.post("/frames", content=jpeg_frame(), headers={"Origin": ORIGIN, **JPEG_HEADERS})
+
+    assert_error(response, 500, "internal_error")
+    assert response.headers["access-control-allow-origin"] == ORIGIN
+
+
 # ---------- CORS ----------
 
 
@@ -400,6 +459,25 @@ def test_cors_preflight_allows_put_zones_from_listed_origins_only():
     assert "content-type" in allowed.headers["access-control-allow-headers"].lower()
 
     other = client.options("/zones", headers={"Origin": "http://evil.example", **request})
+    assert "access-control-allow-origin" not in other.headers
+
+
+def test_cors_preflight_allows_post_frames_with_a_jpeg_body_from_listed_origins_only():
+    """image/jpeg isn't a type browsers send without asking, so the web app's frames are preflighted."""
+    client = client_for(VisionStatus("onnx"), push_frame=lambda jpeg_bytes: None)
+    request = {"Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "Content-Type"}
+
+    allowed = client.options("/frames", headers={"Origin": ORIGIN, **request})
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == ORIGIN
+    assert "POST" in allowed.headers["access-control-allow-methods"]
+    assert "content-type" in allowed.headers["access-control-allow-headers"].lower()
+
+    posted = client.post("/frames", content=jpeg_frame(), headers={"Origin": ORIGIN, **JPEG_HEADERS})
+    assert posted.status_code == 204
+    assert posted.headers["access-control-allow-origin"] == ORIGIN
+
+    other = client.options("/frames", headers={"Origin": "http://evil.example", **request})
     assert "access-control-allow-origin" not in other.headers
 
 

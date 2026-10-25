@@ -5,8 +5,9 @@ Owner: platform (agents)
 Step:  end-to-end harness (the same shift as tests/e2e, served over HTTP on a live clock)
 Reads: one golden scenario (contracts/scenarios/<name>.json); Kitchen from tests/e2e/conftest.py (the wiring);
        Orders HTTP API requests from the tablet; ORDERS_CORS_ORIGINS; LAYA_MODEL_DIR and LAYA_PLATE_MODEL_DIR (the
-       fine-tuned Laya checkpoints, optional); live: camera or video frames, a zones file (--zones, else
-       data/zones.json if saved from the web app, else kitchen/vision/default_zones.json), VISION_ settings
+       fine-tuned Laya checkpoints, optional); live: camera or video frames, or the JPEG frames the web app POSTs
+       (--from-web), a zones file (--zones, else data/zones.json if saved from the web app, else
+       kitchen/vision/default_zones.json), VISION_ settings
 Emits: the Orders HTTP API, plus GET /state: a read-only snapshot of every table in contracts/state-tables.md, with
        mode "replay" or "live"; gate states and spoken holds on stdout (FakeGate, FakeSpeaker); live: the Vision API,
        whose PUT /zones saves the zones file and replaces the zones in the frame loop and the zone table
@@ -34,11 +35,18 @@ partner's EntityStore and the interactions step, the partner's ProvenanceGraph r
 service judges each plate that reaches the pass, and the gate watches vision's health. The partner's LiveRisk writes
 each tool, hand and plate's propagated allergens into entity_state, so the camera overlays on /expo color a knife that
 just scooped satay (display only: verdicts ask the graph directly). It serves the Vision API
-(stream, health, start plate, zones) on VISION_PORT next to the Orders API and GET /state:
+(stream, health, start plate, zones, and frames with --from-web) on VISION_PORT next to the Orders API and GET /state:
 
     uv run python tools/run_local.py --live --webcam 0                       # web/: WEB_VISION_URL=:8002 too
     uv run python tools/run_local.py --live --video data/recordings/prep.mp4 --zones zones.json
+    uv run python tools/run_local.py --live --from-web                       # frames from the web app's camera
     VISION_DETECTOR=hailo .venv/bin/python tools/run_local.py --live --picamera   # on the Pi
+
+With --from-web the runner opens no camera: the web app sends the frames from the browser's camera or a video file
+(POST /frames on the Vision API), and the frame loop takes the newest one. The shift's clock is held at 0 until the
+first frame arrives (HeldClock), because the user boxes the zones over the picture before pressing Start: shift start
+and the clean window after it (VISION_SHIFT_START_MS) begin at the first frame, not when the runner started. When the
+frames stop (STOP, a closed tab, a video that ends), /health goes stale and the gate shows fault.
 
 Without --zones, live mode uses the zones saved from the web app (data/zones.json) if there are any, else the
 committed default layout (kitchen/vision/default_zones.json), and logs the file and its sha256.
@@ -64,7 +72,7 @@ from kitchen.orders.api import DEFAULT_CORS_ORIGINS, DEFAULT_PORT
 from kitchen.orders.api import parse_cors_origins as parse_orders_cors_origins
 from kitchen.orders.laya_parser import FakeLayaParser, LocalLayaParser
 from kitchen.orders.tickets import PASS_THRESHOLDS
-from kitchen.shared.clock import SystemClock
+from kitchen.shared.clock import HeldClock, SystemClock
 from kitchen.shared.fakes import (
     GOLDEN_SCENARIO_PATHS,
     FakeProvenanceGraph,
@@ -407,6 +415,9 @@ class LiveRunner:
     Feed frames with run_frames() (a source until it ends) or step_frame() (one frame; tests). Call sync() to write the
     entity store to the database and update_risk() to write the entities' live allergens (start() does both in the
     background), and tick() a few times a second for the gate.
+
+    With from_web, the Vision API takes frames on POST /frames into `pushed_frames`, the source to run, and `clock`
+    must be a HeldClock: the first frame starts it (push_frame). Without it, POST /frames is a 409 not_web_source.
     """
 
     def __init__(
@@ -421,6 +432,7 @@ class LiveRunner:
         cors_origins: list[str] | None = None,
         vision_cors_origins: list[str] | None = None,
         zones_path: Path | None = None,
+        from_web: bool = False,
     ) -> None:
         from kitchen.entities.store import EntityStore
         from kitchen.gate.driver import FakeGate
@@ -433,6 +445,7 @@ class LiveRunner:
         from kitchen.orders.transcribe import FakeTranscriber
         from kitchen.verdict.service import VerdictService
         from kitchen.vision import server as vision_server
+        from kitchen.vision.camera import PushedFrames
         from kitchen.vision.common import VisionSettings
         from kitchen.vision.run import build_frame_loop, entity_store_consumer
         from kitchen.vision.zones import SAVED_ZONES_PATH, LiveZones, push_zones
@@ -470,8 +483,14 @@ class LiveRunner:
         desk = TicketDesk(parser or FakeLayaParser(), self.state, clock)
         self.app = create_app(desk, FakeTranscriber(), cors_origins=cors_origins or [])
         self.app.add_api_route("/state", self.state_snapshot, methods=["GET"])
+        self.pushed_frames = PushedFrames(clock) if from_web else None
         self.vision_app = vision_server.create_app(
-            self.status, self.bind, self.zones.current, self.zones.replace, vision_cors_origins or []
+            self.status,
+            self.bind,
+            self.zones.current,
+            self.zones.replace,
+            vision_cors_origins or [],
+            push_frame=self.push_frame if from_web else None,
         )
 
     def last_frame_t_ms(self) -> int | None:
@@ -491,6 +510,15 @@ class LiveRunner:
             self.settings.plate_bind_max_age_ms,
             self.settings.track_lost_ms,
         )
+
+    def push_frame(self, jpeg_bytes: bytes) -> None:
+        """POST /frames (from_web): make the JPEG the frame the loop takes next. The first good frame starts the clock.
+
+        The frame is stamped before the clock starts, so the first frame is t_ms 0 and the shift starts with it. A bad
+        frame raises BadFrame before the clock starts, so it can't start the shift.
+        """
+        self.pushed_frames.push(jpeg_bytes)
+        self.clock.start()  # a no-op after the first frame
 
     def start(self) -> None:
         """Sync the entity store to the database at 5 Hz, and keep the entities' live allergens current, in the
@@ -533,6 +561,17 @@ def live_source(args, clock):
     if args.picamera:
         return PiCameraSource(clock)
     return WebcamSource(args.webcam, clock)
+
+
+def live_source_name(args) -> str:
+    """What the live runner reads frames from, for its startup line."""
+    if args.from_web:
+        return "the web app (POST /frames; the shift starts at the first frame)"
+    if args.video:
+        return str(args.video)
+    if args.picamera:
+        return "the Pi camera"
+    return f"webcam {args.webcam}"
 
 
 def run_live_frames(runner: LiveRunner, source) -> None:
@@ -581,9 +620,10 @@ def main_live(args, origins: list[str], parser, plate_check) -> int:
     log_settings(settings)
     zones, _, zones_save_path = load_run_zones(args.zones)
     # The clock starts once the detector has loaded (seconds, for ONNX), as in vision's own CLI: otherwise the load
-    # would use up shift_start_ms and every object on the counter would start with unknown history.
+    # would use up shift_start_ms and every object on the counter would start with unknown history. Frames from the
+    # web app start it later still, at the first frame, after the user has boxed the zones.
     detector = open_detector(settings)
-    clock = SystemClock()
+    clock = HeldClock() if args.from_web else SystemClock()
     runner = LiveRunner(
         clock,
         zones,
@@ -595,13 +635,14 @@ def main_live(args, origins: list[str], parser, plate_check) -> int:
         cors_origins=origins,
         vision_cors_origins=parse_cors_origins(settings.cors_origins),
         zones_path=zones_save_path,
+        from_web=args.from_web,
     )
     runner.start()
     serve_in_background(runner.vision_app, settings.port)
-    source = live_source(args, clock)
+    source = runner.pushed_frames if args.from_web else live_source(args, clock)
     threading.Thread(target=run_live_frames, args=(runner, source), daemon=True, name="frames").start()
     threading.Thread(target=run_live_gate, args=(runner,), daemon=True, name="gate").start()
-    source_name = args.video or ("the Pi camera" if args.picamera else f"webcam {args.webcam}")
+    source_name = live_source_name(args)
     print(
         f"run_local: LIVE from {source_name}, Orders API and GET /state on "
         f"http://localhost:{args.port}, Vision API on http://localhost:{settings.port}",
@@ -648,6 +689,9 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--webcam", type=int, help="live: a webcam index, e.g. 0")
     source.add_argument("--video", type=Path, help="live: a video file, played like a live camera")
     source.add_argument("--picamera", action="store_true", help="live: the Raspberry Pi camera (on the Pi)")
+    source.add_argument(
+        "--from-web", action="store_true", help="live: frames the web app sends from its camera or video (POST /frames)"
+    )
     cli.add_argument(
         "--zones",
         type=Path,
@@ -655,8 +699,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     cli.add_argument("--interactions", default=INTERACTIONS_STEP, help="live: the interactions step's factory")
     args = cli.parse_args(argv)
-    if args.live and args.webcam is None and args.video is None and not args.picamera:
-        cli.error("--live needs one of --webcam, --video or --picamera")
+    if args.live and args.webcam is None and args.video is None and not args.picamera and not args.from_web:
+        cli.error("--live needs one of --webcam, --video, --picamera or --from-web")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # the scenario's own Orders API calls, one line each
