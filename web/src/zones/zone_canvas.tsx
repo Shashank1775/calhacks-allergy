@@ -218,6 +218,7 @@ export function ZoneCanvas({ zones, tags, selected_id, adding, on_zones, on_sele
   );
 }
 
-function points_text(polygon: Point[]): string {
+/** A polygon as SVG `points`, in the frame's 0..1 coordinates. */
+export function points_text(polygon: Point[]): string {
   return polygon.map(([x, y]) => `${x},${y}`).join(" ");
 }
