@@ -41,7 +41,8 @@ PASS_ZONE = Zone(zone_id="pass", kind="pass", polygon=[(0.8, 0.0), (1.0, 0.0), (
 class Kitchen:
     """One shift: the database, the Orders API, the verdict service and the gate loop, on one FakeClock.
 
-    The camera is simulated by calling plate_reaches_pass(); vision's health is "a frame every tick".
+    The camera is simulated by calling plate_reaches_pass(); vision's health is "a frame every tick", and each tick's
+    frame sees every plate that has reached the pass, as a camera would while it stays there.
     """
 
     state: object
@@ -54,6 +55,7 @@ class Kitchen:
     speaker: FakeSpeaker = field(default_factory=lambda: FakeSpeaker(quiet=True))
     gate_log: list = field(default_factory=list)  # (t_ms, gate state) after every tick
     cors_origins: list = field(default_factory=list)  # browser origins the Orders API allows (tools/run_local.py)
+    plates_in_view: dict = field(default_factory=dict)  # plate_id -> t_ms of its newest row; the camera keeps seeing it
 
     def __post_init__(self):
         self.state.set_zones([PASS_ZONE])
@@ -70,10 +72,20 @@ class Kitchen:
 
     def plate_reaches_pass(self, plate_id: str) -> None:
         """What vision and the entity store write when a plate enters the pass zone."""
-        self.state.move_entity(EntityState(plate_id, 1, self.clock.now_ms(), PASS_ZONE.zone_id, None, {}, False))
+        self.plate_seen(plate_id)
+
+    def plate_seen(self, plate_id: str) -> None:
+        """The entity store's row for a plate seen at the pass in this tick's frame."""
+        now = self.clock.now_ms()
+        self.state.move_entity(EntityState(plate_id, 1, now, PASS_ZONE.zone_id, None, {}, False))
+        self.plates_in_view[plate_id] = now
 
     def tick(self) -> str:
-        """One gate loop tick; the state shown is logged with the time."""
+        """One gate loop tick, after this tick's frame has seen every plate at the pass; the state shown is logged
+        with the time. The gate ages a plate out by vision's newest frame, so a plate with no row this frame is gone."""
+        for plate_id, seen_t_ms in list(self.plates_in_view.items()):
+            if seen_t_ms < self.clock.now_ms():
+                self.plate_seen(plate_id)
         shown = self.gate_loop.tick()
         self.gate_log.append((self.clock.now_ms(), shown))
         return shown

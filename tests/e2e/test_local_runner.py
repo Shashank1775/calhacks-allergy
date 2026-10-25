@@ -220,8 +220,10 @@ def test_state_serves_every_table_read_only():
             "first_seen_t_ms": 0,
         },
     ]
-    assert [(row["state_id"], row["entity_id"], row["zone"]) for row in tables["entity_state"]] == [
-        ("s1", "plate-t1", "pass")
+    # The plate stays at the pass once there, so the camera writes it a row every tick (tests/e2e/conftest.py).
+    rows = tables["entity_state"]
+    assert [(row["state_id"], row["entity_id"], row["zone"]) for row in rows] == [
+        (f"s{n}", "plate-t1", "pass") for n in range(1, len(rows) + 1)
     ]
     assert tables["plate_binding"] == [{"plate_id": "plate-t1", "ticket_id": "t1", "t_ms": 500}]
     assert tables["interaction"] == [validate(event, "interaction_event") for event in state.list_interactions()]
