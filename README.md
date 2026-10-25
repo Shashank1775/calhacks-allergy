@@ -43,7 +43,8 @@ The learned models aren't in git (nothing over 1 MB goes in git). They're zips o
 | | `laya_training.zip` | `data/laya_training/` | Laya training data |
 | [`lstm-models-v2_4`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/lstm-models-v2_4) | `boxpooled-v2_4.zip` | `data/models/lstm/boxpooled-v2_4/` | The shipped ConvGRU interaction classifier (`LSTM_MODEL_DIR`) |
 | | `boxpooled-v1.zip` | `data/models/lstm/boxpooled-v1/` | Its first version (the default `LSTM_MODEL_DIR`) |
-| [`visionModelV3`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/visionModelV3) | `exp-4.pt` | `data/models/kitchen-v3/` (built below) | The laptop's detector: the partner's fine-tuned YOLO26s (fork, knife, spoon, bowl, hand), the default `VISION_BUNDLE_DIR` |
+| [`vision-model-v2`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/vision-model-v2) | `BEST_MODEL.zip` | `data/models/kitchen-v2/` (built below) | The laptop's detector: the partner's fine-tuned YOLO26s (fork, knife, spoon, bowl, hand), the default `VISION_BUNDLE_DIR` |
+| [`visionModelV3`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/visionModelV3) | `exp-4.pt` | `data/models/kitchen-v3/` (built below) | The partner's next fine-tune, same classes (`VISION_BUNDLE_DIR=data/models/kitchen-v3`) |
 | [`vision-model-v1`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/vision-model-v1) | `stock-yolov8s.zip` | `data/models/stock-yolov8s/` | The stock YOLOv8s bundle (ONNX) |
 | | `stock-yolov8s-hailo8l.zip` | `data/models/stock-yolov8s-hailo8l/` | The Pi's Hailo-8L bundle |
 | | `yolov8s-weights.zip` | `data/weights/` | Stock YOLOv8s and YOLOv8s-pose weights and their ONNX exports |
@@ -71,6 +72,14 @@ gh release download vision-model-v1 -p yolov8s-weights.zip -D data
 unzip -o data/yolov8s-weights.zip -d data
 
 # Vision: the laptop's detector, exported to ONNX and bundled (--video only feeds the Hailo calibration frames)
+gh release download vision-model-v2 -p BEST_MODEL.zip -D data/models
+unzip -o data/models/BEST_MODEL.zip -d data/models/kitchen-v2/train
+uvx --from ultralytics==8.4.188 --with onnx --with onnxslim --with onnxruntime \
+    yolo export model=data/models/kitchen-v2/train/exp-3.pt format=onnx imgsz=640 opset=11 simplify=True
+uv run python -m kitchen.vision.bundle --name kitchen-v2 --weights custom --class-names fork,knife,spoon,bowl,hand \
+    --det-onnx data/models/kitchen-v2/train/exp-3.onnx --pose-onnx data/weights/yolov8s-pose.onnx --video data/recordings/<any>.mp4
+
+# Vision: the partner's next fine-tune, the same way
 gh release download visionModelV3 -p exp-4.pt -D data/models/kitchen-v3/train
 uvx --from ultralytics==8.4.188 --with onnx --with onnxslim --with onnxruntime \
     yolo export model=data/models/kitchen-v3/train/exp-4.pt format=onnx imgsz=640 opset=11 simplify=True
