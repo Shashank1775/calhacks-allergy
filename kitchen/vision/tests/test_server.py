@@ -389,7 +389,7 @@ def test_cors_only_for_listed_origins():
 
 
 def test_cors_preflight_allows_put_zones_from_listed_origins_only():
-    """The web zone editor saves with PUT, which browsers preflight."""
+    """The web zone editor saves with PUT and a JSON body, so browsers preflight both the method and Content-Type."""
     client = client_for(VisionStatus("onnx"))
     request = {"Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "Content-Type"}
 
@@ -397,6 +397,7 @@ def test_cors_preflight_allows_put_zones_from_listed_origins_only():
     assert allowed.status_code == 200
     assert allowed.headers["access-control-allow-origin"] == ORIGIN
     assert "PUT" in allowed.headers["access-control-allow-methods"]
+    assert "content-type" in allowed.headers["access-control-allow-headers"].lower()
 
     other = client.options("/zones", headers={"Origin": "http://evil.example", **request})
     assert "access-control-allow-origin" not in other.headers
