@@ -464,6 +464,53 @@ def test_when_the_zone_table_cant_be_written_the_lookup_and_file_go_back(tmp_pat
     assert restored_lookup((0.85, 0.2)) is None  # the sample layout again
 
 
+def with_zone(zones: list[Zone], zone_id: str, kind: str | None = None, polygon=None) -> list[Zone]:
+    """`zones` with zone `zone_id` given another kind or polygon."""
+    return [
+        Zone(zone.zone_id, kind or zone.kind, polygon or zone.polygon) if zone.zone_id == zone_id else zone
+        for zone in zones
+    ]
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize(
+    ("zone_id", "new_kind"), [("wash", "other"), ("clean-stack", "wash"), ("pass", "plating_spot")]
+)
+def test_a_zone_id_never_changes_kind_and_the_refusal_changes_nothing(tmp_path, zone_id, new_kind):
+    """The interactions step would keep the old kind: a wash redrawn as "other" would still wash (toward PASS)."""
+    kitchen = LiveKitchen(tmp_path / "zones.json")
+    file_text = kitchen.save_path.read_text()
+    with pytest.raises(
+        ZoneFileError,
+        match=f"zone '{zone_id}' is a .* zone in this run, and its kind can't change; delete it and draw a new one",
+    ):
+        kitchen.live.replace(layout_body(with_zone(kitchen.zones, zone_id, kind=new_kind)))
+    kitchen.assert_unchanged(file_text)
+
+
+@pytest.mark.safety
+def test_a_zone_deleted_in_one_put_cant_come_back_with_another_kind(tmp_path):
+    kitchen = LiveKitchen(tmp_path / "zones.json")
+    without_wash = [zone for zone in kitchen.zones if zone.zone_id != "wash"]
+    kitchen.live.replace(layout_body(without_wash))
+    file_text = kitchen.save_path.read_text()
+
+    comes_back = [*without_wash, Zone("wash", "other", rect(0.02, 0.7, 0.25, 0.98))]
+    with pytest.raises(ZoneFileError, match="zone 'wash' is a wash zone in this run"):
+        kitchen.live.replace(layout_body(comes_back))
+    assert kitchen.live.current() == without_wash
+    assert kitchen.save_path.read_text() == file_text
+
+
+def test_a_zone_can_move_and_a_new_zone_id_can_have_any_kind(tmp_path):
+    kitchen = LiveKitchen(tmp_path / "zones.json")
+    moved = with_zone(kitchen.zones, "wash", polygon=rect(0.3, 0.75, 0.5, 0.98))
+    assert kitchen.live.replace(layout_body(moved)) == moved
+
+    redrawn = [zone for zone in moved if zone.zone_id != "wash"] + [Zone("prep", "other", rect(0.3, 0.75, 0.5, 0.98))]
+    assert kitchen.live.replace(layout_body(redrawn)) == redrawn
+
+
 # the calibration tool's logic (the window itself needs a display)
 
 

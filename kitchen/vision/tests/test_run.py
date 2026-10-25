@@ -247,6 +247,26 @@ def test_a_bad_put_changes_neither_the_lookup_the_file_nor_the_zone_table(tmp_pa
     assert kitchen.api.get("/zones").json() == layout_body(kitchen.zones)
 
 
+@pytest.mark.safety
+def test_a_put_that_changes_a_zones_kind_is_a_422_and_changes_nothing(tmp_path):
+    """The interactions step learns zone kinds at startup, so a wash renamed "other" would still wash there."""
+    kitchen = RunningKitchen(tmp_path / "zones.json", FakeDetector([BIN_IN_SLOT_1, KNIFE_AT_PLATING]))
+    kitchen.step()
+
+    wash_as_other = [
+        Zone(zone.zone_id, "other" if zone.zone_id == "wash" else zone.kind, zone.polygon) for zone in kitchen.zones
+    ]
+    response = kitchen.api.put("/zones", json=layout_body(wash_as_other))
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "bad_zones"
+    assert "delete it and draw a new one" in response.json()["error"]["message"]
+
+    assert not kitchen.save_path.exists()
+    assert kitchen.table() == {zone.zone_id: zone for zone in kitchen.zones}
+    assert kitchen.api.get("/zones").json() == layout_body(kitchen.zones)
+    assert kitchen.loop.zone_of((0.1, 0.85)).kind == "wash"
+
+
 class DetectorThatChangesZones(FakeDetector):
     """A FakeDetector that, on its second frame, changes the zones while the frame is being detected."""
 

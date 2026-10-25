@@ -191,8 +191,8 @@ class LiveZones:
     frame (kitchen/interactions/events.py, live_consumer), and never reads it again. So moving or resizing an existing
     zone works at once, but a new zone ID only counts after the runner restarts and loads the saved file. Until then
     its kind there is "other": a newly drawn second washing area (wash-2) produces no wash edges, which leans toward
-    HOLD. Changing the kind of an existing zone ID also waits for a restart: until then the interactions step keeps
-    the old kind, so a zone that was a wash still washes there, which leans toward PASS. Set zones before service.
+    HOLD. A zone ID can never change kind within a run (check_kinds_kept), because the interactions step would keep
+    the old kind: a former wash would still wash there, which leans toward PASS. Set zones before service.
 
     Entities keep their IDs and origins. Origin is decided only at an entity's first sighting (identity.py), so a zone
     change can't make an object that is already tracked clean, and a bowl tracked as bin-<n> stays bin-<n> wherever
@@ -211,6 +211,8 @@ class LiveZones:
         self._state = state
         self._use_lookup = use_lookup
         self._zones = list(zones)
+        # The kind of every zone_id used in this run, including ones a later PUT removed (check_kinds_kept).
+        self._kinds = {zone.zone_id: zone.kind for zone in zones}
         self._lock = threading.Lock()  # one replace at a time
 
     def current(self) -> list[Zone]:
@@ -220,11 +222,13 @@ class LiveZones:
     def replace(self, data: object) -> list[Zone]:
         """Replace every zone with the zones file `data` (parsed JSON) and return the zones now in use.
 
-        Raises ZoneFileError if `data` is not a valid zones file, OSError if the file can't be written, and
-        StateUnavailable if the zone table can't be: each before anything has changed, or after putting it back.
+        Raises ZoneFileError if `data` is not a valid zones file or gives a zone_id used in this run another kind,
+        OSError if the file can't be written, and StateUnavailable if the zone table can't be: each before anything
+        has changed, or after putting it back.
         """
         zones = parse_zones(data)
         with self._lock:
+            check_kinds_kept(zones, self._kinds)
             previous = self._zones
             save_zones(self.save_path, zones)
             self._use_lookup(zone_lookup(zones))
@@ -237,7 +241,26 @@ class LiveZones:
                 save_zones(self.save_path, previous)
                 raise
             self._zones = zones
+            self._kinds.update({zone.zone_id: zone.kind for zone in zones})
         return list(zones)
+
+
+def check_kinds_kept(zones: list[Zone], kinds: dict[str, str]) -> None:
+    """Raise ZoneFileError if a zone gives a zone_id from `kinds` (every zone_id used in this run) another kind.
+
+    The partner's interactions step learns zone kinds once, at its first frame. A zone_id redrawn with another kind,
+    in one PUT or by deleting it in one and adding it back in a later one, would keep its old kind there: a former
+    wash would still wash the tools and hands put down in it, which leans toward PASS. A new zone_id is safe, since
+    the interactions step counts it as "other" until a restart, which leans toward HOLD.
+    """
+    for zone in zones:
+        known_kind = kinds.get(zone.zone_id)
+        if known_kind is not None and known_kind != zone.kind:
+            raise ZoneFileError(
+                f"zone {zone.zone_id!r} is a {known_kind} zone in this run, and its kind can't change; delete it and "
+                f"draw a new one with a new zone_id to give it kind {zone.kind!r} (the interactions step learns zone "
+                "kinds only at startup)"
+            )
 
 
 def polygon_area(polygon: list[tuple[float, float]]) -> float:

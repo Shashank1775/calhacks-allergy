@@ -54,7 +54,7 @@ To match the props to it, point the camera straight down so the counter fills th
 **Which file a run uses.** An explicit `--zones` path wins. Without one, `run.py` and the local runner's `--live` use `data/zones.json` if it exists (zones saved from the web app; `data/` is gitignored), else `default_zones.json`. The startup log names the file and its sha256. A bad file stops the run at startup: it never falls back to the default, which may not match the counter.
 
 **Changing zones while running.** `PUT /zones` on the Vision API (`zones.LiveZones`) does these steps in order:
-1. It checks the whole layout. Anything bad is `422 bad_zones` and changes nothing.
+1. It checks the whole layout. Anything bad is `422 bad_zones` and changes nothing; so is a zone ID given a new kind (below).
 2. It saves the file. That's `data/zones.json`, or the `--zones` path if one was given. A failed write is a `500` and changes nothing.
 3. It swaps the frame loop's lookup.
 4. It replaces the `zone` table, so the gate, the verdict service and the screens see the new pass. If the table can't be written, the lookup and the file go back to the old layout.
@@ -64,9 +64,9 @@ To match the props to it, point the camera straight down so the counter fills th
 A PUT doesn't reach the partner's interactions step, which reads zone kinds once, at its first frame (`kitchen/interactions/events.py`):
 - Moving or resizing an existing zone works at once.
 - A new zone ID counts only after the runner restarts and loads `data/zones.json`. Until then the step treats it as `other`, so a newly drawn second washing area (`wash-2`) produces no wash edges. That leans toward HOLD.
-- Changing the kind of an existing zone ID also waits for a restart. Until then the step keeps the old kind, so a former wash still washes. That leans toward PASS.
+- A zone ID can't change kind within a run: such a PUT is `422 bad_zones`. That includes deleting a zone in one PUT and adding it back with another kind later. The interactions step would keep the old kind, so a former wash would still wash, which leans toward PASS. To change what an area is, delete the zone and draw a new one with a new zone ID. The web editor names each new zone after its kind (`wash-2`, `slot-6`), so it never sends such a PUT.
 
-Set zones before service. After adding a new washing area, restart the runner. Do the same after changing any zone's kind.
+Set zones before service. After adding a new washing area, restart the runner.
 
 ## What happens here
 
