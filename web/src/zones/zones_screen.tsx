@@ -10,6 +10,9 @@
  *
  * The home page reuses this screen as its "box the kitchen" step, over its own camera or video picture, and starts the
  * kitchen only once `on_ready` says vision has exactly the layout on screen.
+ *
+ * A screen opened while vision was down asks for the layout again every LAYOUT_RETRY_MS until it loads, but only while
+ * no layout has loaded and nothing is drawn, so it never replaces anything on screen.
  */
 import { useEffect, useState } from "react";
 import { vision_url } from "../api/http";
@@ -30,6 +33,9 @@ import { ZoneCanvas, type Picture } from "./zone_canvas";
 
 type Message = { tone: "error" | "ok"; text: string };
 
+/** How often a layout that hasn't loaded yet is asked for again. */
+export const LAYOUT_RETRY_MS = 3000;
+
 type Props = {
   /** Draw the zones on this picture instead of vision's stream. */
   picture?: Picture;
@@ -48,6 +54,8 @@ export function ZonesScreen({ picture, on_ready }: Props = {}) {
   const [adding, set_adding] = useState<ZoneKind | null>(null);
   const [busy, set_busy] = useState(false);
   const [message, set_message] = useState<Message | null>(null);
+  // Counts failed loads, so each failure schedules the next try while no layout has loaded.
+  const [failed_loads, set_failed_loads] = useState(0);
 
   const changed = saved_json !== null && JSON.stringify(zones) !== saved_json;
   const ready = saved_json !== null && !changed;
@@ -64,6 +72,7 @@ export function ZonesScreen({ picture, on_ready }: Props = {}) {
     set_busy(false);
     if (!result.ok) {
       set_message({ tone: "error", text: `Couldn't load the layout from vision. ${result.message}` });
+      set_failed_loads((count) => count + 1);
       return;
     }
     set_zones(result.data.zones);
@@ -94,6 +103,15 @@ export function ZonesScreen({ picture, on_ready }: Props = {}) {
     // Load once, when the screen opens.
     if (base) void load();
   }, []);
+
+  // Still waiting for a first layout with an empty picture: keep asking. Anything drawn meanwhile is the person's, and
+  // only REVERT may replace it.
+  const awaiting_layout = Boolean(base) && saved_json === null && zones.length === 0;
+  useEffect(() => {
+    if (!awaiting_layout) return;
+    const timer = setTimeout(() => void load(), LAYOUT_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [awaiting_layout, failed_loads]);
 
   // Esc stops adding.
   useEffect(() => {
@@ -162,6 +180,7 @@ export function ZonesScreen({ picture, on_ready }: Props = {}) {
         {message?.tone === "error" && (
           <p role="alert" className="error zone_message">
             {message.text}
+            {awaiting_layout && " Trying again."}
           </p>
         )}
         {message?.tone === "ok" && (
