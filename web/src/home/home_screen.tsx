@@ -1,4 +1,4 @@
-/** Home: what this is, where frames come from, and the two stations. */
+/** Home: what this is, where frames come from, the two stations and the kitchen layout. */
 import { Chit } from "../components/chit";
 import { Rail } from "../components/rail";
 import { CameraSource } from "./camera_source";
@@ -33,6 +33,12 @@ export function HomeScreen() {
             Expo →
           </a>
           <p>Tickets on the rail, plates on the pass, and why a plate is held.</p>
+        </Chit>
+        <Chit label="Kitchen layout">
+          <a className="display station_link" href="/zones">
+            Kitchen layout →
+          </a>
+          <p>Where the bins, washing areas and serving area are on the camera.</p>
         </Chit>
       </Rail>
     </>

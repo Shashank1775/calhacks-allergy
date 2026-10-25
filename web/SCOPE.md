@@ -11,6 +11,7 @@ Last updated: 2026-10-24.
 | `/` | Home: what this is, the two sources (video file, live camera), links to the stations | Built. Video is picked and previewed locally only |
 | `/tablet` | New ticket (note → Laya parse → one-tap questions → send), and changing a sent ticket | Built; checked against the local runner's orders API |
 | `/expo` | The gate panel, tickets on the rail, plates on the pass, why a plate is held, start plate, the live camera | Built; the gate panel checked against the local runner |
+| `/zones` | Kitchen layout: the zones over the camera; add a bin, washing area, serving area, plating spot, clean stack or other zone by dragging a rectangle; move, resize and delete; save to vision | Built against the Vision API's `GET`/`PUT /zones` |
 | `/summary` | Upload a recorded video and read its scene summary: the text, every touch, and what each entity could carry | Built against MSW mocks of the summary service's API (#198); the service itself is #197 |
 
 There's no bin setup screen: the architecture simplification cut chef confirmation, and the orders API change (#149) made the demo's bin profiles hard-coded, so `/bins/read` and `PUT /bins/{id}` are gone.
@@ -31,6 +32,7 @@ There's no bin setup screen: the architecture simplification cut chef confirmati
 - **Spoken holds** (`voice.ts`): the browser says "Hold seven, peanut" once per hold, with the gate's own number and allergen words. The expo screen's "turn on voice" button is needed because browsers only speak after a click.
 - **Tablet: changing a ticket** (`tablet/amend_ticket.tsx`): pick a sent ticket, type the change, answer Laya's questions, send. It uses the same send gate, plus a message for `409 ticket_changed`.
 - **Live camera** (`expo/camera_panel.tsx`): vision's `GET /stream.mjpg`, with each entity's latest box from `entity_state` colored by risk (unknown history and strong allergens red, weak amber, clean green). Only entities tracked now are listed and drawn: the newest `entity_state` time is "now", and an entity last seen more than 1 s before it (vision's `track_lost_ms`) has lost its track, so its last box is dropped. A broken stream says "camera offline" and changes no verdict.
+- **Kitchen layout** (`zones/`): `GET /zones` drawn over the camera (or a plain 16:9 frame with no camera), one color per kind, bin slots labeled with their bin from the state. A new bin takes the lowest free `slot-<n>`; other kinds get `wash`, `pass`, `plating`, `clean-stack`, `other`, then `-2`, `-3`. Drawn zones are rectangles with corner handles; other shapes from the zones file draw as they are and can be moved or deleted. Save is `PUT /zones` and stays off until a layout has loaded; a `422 bad_zones` shows vision's message and keeps the edits; Revert reloads.
 - **Home.** Video picker with local preview and a REPLAY marker; live camera card stamped 86'd.
 - **Tests.** Vitest, with the ones guarding a safety rule named `safety: …`.
 - **CI.** The `web` job in `.github/workflows/ci.yml` runs on every PR and every push to `main`: `npm ci`, the tests, the type check and build (`npm run build`), lint, and Prettier on `src`.
