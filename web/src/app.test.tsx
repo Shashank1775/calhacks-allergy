@@ -9,6 +9,7 @@ describe("screen_for_path", () => {
     ["/tablet/", "tablet"],
     ["/expo", "expo"],
     ["/summary", "summary"],
+    ["/zones", "zones"],
     ["/", "home"],
     ["/chef", "home"],
     ["/typo", "home"],

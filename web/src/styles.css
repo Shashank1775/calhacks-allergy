@@ -12,6 +12,13 @@
   --pass: #1f7a43;
   --recheck: #8a5a00;
   --stamp_blue: #2747a0;
+  /* One color per zone kind on the kitchen layout. */
+  --zone_bin_slot: #2747a0;
+  --zone_wash: #0e7c86;
+  --zone_pass: #7b2d8e;
+  --zone_plating_spot: #b25a00;
+  --zone_clean_stack: #1f7a43;
+  --zone_other: #5c5a55;
   --display: "Big Shoulders Display", Impact, sans-serif;
   --mono: "Space Mono", ui-monospace, monospace;
 }
@@ -596,4 +603,212 @@ a {
 .chip_unknown {
   border-color: var(--hold);
   color: var(--hold);
+}
+
+/* Kitchen layout: zones over the camera */
+.zone_intro {
+  max-width: 760px;
+}
+
+.zone_hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.kind_bin_slot {
+  --zone: var(--zone_bin_slot);
+}
+
+.kind_wash {
+  --zone: var(--zone_wash);
+}
+
+.kind_pass {
+  --zone: var(--zone_pass);
+}
+
+.kind_plating_spot {
+  --zone: var(--zone_plating_spot);
+}
+
+.kind_clean_stack {
+  --zone: var(--zone_clean_stack);
+}
+
+.kind_other {
+  --zone: var(--zone_other);
+}
+
+.zone_swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  background: var(--zone);
+  border: 2px solid var(--paper);
+  outline: 1px solid var(--zone);
+}
+
+.zone_layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .zone_layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.zone_camera {
+  padding: 28px;
+}
+
+/* The frame is the camera picture's shape; zone points are shares of it, so they line up at any size. */
+.zone_frame {
+  position: relative;
+  width: 100%;
+  background: #2b2a28;
+  user-select: none;
+  touch-action: none;
+}
+
+.zone_frame_adding {
+  cursor: crosshair;
+}
+
+.zone_frame img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.zone_no_camera {
+  margin: 12px 0 -12px;
+  font-size: 12px;
+  color: var(--rail_hi);
+}
+
+.zone_svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.zone_shape {
+  fill: var(--zone);
+  fill-opacity: 0.22;
+  stroke: var(--zone);
+  stroke-width: 3px;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+
+.zone_frame_adding .zone_shape {
+  cursor: crosshair;
+}
+
+.zone_selected {
+  fill-opacity: 0.4;
+  stroke: var(--paper);
+  stroke-width: 4px;
+}
+
+.zone_draft {
+  fill-opacity: 0.3;
+  stroke-dasharray: 8 5;
+  pointer-events: none;
+}
+
+.zone_tag {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 1px 6px;
+  background: var(--zone);
+  color: var(--paper);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* 44 px to grab with a finger; the square drawn inside it is the visible handle. */
+.zone_handle {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  cursor: nwse-resize;
+}
+
+.zone_handle::after {
+  content: "";
+  position: absolute;
+  inset: 14px;
+  background: var(--paper);
+  border: 3px solid var(--zone);
+}
+
+.zone_panel {
+  background: var(--paper);
+  padding: 16px 18px;
+}
+
+.zone_panel_title {
+  margin: 0 0 8px;
+  font-size: 28px;
+}
+
+.zone_list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.zone_row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px dashed var(--ink);
+}
+
+.zone_row_selected {
+  background: #efe9da;
+}
+
+.zone_pick {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.zone_bin {
+  display: block;
+  font-size: 12px;
+}
+
+.zone_actions {
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.zone_message {
+  margin: 0 0 0 8px;
 }
