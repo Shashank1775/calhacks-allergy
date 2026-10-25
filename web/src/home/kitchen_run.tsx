@@ -6,18 +6,25 @@
  * Rules: known-clean source. An object's origin is set the first time vision sees it, so START stays off until vision
  * has exactly the layout on screen. The first frame starts vision's shift, so what's in view in its first 3 s starts
  * clean. Fail closed: STOP, a closed tab, a video that ends or a camera that stops all stop the frames, and the gate
- * shows FAULT. A frozen picture is never sent.
+ * shows FAULT. A frozen picture is never sent. Where frames come from this tab's main thread (a video file, or a
+ * browser that can't read a camera in a worker), a hidden tab slows them to about one a second, and the run screen
+ * says so.
  */
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { FRAME_ERRORS } from "../api/vision";
 import { ZonesScreen } from "../zones/zones_screen";
-import { start_frame_sender, type SenderStatus } from "./frame_sender";
+import { sender_mode, start_camera_worker, start_frame_sender, type SenderStatus } from "./frame_sender";
 import { useObjectUrl } from "./use_object_url";
 import { UNPLAYABLE_VIDEO } from "./video_source";
 
 export type Source = { kind: "video"; file: File } | { kind: "camera"; stream: MediaStream; label: string };
 
 type Phase = "layout" | "running" | "stopped";
+
+/** On the run screen when frames come from the main thread and this tab has been hidden since START. */
+export const HIDDEN_TAB_WARNING =
+  "This tab was hidden. While it is, frames slow to about 1 a second and the kitchen loses track: keep this tab " +
+  "visible, or open /expo in its own window side by side.";
 
 export function KitchenRun({ source, on_change_source }: { source: Source; on_change_source: () => void }) {
   const [phase, set_phase] = useState<Phase>("layout");
@@ -26,14 +33,29 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
   const [aspect, set_aspect] = useState(16 / 9);
   const [unplayable, set_unplayable] = useState(false);
   const [status, set_status] = useState<SenderStatus | null>(null);
+  const [hidden_since_start, set_hidden_since_start] = useState(false);
   const video_ref = useRef<HTMLVideoElement>(null);
   const video_url = useObjectUrl(source.kind === "video" ? source.file : null);
   const name = source.kind === "camera" ? source.label : source.file.name;
+  const camera_track = source.kind === "camera" ? source.stream.getVideoTracks()[0] : undefined;
+  const mode = sender_mode(camera_track);
 
   useEffect(() => {
     if (phase !== "running") return;
     set_status(null);
+    if (mode === "camera_worker" && camera_track) return start_camera_worker(camera_track, set_status);
     return start_frame_sender(() => (source_live(source) ? video_ref.current : null), set_status);
+  }, [phase]);
+
+  // Only the main thread slows in a hidden tab. The warning stays up after the tab is back, so it's seen.
+  useEffect(() => {
+    if (phase !== "running" || mode !== "main_thread") return;
+    set_hidden_since_start(document.hidden);
+    const on_visibility = () => {
+      if (document.hidden) set_hidden_since_start(true);
+    };
+    document.addEventListener("visibilitychange", on_visibility);
+    return () => document.removeEventListener("visibilitychange", on_visibility);
   }, [phase]);
 
   // A camera that is unplugged or taken by another app ends its track: stop, rather than resend its last picture.
@@ -110,7 +132,9 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
         </span>
       </div>
       <p className="bold">
-        Keep this tab open and in front: it is the kitchen's camera. The stations open in windows of their own.
+        {mode === "camera_worker"
+          ? "Keep this tab open: it is the kitchen's camera. The stations open in windows of their own."
+          : "Keep this tab open and in front: it is the kitchen's camera. The stations open in windows of their own."}
       </p>
       <div className="option_row">
         <button type="button" className="btn" onClick={() => set_phase("layout")}>
@@ -119,6 +143,11 @@ export function KitchenRun({ source, on_change_source }: { source: Source; on_ch
         <StationWindowLink path="/expo" name="EXPO" />
         <StationWindowLink path="/tablet" name="TABLET" />
       </div>
+      {running && mode === "main_thread" && hidden_since_start && (
+        <p role="alert" className="error">
+          {HIDDEN_TAB_WARNING}
+        </p>
+      )}
       {running && status?.error && (
         <p role="alert" className="error">
           {FRAME_ERRORS[status.error] ?? `Vision didn't take the frame (${status.error}).`}
