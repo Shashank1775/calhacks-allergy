@@ -179,13 +179,20 @@ def push_zones(state: StateClient, zones: list[Zone]) -> None:
 class LiveZones:
     """The zones a running kitchen uses, and replacing them while the camera runs (Vision API GET and PUT /zones).
 
-    replace() applies a new layout everywhere or nowhere, so the frame loop, the zones file and the zone table (the
-    gate's and the verdict service's pass zones) never disagree for long:
+    replace() applies a new layout to the frame loop, the zones file and the zone table (the gate's and the verdict
+    service's pass zones) together or not at all:
     - Bad zones never half-apply. They are refused before anything changes.
     - The zones file is written whole or not at all (save_zones), and a failed write changes nothing else.
     - The frame loop takes the new lookup from its next frame on (use_lookup is FrameLoop.use_zones), never partway
       through a frame.
     - The zone table is replaced last. If that fails, the lookup and the file go back to the old zones.
+
+    It does not reach the partner's interactions step. That step builds its zone_id -> kind map once, at its first
+    frame (kitchen/interactions/events.py, live_consumer), and never reads it again. So moving or resizing an existing
+    zone works at once, but a new zone ID only counts after the runner restarts and loads the saved file. Until then
+    its kind there is "other": a newly drawn second washing area (wash-2) produces no wash edges, which leans toward
+    HOLD. Changing the kind of an existing zone ID also waits for a restart: until then the interactions step keeps
+    the old kind, so a zone that was a wash still washes there, which leans toward PASS. Set zones before service.
 
     Entities keep their IDs and origins. Origin is decided only at an entity's first sighting (identity.py), so a zone
     change can't make an object that is already tracked clean, and a bowl tracked as bin-<n> stays bin-<n> wherever
