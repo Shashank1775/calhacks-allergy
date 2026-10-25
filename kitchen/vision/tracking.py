@@ -8,7 +8,8 @@ Emits: observation_frame detection items (track_id, entity_id, kind, class_name,
        person_id and wrist for hands), in track order
 Rules: fail closed: a lost track emits nothing (no box is predicted or interpolated; a predicted box is only ever used
        to match) and no hand is made from an unsure wrist; known-clean source: a track that ends is never revived, and
-       track IDs are never reused, so an object seen again is a new entity (identity.py)
+       track IDs are never reused, so an object seen again is a new entity (identity.py); a lone plate keeps its
+       track across a fast move only when there is no doubt which plate it is (below)
 
 Association, per class group (each object class, and pose people), ByteTrack style:
     1. a track last matched more than track_lost_ms ago ends for good, even if frames stopped coming meanwhile;
@@ -20,6 +21,15 @@ The tracks a frame leaves unmatched are handed to identity.py with every new tra
 one of those objects under a new ID (an ID switch), so it can't claim a clean origin. Bowls and plates share this
 guard: a detector with a plate class may call one plate a plate in one frame and a bowl in the next, so a relabeled
 dirty plate carried into the clean stack can't start clean.
+
+Both trackers then let a lone plate keep its track when it moves faster than the camera can follow. At a few frames a
+second a plate carried from the plating spot to the pass moves farther than its own height between frames, so its box
+no longer overlaps where it was: a new track would make it a new plate, not bound to its ticket (a HOLD at the pass)
+and without its history. So when the one bowl or plate track that went unmatched this frame is a plate's (lost for at
+most track_lost_ms, since a longer loss ends it) and exactly one bowl or plate detection would start a new track, the
+detection goes to the lost plate's track instead, wherever it is. A bin lost at the same time makes it ambiguous (the
+newcomer may be that bin, lifted out of its slot), and a newcomer in a clean stack (a fresh plate taken for the next
+ticket) or in a free bin slot (where it is that bin) always starts a new track.
 
 VISION_TRACKER picks one of two trackers. "iou" (the default) matches each detection to a track's last box, as above.
 "motion" is experimental, off until real overhead footage shows it helps (compare_trackers.py). It adds to the above:
@@ -160,6 +170,17 @@ class TrackSet:
                 owners[index] = track.track_id
 
         return owners, ended, missing
+
+    def remove(self, track_id: int) -> Track:
+        """Take a live track out of this set and return it (a lone plate's track moves to the set of its new class)."""
+        track = next(track for track in self.tracks if track.track_id == track_id)
+        self.tracks.remove(track)
+        return track
+
+    def adopt(self, track: Track, box: Box, t_ms: int) -> None:
+        """Add a track taken from a set, matched to the detection at `box` this frame."""
+        self._take(track, box, t_ms)
+        self.tracks.append(track)
 
     def _match_recent_first(
         self,
@@ -464,6 +485,7 @@ class Tracker:
             # Ended tracks go first, so a bin slot freed this frame can go to a bowl first seen in it this frame.
             for track_id in ended:
                 self.identities.end_track(track_id)
+        self._continue_lone_plate(results, t_ms, zone_of)
 
         # A detector can call one utensil a knife in one frame and a spoon in the next. Motion mode treats a missing
         # track of any tool class as a possible switch for a new tool of any class, so the relabel can't start clean.
@@ -484,6 +506,43 @@ class Tracker:
                 identity = self.identities.object_identity(track_id, class_name, t_ms, zone, maybe_switched)
                 items.append(detection_item(track_id, identity, class_name, detection.box, detection.confidence, zone))
         return items
+
+    def _continue_lone_plate(self, results: dict, t_ms: int, zone_of: ZoneLookup) -> None:
+        """Give a lone plate carried faster than the camera can follow its own track back (see the module docstring).
+
+        `results` maps each class to (detections, owners, missing) from this frame's association, and is updated in
+        place: the newcomer's detection goes to the lost plate's track, and that track is no longer missing, so the
+        ID-switch guard doesn't fire for it. Nothing changes unless the one bowl or plate track lost is a plate's (a
+        bin lost too may be the newcomer, allergens and all) and exactly one bowl or plate detection started a track
+        (it has no identity yet) outside a clean stack and a free bin slot.
+        """
+        # Every live bowl or plate track left unmatched, bins included (an ended track has no identity any more).
+        lost = [
+            (class_name, track_id)
+            for class_name in DISH_CLASSES
+            for track_id in results[class_name][2]
+            if self.identities.kind_of(track_id) is not None
+        ]
+        new = [
+            (class_name, index, track_id)
+            for class_name in DISH_CLASSES
+            for index, track_id in results[class_name][1].items()
+            if self.identities.kind_of(track_id) is None
+        ]
+        if len(lost) != 1 or len(new) != 1 or self.identities.kind_of(lost[0][1]) != "plate":
+            return
+
+        (lost_class, lost_id), (new_class, index, new_id) = lost[0], new[0]
+        box = results[new_class][0][index].box
+        zone = zone_of(box_centre(box))
+        if zone is not None and (zone.kind == "clean_stack" or self.identities.is_free_bin_slot(zone)):
+            return
+
+        # The newcomer's own track was made this frame and is dropped; its ID is never handed out again.
+        self.object_tracks[new_class].remove(new_id)
+        self.object_tracks[new_class].adopt(self.object_tracks[lost_class].remove(lost_id), box, t_ms)
+        results[new_class][1][index] = lost_id
+        results[lost_class][2].remove(lost_id)
 
     def _track_people(self, people: list[Person], t_ms: int, zone_of: ZoneLookup, width: int, height: int) -> list:
         """Track pose people and return a hand item for each confident wrist."""

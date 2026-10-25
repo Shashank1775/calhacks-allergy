@@ -363,14 +363,16 @@ SPOTS = [(0.3, 0.3, 0.4, 0.4), (0.5, 0.3, 0.6, 0.4), (0.3, 0.6, 0.4, 0.7)]
 
 
 @pytest.mark.safety
+@pytest.mark.parametrize("class_name", ["knife", "bowl"])
 @settings(max_examples=100, deadline=None)
-@given(LIFETIMES)
-def test_entity_ids_are_never_reused_over_random_track_lifetimes(steps):
+@given(steps=LIFETIMES)
+def test_entity_ids_are_never_reused_over_random_track_lifetimes(class_name, steps):
+    """Bowls too: a lone plate may keep its track across a jump between spots, but never shares its entity."""
     tracker = Tracker(SETTINGS)
     track_of_entity = {}
     t_ms = 0
     for visible, gap in steps:
-        objects = [knife(SPOTS[spot]) for spot in sorted(visible)]
+        objects = [detection_of(class_name, SPOTS[spot]) for spot in sorted(visible)]
         people = [person(right_wrist=(0.6, 0.5, 0.9))] if 0 in visible else []
         for item in tracker.update(objects, people, t_ms, zone_of, 640, 640):
             # One entity ID belongs to exactly one track for the whole shift: a new track is always a new entity.
@@ -688,3 +690,79 @@ def test_a_plate_from_the_clean_stack_starts_clean_while_no_plate_or_bowl_is_mis
     items = tracker.update([plate(CLEAN_STACK_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)
 
     assert [(item["entity_id"], item["origin"]) for item in items] == [("plate-1", "clean_stack")]
+
+
+# A plate carried from the plating spot to the pass, box by box, as the live run of 2026-10-24 saw it at about 4 fps:
+# each box overlaps the one before by an IoU of about 0.2, below track_match_iou.
+CARRIED_PLATE_BOXES = [(0.01, 0.274, 0.216, 0.576), (0.002, 0.475, 0.203, 0.749), (0.033, 0.64, 0.227, 0.939)]
+STILL_PLATE_BOX = (0.6, 0.1, 0.8, 0.4)
+
+
+@pytest.mark.safety
+@pytest.mark.parametrize("tracker_mode", ["iou", "motion"])
+@pytest.mark.parametrize("covered_for_a_frame", [False, True])
+def test_a_lone_plate_carried_faster_than_the_camera_keeps_its_track_and_entity(tracker_mode, covered_for_a_frame):
+    """A plate carried to the pass at a few frames a second no longer overlaps its last box. It is the only plate
+    lost and the only one new, so it keeps its track, and with its entity its ticket binding and history.
+    A new plate at the pass would be unbound (a HOLD) and would have lost what the plate carried."""
+    tracker = Tracker(dataclasses.replace(SETTINGS, tracker=tracker_mode))
+    frames = [([bowl(box)], []) for box in CARRIED_PLATE_BOXES]
+    if covered_for_a_frame:
+        frames.insert(1, ([], []))
+
+    items = [frame[0] for frame in run(tracker, frames, AFTER_SHIFT_START, 1280, 720) if frame]
+
+    assert len(items) == 3
+    assert {(item["track_id"], item["entity_id"], item["kind"], item["origin"]) for item in items} == {
+        (1, "plate-1", "plate", "unknown")
+    }
+
+
+@pytest.mark.safety
+def test_a_carried_plate_starts_a_new_track_when_another_plate_is_lost_or_new_too():
+    """Nothing is guessed when it isn't clear which plate is which: with a second plate lost in the same frame, or a
+    second new plate detection, every newcomer is a new track."""
+    first, moved = CARRIED_PLATE_BOXES[:2]
+    other_lost = Tracker(SETTINGS)
+    other_lost.update([bowl(first), bowl(STILL_PLATE_BOX)], [], AFTER_SHIFT_START, zone_of, 1280, 720)
+    after = other_lost.update([bowl(moved)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 1280, 720)
+    assert [(item["track_id"], item["entity_id"]) for item in after] == [(3, "plate-3")]
+
+    other_new = Tracker(SETTINGS)
+    other_new.update([bowl(first)], [], AFTER_SHIFT_START, zone_of, 1280, 720)
+    after = other_new.update([bowl(moved), bowl(STILL_PLATE_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 1280, 720)
+    assert sorted((item["track_id"], item["entity_id"]) for item in after) == [(2, "plate-2"), (3, "plate-3")]
+
+
+@pytest.mark.safety
+def test_a_lone_plate_keeps_its_track_anywhere_but_never_into_a_free_bin_slot_or_from_a_bin():
+    """A lone newcomer anywhere on the counter takes the lost plate's track. One in a free bin slot is that bin, whose
+    allergen profile must not be lost, and a bin's lost track never becomes a plate. (A newcomer in a clean stack is
+    covered by the clean-stack tests above: it is a new track with unknown origin.)"""
+    far = Tracker(SETTINGS)
+    far.update([bowl(KNIFE_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    after = far.update([bowl((0.7, 0.1, 0.8, 0.2))], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)
+    assert [(item["track_id"], item["entity_id"]) for item in after] == [(1, "plate-1")]
+
+    into_slot = Tracker(SETTINGS)
+    into_slot.update([bowl((0.2, 0.2, 0.3, 0.3))], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    after = into_slot.update([bowl(SLOT_BOX)], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)
+    assert [(item["track_id"], item["entity_id"], item["kind"]) for item in after] == [(2, "bin-4", "bin")]
+
+    from_bin = Tracker(SETTINGS)
+    from_bin.update([bowl(SLOT_BOX)], [], AFTER_SHIFT_START, zone_of, 640, 640)
+    after = from_bin.update([bowl((0.2, 0.2, 0.3, 0.3))], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)
+    assert [(item["track_id"], item["entity_id"], item["kind"]) for item in after] == [(2, "plate-1", "plate")]
+
+
+@pytest.mark.safety
+def test_a_carried_plate_starts_a_new_track_when_a_bin_is_lost_in_the_same_frame():
+    """A bowl lifted out of its slot is lost like the plate: the newcomer may be that bin, with its allergens, so it
+    must not take the plate's track (and ticket). Seen in the live run of 2026-10-24: the satay bowl moved while a plate
+    was lost."""
+    tracker = Tracker(SETTINGS)
+    tracker.update([bowl(SLOT_BOX), bowl((0.2, 0.2, 0.3, 0.3))], [], AFTER_SHIFT_START, zone_of, 640, 640)
+
+    after = tracker.update([bowl((0.22, 0.05, 0.32, 0.15))], [], AFTER_SHIFT_START + FRAME_MS, zone_of, 640, 640)
+
+    assert [(item["track_id"], item["entity_id"]) for item in after] == [(3, "plate-2")]
