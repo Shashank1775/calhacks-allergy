@@ -61,6 +61,13 @@ To match the props to it, point the camera straight down so the counter fills th
 
 `GET /zones` returns the zones in use.
 
+A PUT doesn't reach the partner's interactions step, which reads zone kinds once, at its first frame (`kitchen/interactions/events.py`):
+- Moving or resizing an existing zone works at once.
+- A new zone ID counts only after the runner restarts and loads `data/zones.json`. Until then the step treats it as `other`, so a newly drawn second washing area (`wash-2`) produces no wash edges. That leans toward HOLD.
+- Changing the kind of an existing zone ID also waits for a restart. Until then the step keeps the old kind, so a former wash still washes. That leans toward PASS.
+
+Set zones before service. After adding a new washing area, restart the runner. Do the same after changing any zone's kind.
+
 ## What happens here
 
 - Read frames from a video file, a webcam or the Pi camera (picamera2, since OpenCV can't open it on a Pi 5). Each frame gets `t_ms` from the injected `Clock`.

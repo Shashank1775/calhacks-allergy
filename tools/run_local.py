@@ -9,7 +9,9 @@ Reads: one golden scenario (contracts/scenarios/<name>.json); Kitchen from tests
        data/zones.json if saved from the web app, else kitchen/vision/default_zones.json), VISION_ settings
 Emits: the Orders HTTP API, plus GET /state: a read-only snapshot of every table in contracts/state-tables.md, with
        mode "replay" or "live"; gate states and spoken holds on stdout (FakeGate, FakeSpeaker); live: the Vision API,
-       whose PUT /zones saves the zones file and replaces the zones everywhere (kitchen.vision.zones.LiveZones)
+       whose PUT /zones saves the zones file and replaces the zones in the frame loop and the zone table
+       (kitchen.vision.zones.LiveZones). The interactions step reads zone kinds once, at its first frame: moving or
+       resizing a zone works at once, but a new zone ID (a second washing area) counts only after a restart
 Rules: fail closed: every verdict comes from kitchen.verdict, and the gate ticks every TICK_MS even after a failed
        scenario step, so it never freezes on its last state; no unanswered questions: the scenario's tickets are
        typed through the Orders API and its questions, like any tablet ticket; late changes recheck everything:
