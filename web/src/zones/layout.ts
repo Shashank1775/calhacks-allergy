@@ -131,11 +131,21 @@ export function bin_label(zone: Zone, entities: Entity[], bin_profiles: BinProfi
 
   const parts = [bin_id];
   if (entity) parts.push(entity.label);
-  if (profile) parts.push(profile_text(profile));
+  if (profile) parts.push(allergen_text(profile));
   return parts.join(" · ");
 }
 
-function profile_text(profile: BinProfile): string {
+/**
+ * The state's bins that no bin slot holds. A bowl is bin-<n> only while it sits in slot-<n>; anywhere else it's taken
+ * for a plate with a clean origin, which errs toward PASS, so the screen warns before a save (it doesn't block it).
+ */
+export function bins_without_slot(zones: Zone[], bin_profiles: BinProfile[]): BinProfile[] {
+  const slots = new Set(zones.filter((zone) => zone.kind === "bin_slot").map((zone) => zone.zone_id));
+  return bin_profiles.filter((profile) => !slots.has(profile.entity_id.replace(/^bin-/, "slot-")));
+}
+
+/** A bin's allergens in words, e.g. "Peanuts, Soybeans". */
+export function allergen_text(profile: BinProfile): string {
   if (profile.unknown) return "unknown, counts as every allergen";
   const allergens = Object.entries(profile.probabilities)
     .filter(([, probability]) => probability > 0)

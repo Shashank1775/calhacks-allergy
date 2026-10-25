@@ -804,6 +804,14 @@ a {
   font-size: 12px;
 }
 
+.zone_warnings {
+  margin: 0 0 12px;
+  padding: 8px 12px 8px 28px;
+  border: 2px dashed var(--recheck);
+  color: var(--recheck);
+  font-weight: 700;
+}
+
 .zone_actions {
   align-items: center;
   margin-bottom: 16px;
