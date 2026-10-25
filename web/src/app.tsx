@@ -10,11 +10,9 @@ import { HomeScreen } from "./home/home_screen";
 import { SummaryScreen } from "./summary/summary_screen";
 import { TabletScreen } from "./tablet/tablet_screen";
 import { ZonesScreen } from "./zones/zones_screen";
-import {GraphScreen} from "./graph/graph_screen";
-
+import { GraphScreen } from "./graph/graph_screen";
 
 export type Screen = "home" | "tablet" | "expo" | "summary" | "zones" | "graph";
-
 
 export function screen_for_path(path: string): Screen {
   const trimmed = path.replace(/\/+$/, "");
