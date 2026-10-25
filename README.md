@@ -43,7 +43,8 @@ The learned models aren't in git (nothing over 1 MB goes in git). They're zips o
 | | `laya_training.zip` | `data/laya_training/` | Laya training data |
 | [`lstm-models-v2_4`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/lstm-models-v2_4) | `boxpooled-v2_4.zip` | `data/models/lstm/boxpooled-v2_4/` | The shipped ConvGRU interaction classifier (`LSTM_MODEL_DIR`) |
 | | `boxpooled-v1.zip` | `data/models/lstm/boxpooled-v1/` | Its first version (the default `LSTM_MODEL_DIR`) |
-| [`vision-model-v1`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/vision-model-v1) | `stock-yolov8s.zip` | `data/models/stock-yolov8s/` | The laptop's YOLOv8s bundle (ONNX, the default `VISION_BUNDLE_DIR`) |
+| [`visionModelV3`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/visionModelV3) | `exp-4.pt` | `data/models/kitchen-v3/` (built below) | The laptop's detector: the partner's fine-tuned YOLO26s (fork, knife, spoon, bowl, hand), the default `VISION_BUNDLE_DIR` |
+| [`vision-model-v1`](https://github.com/Shashank1775/calhacks-allergy/releases/tag/vision-model-v1) | `stock-yolov8s.zip` | `data/models/stock-yolov8s/` | The stock YOLOv8s bundle (ONNX) |
 | | `stock-yolov8s-hailo8l.zip` | `data/models/stock-yolov8s-hailo8l/` | The Pi's Hailo-8L bundle |
 | | `yolov8s-weights.zip` | `data/weights/` | Stock YOLOv8s and YOLOv8s-pose weights and their ONNX exports |
 
@@ -62,12 +63,19 @@ gh release download lstm-models-v2_4 -p 'boxpooled-*.zip' -D data/models/lstm
 unzip -o data/models/lstm/boxpooled-v2_4.zip -d data/models/lstm
 unzip -o data/models/lstm/boxpooled-v1.zip -d data/models/lstm
 
-# Vision: the laptop's bundle, the Pi's Hailo-8L bundle and the stock weights
+# Vision: the stock bundle, the Pi's Hailo-8L bundle and the stock weights (pose.onnx comes from these)
 gh release download vision-model-v1 -p stock-yolov8s.zip -p stock-yolov8s-hailo8l.zip -D data/models
 unzip -o data/models/stock-yolov8s.zip -d data/models
 unzip -o data/models/stock-yolov8s-hailo8l.zip -d data/models
 gh release download vision-model-v1 -p yolov8s-weights.zip -D data
 unzip -o data/yolov8s-weights.zip -d data
+
+# Vision: the laptop's detector, exported to ONNX and bundled (--video only feeds the Hailo calibration frames)
+gh release download visionModelV3 -p exp-4.pt -D data/models/kitchen-v3/train
+uvx --from ultralytics==8.4.188 --with onnx --with onnxslim --with onnxruntime \
+    yolo export model=data/models/kitchen-v3/train/exp-4.pt format=onnx imgsz=640 opset=11 simplify=True
+uv run python -m kitchen.vision.bundle --name kitchen-v3 --weights custom --class-names fork,knife,spoon,bowl,hand \
+    --det-onnx data/models/kitchen-v3/train/exp-4.onnx --pose-onnx data/weights/yolov8s-pose.onnx --video data/recordings/<any>.mp4
 ```
 
 Each release's notes give every zip's size and sha256 (check one with `shasum -a 256 <zip>`), and each unzipped folder has a `data-manifest.json` with every file's size and sha256.

@@ -105,7 +105,7 @@ class VisionSettings:
 
     # Which backend runs the networks: "onnx" (laptop) or "hailo" (the Pi), and the deploy bundle both read.
     detector: str = "onnx"
-    bundle_dir: str = "data/models/stock-yolov8s"
+    bundle_dir: str = "data/models/kitchen-v3"
     # ONNX Runtime execution providers to try, in order (only those installed are used; the CPU is always last).
     onnx_providers: str = "CoreMLExecutionProvider,CPUExecutionProvider"
     camera_id: str = "cam0"
