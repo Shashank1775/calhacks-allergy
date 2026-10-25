@@ -5,7 +5,8 @@ Step:  vision
 Reads: kitchen.vision.run; FakeEntityStore and FakeClock (platform)
 Emits: nothing
 Rules: fail closed (a detector error stops the loop, never an empty frame; a consumer error never starves the
-       others); time runs forward (strictly increasing t_ms); deterministic output for one input
+       others; a bad zone change changes nothing); time runs forward (strictly increasing t_ms); deterministic output
+       for one input; known-clean source (a zone change never renames or re-origins a tracked entity)
 """
 
 import json
@@ -17,17 +18,26 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
 from kitchen.shared.clock import FakeClock
-from kitchen.shared.fakes import FakeEntityStore
-from kitchen.shared.models import validate
+from kitchen.shared.fakes import FakeEntityStore, FakeStateClient
+from kitchen.shared.models import Zone, validate
 from kitchen.vision import run as vision_run
 from kitchen.vision.common import Detection, SourceFrame, VisionSettings
-from kitchen.vision.run import FrameLoop, as_live, build_frame_loop, entity_store_consumer
-from kitchen.vision.server import VisionStatus
+from kitchen.vision.run import FrameLoop, as_live, build_frame_loop, entity_store_consumer, file_sha256
+from kitchen.vision.server import VisionStatus, create_app
+from kitchen.vision.zones import DEFAULT_ZONES_PATH, LiveZones, load_zones, push_zones, zone_record
 
 SETTINGS = VisionSettings(shift_start_ms=3000)
 KNIFE = Detection("knife", (0.4, 0.4, 0.5, 0.5), 0.9)
+
+
+@pytest.fixture(autouse=True)
+def run_in_an_empty_folder(tmp_path, monkeypatch):
+    """Run every test from an empty folder, so a data/zones.json saved on this machine can't change what the CLI
+    loads (without --zones it would come before the default layout)."""
+    monkeypatch.chdir(tmp_path)
 
 
 class FakeDetector:
@@ -136,6 +146,163 @@ def test_as_live_restamps_with_the_clock_and_keeps_time_moving_forward():
 
     # The fake clock doesn't move, so every frame is due at once and each is bumped just past the last.
     assert [f.t_ms for f in stamped] == [5000, 5001, 5002]
+
+
+# ---------- changing zones while the frame loop runs (PUT /zones) ----------
+
+ORIGIN = "http://localhost:5173"
+BIN_IN_SLOT_1 = Detection("bowl", (0.05, 0.1, 0.13, 0.24), 0.9)  # centre (0.09, 0.17): slot-1 in the default layout
+KNIFE_AT_PLATING = Detection("knife", (0.42, 0.5, 0.48, 0.6), 0.9)  # centre (0.45, 0.55): the plating spot
+
+
+def moved_layout() -> list[Zone]:
+    """The default layout with slot-1 and slot-2 swapped, and the pass and the plating spot swapped."""
+    zones = {zone.zone_id: zone for zone in load_zones(DEFAULT_ZONES_PATH)}
+    swaps = {"slot-1": "slot-2", "slot-2": "slot-1", "pass": "plating", "plating": "pass"}
+    return [
+        Zone(zone.zone_id, zone.kind, zones[swaps.get(zone.zone_id, zone.zone_id)].polygon) for zone in zones.values()
+    ]
+
+
+class RunningKitchen:
+    """A frame loop on the default layout with the Vision API in front, wired as kitchen.vision.run wires it."""
+
+    def __init__(self, save_path, detector):
+        self.zones = load_zones(DEFAULT_ZONES_PATH)
+        self.state = FakeStateClient()
+        push_zones(self.state, self.zones)
+        self.loop = build_frame_loop(SETTINGS, self.zones, [], detector=detector)
+        self.live = LiveZones(self.zones, save_path, self.state, self.loop.use_zones)
+        app = create_app(
+            VisionStatus("onnx"), lambda ticket_id: "plate-1", self.live.current, self.live.replace, [ORIGIN]
+        )
+        self.api = TestClient(app)
+        self.save_path = save_path
+        self._frame_id = 0
+
+    def step(self) -> dict:
+        """One frame, 100 ms after the last; returns its detections by entity ID."""
+        self._frame_id += 1
+        output = self.loop.step(frame(self._frame_id, self._frame_id * 100))
+        return {item["entity_id"]: item for item in output.observation["detections"]}
+
+    def table(self) -> dict:
+        """The zone table, by zone ID."""
+        return {zone.zone_id: zone for zone in self.state.list_zones()}
+
+
+def layout_body(zones: list[Zone]) -> dict:
+    """A PUT /zones body for `zones`."""
+    return {"zones": [zone_record(zone) for zone in zones]}
+
+
+def test_after_a_good_put_the_next_frame_uses_the_new_zones_and_entities_keep_their_ids(tmp_path):
+    kitchen = RunningKitchen(tmp_path / "zones.json", FakeDetector([BIN_IN_SLOT_1, KNIFE_AT_PLATING]))
+    before = kitchen.step()
+    assert {entity_id: item["zone"] for entity_id, item in before.items()} == {
+        "bin-1": "slot-1",
+        "tool-knife-1": "plating",
+    }
+
+    response = kitchen.api.put("/zones", json=layout_body(moved_layout()))
+    assert response.status_code == 200
+    assert response.json() == layout_body(moved_layout())
+
+    after = kitchen.step()
+    # The zones are the new layout's, but bin-1 is still bin-1 though slot-2 is drawn where it stands now, and no
+    # origin changed: origin is decided at first sighting only.
+    assert {entity_id: item["zone"] for entity_id, item in after.items()} == {
+        "bin-1": "slot-2",
+        "tool-knife-1": "pass",
+    }
+    assert {entity_id: item["origin"] for entity_id, item in after.items()} == {
+        entity_id: item["origin"] for entity_id, item in before.items()
+    }
+    assert kitchen.table() == {zone.zone_id: zone for zone in moved_layout()}
+    assert load_zones(kitchen.save_path) == moved_layout()
+    assert kitchen.api.get("/zones").json() == layout_body(moved_layout())
+
+
+@pytest.mark.safety
+def test_a_bad_put_changes_neither_the_lookup_the_file_nor_the_zone_table(tmp_path):
+    kitchen = RunningKitchen(tmp_path / "zones.json", FakeDetector([BIN_IN_SLOT_1, KNIFE_AT_PLATING]))
+    kitchen.live.replace(layout_body(kitchen.zones))  # saved once, as after an earlier good PUT
+    file_text = kitchen.save_path.read_text()
+    kitchen.step()
+
+    # Valid zones followed by one bad one: nothing of it may apply, not even the good part.
+    bad = layout_body(moved_layout())
+    bad["zones"].append({"zone_id": "slot-6", "kind": "bin_slot", "polygon": [[0.1, 0.1], [0.2, 0.2]]})
+    response = kitchen.api.put("/zones", json=bad)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "bad_zones"
+
+    after = kitchen.step()
+    assert {entity_id: item["zone"] for entity_id, item in after.items()} == {
+        "bin-1": "slot-1",
+        "tool-knife-1": "plating",
+    }
+    assert kitchen.save_path.read_text() == file_text
+    assert kitchen.table() == {zone.zone_id: zone for zone in kitchen.zones}
+    assert kitchen.api.get("/zones").json() == layout_body(kitchen.zones)
+
+
+@pytest.mark.safety
+def test_a_put_that_changes_a_zones_kind_is_a_422_and_changes_nothing(tmp_path):
+    """The interactions step learns zone kinds at startup, so a wash renamed "other" would still wash there."""
+    kitchen = RunningKitchen(tmp_path / "zones.json", FakeDetector([BIN_IN_SLOT_1, KNIFE_AT_PLATING]))
+    kitchen.step()
+
+    wash_as_other = [
+        Zone(zone.zone_id, "other" if zone.zone_id == "wash" else zone.kind, zone.polygon) for zone in kitchen.zones
+    ]
+    response = kitchen.api.put("/zones", json=layout_body(wash_as_other))
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "bad_zones"
+    assert "delete it and draw a new one" in response.json()["error"]["message"]
+
+    assert not kitchen.save_path.exists()
+    assert kitchen.table() == {zone.zone_id: zone for zone in kitchen.zones}
+    assert kitchen.api.get("/zones").json() == layout_body(kitchen.zones)
+    assert kitchen.loop.zone_of((0.1, 0.85)).kind == "wash"
+
+
+class DetectorThatChangesZones(FakeDetector):
+    """A FakeDetector that, on its second frame, changes the zones while the frame is being detected."""
+
+    def __init__(self, objects):
+        super().__init__(objects)
+        self.frames = 0
+        self.change_zones = None
+
+    def detect(self, frame):
+        self.frames += 1
+        if self.frames == 2:
+            self.change_zones()
+        return super().detect(frame)
+
+
+def test_a_zone_change_during_a_frame_applies_from_the_next_frame(tmp_path):
+    detector = DetectorThatChangesZones([KNIFE_AT_PLATING])
+    kitchen = RunningKitchen(tmp_path / "zones.json", detector)
+    detector.change_zones = lambda: kitchen.live.replace(layout_body(moved_layout()))
+
+    assert kitchen.step()["tool-knife-1"]["zone"] == "plating"
+    assert kitchen.step()["tool-knife-1"]["zone"] == "plating"  # the change landed while this frame ran
+    assert kitchen.step()["tool-knife-1"]["zone"] == "pass"
+
+
+def test_the_cli_without_zones_loads_the_default_layout_and_logs_its_sha256(tmp_path, monkeypatch, caplog):
+    video = tmp_path / "prep.avi"
+    write_video(video, frames=2)
+    monkeypatch.setattr("kitchen.vision.detect.open_detector", lambda settings: FakeDetector())
+
+    with caplog.at_level("INFO", logger="kitchen.vision.run"):
+        assert vision_run.main(["--video", str(video), "--out", str(tmp_path / "frames.jsonl")]) == 0
+
+    assert f"from {DEFAULT_ZONES_PATH} (sha256 {file_sha256(DEFAULT_ZONES_PATH)})" in caplog.text
+    first = json.loads((tmp_path / "frames.jsonl").read_text().splitlines()[0])
+    assert first["detections"][0]["zone"] == "plating"  # the knife at (0.45, 0.45), in the default layout
 
 
 def write_video(path, frames=12):

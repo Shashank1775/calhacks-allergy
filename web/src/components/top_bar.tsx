@@ -1,4 +1,4 @@
-/** The black band across the top: name and the four paths. */
+/** The black band across the top: name and the five paths. */
 import type { Screen } from "../app";
 
 const LINKS: { screen: Screen; href: string; text: string }[] = [
@@ -6,6 +6,7 @@ const LINKS: { screen: Screen; href: string; text: string }[] = [
   { screen: "tablet", href: "/tablet", text: "TABLET" },
   { screen: "expo", href: "/expo", text: "EXPO" },
   { screen: "summary", href: "/summary", text: "SUMMARY" },
+  { screen: "zones", href: "/zones", text: "LAYOUT" },
 ];
 
 export function TopBar({ current }: { current: Screen }) {
