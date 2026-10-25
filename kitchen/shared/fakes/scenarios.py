@@ -111,5 +111,5 @@ def scenario_entity(entity_id: str, origin: str, first_seen_t_ms: int) -> Entity
         "first_seen_t_ms": first_seen_t_ms,
         "last_seen_t_ms": first_seen_t_ms,
         "ticket_id": None,
-        "allergen_profile": starting_profile(kind, origin),
+        "allergen_profile": starting_profile(kind),
     }

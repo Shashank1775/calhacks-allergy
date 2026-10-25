@@ -60,12 +60,12 @@ Run each one start to finish. Every plate is a new plate from the clean stack: p
 | 2 | **Knife-satay hold:** ticket "peanut allergy". Dip the knife in the satay bin (`bin-1`), touch the plate, plate to the pass | HOLD on expo, with the chain from `bin-1` through the knife to the plate. The Pi prints `[voice] Hold seven, peanut` (with your table number) |
 | 3 | **Wash resets the knife:** after 2, rinse the knife in the wash zone, then touch a new plate with it | The chain shows the wash. A rinse scales the knife's peanut by (1 − p), it doesn't zero it: in the scripted scene, an allergy ticket still holds (clean-confidence 0.86 against 0.95). Rehearse the ticket you'll show |
 | 4 | **"Also no dairy" rechecks:** ticket "peanut allergy". Touch the plate with a clean tool from the rack that dipped in the butter (`bin-2`), and it passes. Then on the tablet, **Amend a ticket**: "also no dairy" | RECHECKING, then HOLD for milk on the new revision |
-| 5 | **A tool appearing mid-shift holds:** bring a second knife into view (not from the rack) and touch a plate with it | HOLD: unknown history, until the knife is washed |
+| 5 | **A tool appearing mid-shift holds only on evidence:** ticket "peanut allergy". Bring a second knife into view (not from the rack) and touch a plate with it, then dip it in the satay bin (`bin-1`) and touch a new plate | First plate PASS: an unknown origin alone never holds. Second plate HOLD for peanut, with the chain from `bin-1` through the new knife |
 
 ## Habits
 
-- **Props in view in the first 3 s:** everything seen in the first 3 s after `LIVE` starts clean. Anything that shows up later has unknown history and holds.
-- **New plates come from the clean stack.** A plate that appears anywhere else holds.
-- **Move steadily, and keep hands off the top of tools.** A tool the tracker loses comes back with a new ID and unknown history, and holds.
+- **Props in view in the first 3 s:** everything seen in the first 3 s after `LIVE` gets `origin: shift_start`. Anything that shows up later gets `origin: unknown`, and starts clean all the same.
+- **New plates come from the clean stack.** (Since 2026-10-24 a plate that appears anywhere else starts clean too.)
+- **Move steadily, and keep hands off the top of tools.** A tool the tracker loses comes back with a new ID that starts clean, so the allergen it carried is lost and its plate can pass.
 - **A late touch can show PASS for a fraction of a second.** An edge that lands just after the plate reached the pass rechecks it and turns it to HOLD. Don't hand a plate over the instant it turns green.
 - **If anything breaks**, rerun the check and follow its fixes. Frames stopping shows FAULT on the gate, and any failure ends in HOLD or FAULT, never PASS. After restarting the runner, put the props back in view for its first 3 s.

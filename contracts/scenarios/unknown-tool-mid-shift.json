@@ -1,9 +1,8 @@
 {
   "scenario_id": "unknown-tool-mid-shift",
-  "description": "A spoon first appears mid-shift, not from the clean stack (unknown history), and touches the plate. Must hold even though no allergen edge is observed.",
+  "description": "A spoon first appears mid-shift, not from the clean stack (unknown origin), and touches the plate. No edge carries an allergen to it, so it starts clean and the plate passes: an unknown origin alone never holds. Contrast with unknown-tool-carries-sesame.",
   "tags": [
-    "known-clean-source",
-    "fail-closed"
+    "known-clean-source"
   ],
   "bins": [
     {
@@ -71,13 +70,8 @@
     {
       "plate_id": "plate-t4",
       "ticket_revision": 1,
-      "decision": "hold",
-      "allergens_reached": [
-        "sesame"
-      ],
-      "reason_codes": [
-        "unknown_history"
-      ]
+      "decision": "pass",
+      "allergens_reached": []
     }
   ]
 }

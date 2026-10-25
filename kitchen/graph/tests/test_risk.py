@@ -6,9 +6,9 @@ Step:  provenance graph
 Reads: kitchen.graph (LiveRisk, ProvenanceGraph); FakeStateClient, FakeClock and the golden scenarios (kitchen.shared);
        VerdictService (kitchen.verdict), to show a risk row doesn't judge a plate again
 Emits: nothing
-Rules: known-clean source (unknown history shows unknown until a wash, and an entity the database doesn't hold yet
-       is waited for, never shown clean); fail closed (an error writes nothing and never shows clean); the verdict is
-       untouched (no row changes what the graph answers or moves an entity)
+Rules: known-clean source (unknown origin shows only what an edge gave it, and an entity the database doesn't
+       hold yet is waited for, never shown clean); fail closed (an error writes nothing and never shows clean); the
+       verdict is untouched (no row changes what the graph answers or moves an entity)
 """
 
 import threading
@@ -149,34 +149,33 @@ def test_versions_count_the_rows_of_each_entity():
 
 
 @pytest.mark.safety
-def test_unknown_history_shows_unknown_until_washed():
-    """Known-clean source: a mid-shift spoon may carry anything, and says so until a wash resets it."""
+def test_unknown_origin_shows_clean_until_an_edge_gives_it_risk():
+    """Known-clean source: a mid-shift spoon shows only what the graph can show. Touching the knife moves nothing; once
+    it scoops satay it shows peanut like any tool. Nothing is ever flagged unknown for its origin alone."""
     shift = Shift([edge("e-spoon", 2000, "tool-spoon-9", "tool-knife-1")], unknown=["tool-spoon-9"])
     shift.risk.update_once()
 
-    assert shift.state.get_entity("tool-spoon-9")["allergen_profile"]["unknown"] is True
-    knife = shift.state.get_entity("tool-knife-1")["allergen_profile"]
-    assert knife["probabilities"]["sesame"] == pytest.approx(0.9)  # what the spoon may have left on it
-    assert knife["unknown"] is False  # only the unknown-origin entity itself is flagged: the graph reads the flag back
+    assert shift.shown("tool-spoon-9") == {}
+    assert shift.shown("tool-knife-1") == {}
+    assert shift.state.get_entity("tool-spoon-9")["allergen_profile"]["unknown"] is False
 
-    shift.state.record_interaction(wash("e-rinse", 3000, "tool-spoon-9"))
+    shift.state.record_interaction(edge("e-scoop-9", 3000, "tool-spoon-9", "bin-1", "transfer.scoop", 0.95, "b_to_a"))
     shift.risk.update_once()
 
     spoon = shift.state.get_entity("tool-spoon-9")["allergen_profile"]
     assert spoon["unknown"] is False
-    assert spoon["probabilities"]["sesame"] == pytest.approx(0.02)
+    assert spoon["probabilities"]["peanut"] == pytest.approx(0.931)
 
 
 @pytest.mark.safety
 def test_a_tiny_risk_is_never_shown_as_clean():
-    """Two rinses leave 0.04% of a spoon's unknown history. Rounded to 3 decimals that is 0, which the overlay would
+    """Two rinses leave 0.04% of the satay a knife scooped. Rounded to 3 decimals that is 0, which the overlay would
     color clean, so the smallest number shown is 0.001."""
-    washes = [wash("e-rinse-1", 3000, "tool-spoon-9"), wash("e-rinse-2", 4000, "tool-spoon-9")]
-    shift = Shift(washes, unknown=["tool-spoon-9"])
+    shift = Shift([scoop(), wash("e-rinse-1", 3000), wash("e-rinse-2", 4000)])
 
     shift.risk.update_once()
 
-    assert shift.shown("tool-spoon-9")["sesame"] == 0.001
+    assert shift.shown("tool-knife-1")["peanut"] == 0.001
 
 
 def test_a_risk_row_moves_nothing():
@@ -290,7 +289,7 @@ def test_an_entity_the_database_lacks_waits_for_its_registration():
 
     shift.state.register_entity(scenario_entity("tool-spoon-9", "unknown", 500))
     assert shift.risk.update_once() is True
-    assert shift.shown("tool-spoon-9")["sesame"] == pytest.approx(0.02)
+    assert shift.shown("tool-spoon-9") == {}  # a rinse can't add risk, and unknown origin starts clean
 
 
 @pytest.mark.safety

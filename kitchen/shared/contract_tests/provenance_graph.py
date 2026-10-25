@@ -4,7 +4,7 @@ Owner: platform (agents)
 Step:  shared
 Reads: the make_graph and make_unavailable_graph fixtures; contracts/scenarios/*.json
 Emits: pytest tests marked `contract` (and `safety` where a safety rule is at stake), one per golden scenario
-Rules: time runs forward (chains in time order); known-clean source (unknown-history ancestors reported); fail closed
+Rules: time runs forward (chains in time order); known-clean source (unknown origin starts clean); fail closed
        (GraphUnavailable on failure); a scenario's expected allergens must be found, and its expected passes must
        stay passable for the plain-code verdict (clean-confidence = 1 - sum of forbidden allergens' probabilities)
 
@@ -144,7 +144,8 @@ def test_expected_chains_are_found(make_graph, scenario):
 @pytest.mark.safety
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=SCENARIO_IDS)
 def test_unknown_ancestors_are_the_expected_unknown_history_entities(make_graph, scenario):
-    """Known-clean source: an unwashed unknown-history entity in a plate's past is reported, and nothing else is."""
+    """Known-clean source: only a scenario expecting an unknown_history hold has unknown ancestors. A tool, hand or
+    plate of unknown origin starts clean, so with no such hold expected none is reported."""
     graph = make_graph(scenario)
     for plate_id in _plates(scenario):
         ancestors = set(graph.unknown_ancestors(plate_id, _pass_time(scenario, plate_id)))
@@ -193,8 +194,8 @@ def test_subgraph_is_valid_and_never_reaches_past_as_of(make_graph, scenario):
 def test_subgraph_nodes_start_as_the_scenario_says(make_graph, scenario):
     """Known-clean source: each node's origin and start profile are what the shift says, since Laya reads only those.
 
-    A bin starts with its profile; a late entity of unknown origin starts unknown; a clean_stack entity and every
-    other tool, hand or plate start clean. A graph that reported everything clean would blind the plate check.
+    A bin starts with its profile. Every tool, hand or plate starts clean, a late entity of unknown origin included
+    (it keeps that origin): only an edge gives it risk. A graph that reported a bin clean would blind the plate check.
     """
     bins = {entry["entity_id"]: entry["allergen_profile"] for entry in scenario["bins"]}
     late = {entry["entity_id"]: entry.get("origin", "unknown") for entry in scenario.get("late_entities", [])}
@@ -206,9 +207,6 @@ def test_subgraph_nodes_start_as_the_scenario_says(make_graph, scenario):
                 assert node["origin"] == "shift_start", entity_id
                 assert start["unknown"] is False, entity_id
                 assert same_profile(start["probabilities"], bins[entity_id]["probabilities"]), entity_id
-            elif late.get(entity_id) == "unknown":
-                assert node["origin"] == "unknown", entity_id
-                assert start["unknown"] is True, entity_id
             else:
                 assert node["origin"] == late.get(entity_id, "shift_start"), entity_id
                 assert start["unknown"] is False, entity_id

@@ -53,14 +53,14 @@ sim world ─▶ scenarios ─▶ graph and verdict tests        sim world ─�
 
 These nine rules override everything. Tests guarding them carry the `safety` marker. Everywhere else, rules are referred to by their bold name.
 
-1. **Fail closed.** A missing input, an error, a timeout, a stale track or an unknown entity history produces **HOLD**, never PASS.
+1. **Fail closed.** A missing input, an error, a timeout or a stale track produces **HOLD**, never PASS.
 2. **Plain-code verdict.** `hold = forbidden_allergen_flagged or laya_flagged or confidence < ticket.pass_threshold or any_error`, where a forbidden allergen is flagged when its probability at the plate is at least `1 − pass_threshold` (by the partner graph's reachability, or by Laya's plate check for `laya_flagged`), and a Laya failure counts as an error. Learned models (Laya, the ConvLSTM) only produce its inputs: a low-confidence input becomes a one-tap question or a HOLD, never a PASS. Laya's final plate check is **stricter only**: it can add a hold reason (`laya_flagged`) and its failure holds (`laya_unavailable`), but it can never remove a hold reason or cause a PASS.
 3. **No unanswered questions.** A ticket whose parse has a field below `question_threshold` can't be sent until a person answers it.
 4. **Allergens, not contacts.** Tickets store forbidden allergens, never forbidden contacts. The graph decides which contacts matter.
 5. **Time runs forward.** A contamination path is valid only if its edges are in increasing time order.
 6. **Blind classifier.** The interaction classifier is allergen-blind, and the learned one is also object-blind. Feature vectors and clips carry no allergen fields (the schemas forbid extra fields). The ConvLSTM sees only box masks and a change mask over time: no object pixels, classes or kinds, so it learns interaction (touch plus movement), not spoons and forks. Sim never renders realistic utensils.
 7. **Rules stay as the fallback.** The ConvLSTM replaces zone rules only after it beats them on held-out clips, and zone rules keep running whenever it is unavailable.
-8. **Known-clean source.** Tools, hands and plates are clean at shift start. After that, an entity starts clean only if it's first seen leaving a `clean_stack` zone (clean-plate stack, utensil rack). Anything else that appears mid-shift, including a re-acquired track (which always gets a new ID), has **unknown** history and counts as carrying every allergen until a wash resets it.
+8. **Known-clean source.** Every entity's `origin` is fixed when it's first seen: `shift_start`, `clean_stack` (first seen leaving the clean-plate stack or utensil rack) or `unknown` (anything else that appears mid-shift, including a re-acquired track, which always gets a new ID). Tools, hands and plates start clean **whatever their origin**: an unknown origin alone never holds a plate. A plate holds only on evidence, a time-forward path in the graph that carries a forbidden allergen to it (the owner's call, 2026-10-24). A bin's contents come only from its profile, so a bin with no profile counts as carrying every allergen until a wash.
 9. **Late changes recheck everything.** Amending a ticket ("also no dairy") re-runs the verdict against the plate's full history.
 
 Graph math, for reference: noisy-OR, `P_dst(a) ← 1 − (1 − P_dst(a))·(1 − k·p·P_src(a))` per transfer edge (action efficiency `k`, edge probability `p`). A wash does `P(a) ← (1 − p)·P(a)`, and a wash is a self-loop edge (`a_id == b_id`). The partner owns the details (see Open questions: unknown history, equal timestamps).
@@ -118,7 +118,7 @@ Use a stronger model for `safety-critical` issues and anything with tricky concu
 - CI is green and the acceptance criteria are met;
 - the tests would fail if the feature broke;
 - it touches only this team's folders and no partner folder, and is no bigger than the issue;
-- for `safety-critical` PRs: every error, timeout, missing input or unknown history ends in HOLD (no bare `except`, no `None` treated as clean); no model output can remove a hold reason; each safety rule touched has a `safety` test.
+- for `safety-critical` PRs: every error, timeout or missing input ends in HOLD (no bare `except`, no `None` treated as clean); no model output can remove a hold reason; each safety rule touched has a `safety` test.
 
 Otherwise post one numbered list of fixes.
 
@@ -252,7 +252,7 @@ Each has a default we run with until whoever owns it decides otherwise.
 | What backs Laya | Two fine-tuned copies of `convaiinnovations/laya`, run locally: ticket notes ([decision](docs/decisions/laya-for-notes-and-labels.md)) and the final plate check ([decision](docs/decisions/laya-plate-check.md)) | settled |
 | Database | SpacetimeDB 2.13 running locally (database `allergen-yhz81`, Rust module); Python reaches it with HTTP reducer calls plus polling | partner |
 | Contact and wipe edges | Allergens can move both ways | partner |
-| Unknown history | An unknown-history entity carries every allergen with probability 1 | partner |
+| Unknown history | A tool, hand or plate of unknown origin starts clean, and only a graph path holds its plate. A bin with no profile carries every allergen with probability 1 | settled (owner, 2026-10-24) |
 | Equal timestamps | Edges order by `t_start_ms`, `t_end_ms`, `event_id`; a tied wash goes before the transfer | partner |
 | ConvLSTM output | P(contact) → `transfer.contact`, P(material moved) → `transfer.scoop`; contact without movement still counts as a possible trace transfer | partner |
 | Clip geometry | 128 × 128, full frame, 16 steps over about 1 s, gain 4, blur 1.5 px, no trail | partner; sim and vision follow |

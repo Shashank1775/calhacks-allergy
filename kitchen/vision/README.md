@@ -127,7 +127,7 @@ VISION_BUNDLE_DIR=data/models/kitchen-v2 uv run python -m kitchen.vision.run --v
 
 ## The experimental motion tracker
 
-The default tracker (`VISION_TRACKER=iou`) matches each detection to a track's last box. A utensil moving more than its own width between frames then gets a new ID, with unknown history, every frame. `VISION_TRACKER=motion` is a candidate fix, **off by default** until real overhead footage shows it helps. It changes how tracks are matched, never what is emitted (a box is always the detection's own):
+The default tracker (`VISION_TRACKER=iou`) matches each detection to a track's last box. A utensil moving more than its own width between frames then gets a new ID, with unknown origin, every frame, and loses what the old ID carried. `VISION_TRACKER=motion` is a candidate fix, **off by default** until real overhead footage shows it helps. It changes how tracks are matched, never what is emitted (a box is always the detection's own):
 
 - **Prediction.** A track seen in the last frame or two is matched at its predicted box: its last box moved by its velocity.
 - **Recent first.** Those recent tracks pick first. A track lost for longer only gets the detections left over.
@@ -137,7 +137,7 @@ The default tracker (`VISION_TRACKER=iou`) matches each detection to a track's l
 - **No re-matching across a crossing.** A lost track never takes a detection that overlaps a knife matched this frame, or that a moving track could also claim. That covers two knives crossing, or swapping places.
 - **Stricter identity guards.** The ID-switch guard and the clean-stack loss count cover all tool classes together, so a knife the detector relabels "spoon" can't start clean. And a pose left/right wrist swap starts both hands over as new, unknown hands.
 
-Anything ambiguous starts a new track with unknown history: a HOLD, never a guessed identity.
+Anything ambiguous starts a new track with unknown origin, never a guessed identity. The new ID starts clean (safety rule 8), so what the old one carried is lost.
 
 The simulation measured the repo's tracker on synthetic boxes with jitter, misses and score noise, at 10, 15 and 30 fps:
 
@@ -266,7 +266,7 @@ Unverified until the device is connected: `PiCameraSource` (tested against a sta
 
 ## Watch out for
 
-- Hands occlude tools, so ByteTrack switches IDs and causes unknown-history holds. Safe, but it hurts the demo: mount the camera overhead and tune the track buffer. The ID-switch guard makes this stricter: a plate taken from the stack while any bowl or plate (a bin too) is occluded, or a wrist hidden for over a second, comes back `unknown` and holds until washed.
+- Hands occlude tools, so ByteTrack switches IDs. Since 2026-10-24 an `unknown` origin starts clean (safety rule 8), so a switch no longer holds a plate; instead what the old ID carried is lost, and a dirty tool that switches IDs can pass a plate. Mount the camera overhead and tune the track buffer. The ID-switch guard still marks a plate taken from the stack while any bowl or plate (a bin too) is occluded, or a wrist hidden for over a second, as `unknown`; that origin is now information only.
 - What no tracker catches: an object hidden for longer than `track_lost_ms` (a knife covered by a hand the whole way) while it is carried into a clean stack comes back `clean_stack`. So can an object swapped for another at the same spot while hidden, which then takes over the hidden one's track. Keep the clean stack where hands don't linger.
 - A wrist is not the contact point. The hand box is a square (`VISION_HAND_BOX_SIZE`) placed beyond the wrist, away from the elbow, and shifted back inside the frame at the edges.
 - COCO pose is trained on people seen from the front. From straight overhead it may find few wrists: measure it on the first real recording before the demo, and tune `VISION_WRIST_MIN_CONFIDENCE` only upward if it invents hands.

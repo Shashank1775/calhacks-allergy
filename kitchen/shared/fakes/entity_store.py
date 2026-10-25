@@ -4,8 +4,8 @@ Owner: platform (agents)
 Step:  shared
 Reads: ObservationFrames (validated against contracts/schemas on ingest); a Clock for last_sync_t_ms
 Emits: Entity dicts through get() and snapshot(); register_entity and move_entity calls to the StateClient it syncs to
-Rules: known-clean source: never deletes an entity and never changes first_seen_t_ms or origin; only a tool, hand or
-       plate first seen with a clean origin starts clean, everything else (bins too) starts unknown; a failed sync
+Rules: known-clean source: never deletes an entity and never changes first_seen_t_ms or origin; a tool, hand or plate
+       starts clean whatever its origin, and a bin starts unknown until its bin profile joins in; a failed sync
        leaves last_sync_t_ms stale so health checks see the outage (fail closed)
 """
 
@@ -17,14 +17,15 @@ from kitchen.shared.interfaces import Clock, StateClient, StateUnavailable
 from kitchen.shared.models import AllergenProfile, Entity, EntityState, ObservationFrame, validate
 
 
-def starting_profile(kind: str, origin: str) -> AllergenProfile:
+def starting_profile(kind: str) -> AllergenProfile:
     """The allergen profile an entity has when first seen, before the graph or a bin profile says more.
 
-    Tools, hands and plates are clean only with a known-clean origin (shift_start or clean_stack). Anything else is
-    unknown, which counts as carrying every allergen (safety rule: known-clean source). Bins are unknown here too:
-    what a bin holds comes from its bin profile, and nothing here knows it.
+    Tools, hands and plates start clean whatever their origin, unknown included: only an edge in the graph can give
+    one risk, so a plate holds on evidence, never on an unknown origin alone (safety rule: known-clean source). The
+    origin is still recorded and never changes. Bins are unknown here: what a bin holds comes from its bin profile,
+    and nothing here knows it.
     """
-    if kind != "bin" and origin in ("shift_start", "clean_stack"):
+    if kind != "bin":
         return {"probabilities": {}, "unknown": False, "source": "shift_start_clean"}
     return {"probabilities": {}, "unknown": True, "source": "unknown_history"}
 
@@ -143,5 +144,5 @@ def new_entity(detection: dict, t_ms: int) -> Entity:
         "first_seen_t_ms": t_ms,
         "last_seen_t_ms": t_ms,
         "ticket_id": None,
-        "allergen_profile": starting_profile(detection["kind"], detection["origin"]),
+        "allergen_profile": starting_profile(detection["kind"]),
     }

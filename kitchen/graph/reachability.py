@@ -1,11 +1,11 @@
-"""Exact reachability: allergens reaching a plate with their chains, the plate's subgraph for Laya, and unknown-history ancestors.
+"""Exact reachability: allergens reaching a plate with their chains, its subgraph for Laya, and its unknown ancestors.
 
 Owner: partner (human). First version written by an agent at the owner's request (2026-10-24).
 Step:  provenance graph
 Reads: start profiles and time-ordered edges (graph.py); Carried (propagate.py)
 Emits: allergen_reach records (ProvenanceGraph.reach), plate_subgraph records (subgraph), unknown ancestor IDs
 Rules: time runs forward: chains are in time order and the subgraph holds only time-forward paths into the plate;
-       known-clean source: every unwashed unknown-history ancestor is reported
+       known-clean source: every unwashed ancestor of unknown origin and unknown contents is reported
 """
 
 from kitchen.graph.propagate import UNITS, Carried, flows, is_wash
@@ -15,8 +15,8 @@ from kitchen.shared.models import AllergenReach, Entity, InteractionEvent, Plate
 def reach_records(carried: Carried, plate_id: str) -> list[AllergenReach]:
     """Every allergen the plate may carry (probability above 0), with its strongest chain from a bin.
 
-    An allergen that came only from unknown history or wash residue has an empty chain: there is no source to name.
-    unknown_ancestors() names the unknown-history entities instead.
+    An allergen that came only from unknown contents or wash residue has an empty chain: there is no source to name.
+    unknown_ancestors() names the entities of unknown contents instead.
     """
     records = []
     for unit in UNITS:
@@ -46,7 +46,7 @@ def chain_steps(steps: list, unit: str) -> list[dict]:
 
 
 def unknown_ancestors(carried: Carried, plate_id: str) -> list[str]:
-    """The unknown-history entities whose unwashed state reached the plate, sorted."""
+    """The entities of unknown origin and unknown contents whose unwashed state reached the plate, sorted."""
     return sorted(carried.unknown_from[plate_id])
 
 
