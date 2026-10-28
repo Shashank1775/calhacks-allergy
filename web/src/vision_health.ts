@@ -1,5 +1,6 @@
 /**
- * Watches vision's GET /health, so the gate panel shows FAULT when the camera stops.
+ * Watches vision's GET /health, so the gate panel shows FAULT when the camera stops, and how far
+ * vision's frames have got, so it can age out a plate the newest frames no longer show.
  *
  * Reads: GET <WEB_VISION_URL>/health → {fps, detector, last_frame_t_ms}.
  * Rules: fail closed. Health is judged by when last_frame_t_ms last changed, on our own clock
@@ -12,13 +13,17 @@ import { vision_url } from "./api/http";
 /** "not_used": no vision URL is set (a replay), so there is no camera to watch. */
 export type VisionHealth = "ok" | "stale" | "not_used";
 
+/** The health, and the newest last_frame_t_ms read (vision's frame clock), or null before any. */
+export type VisionStatus = { health: VisionHealth; last_frame_t_ms: number | null };
+
 /** Same limit as GateSettings.health_limit_ms. */
 export const HEALTH_LIMIT_MS = 1000;
 export const HEALTH_POLL_MS = 250;
 
-export function useVisionHealth(): VisionHealth {
+export function useVisionHealth(): VisionStatus {
   const base = vision_url();
   const [health, set_health] = useState<VisionHealth>(base ? "stale" : "not_used");
+  const [last_frame_t_ms, set_last_frame_t_ms] = useState<number | null>(null);
 
   useEffect(() => {
     if (!base) return;
@@ -33,6 +38,7 @@ export function useVisionHealth(): VisionHealth {
       if (frame !== null && frame !== last_frame) {
         last_frame = frame;
         last_change_at = now;
+        set_last_frame_t_ms(frame);
       }
       set_health(last_frame !== null && now - last_change_at <= HEALTH_LIMIT_MS ? "ok" : "stale");
     }
@@ -45,7 +51,7 @@ export function useVisionHealth(): VisionHealth {
     };
   }, [base]);
 
-  return health;
+  return { health, last_frame_t_ms };
 }
 
 /** last_frame_t_ms from one health poll, or null if the poll failed in any way. */

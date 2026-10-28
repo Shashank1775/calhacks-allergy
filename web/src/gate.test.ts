@@ -159,3 +159,28 @@ describe("a plate counts at the pass only while vision still tracks it", () => {
     expect(gate_view("live", "stale", tables).state).toBe("fault");
   });
 });
+
+describe("a plate's unseen time runs on vision's newest frame too", () => {
+  it("safety: a plate whose rows stopped isn't at the pass once vision's newest frame is over PLATE_LOST_MS later", () => {
+    // The plate's last row (t_ms 2) says pass and no newer rows have landed: frames resumed on a scene without it.
+    const tables = kitchen(pass, "pass");
+    expect(gate_view("live", "ok", tables, 2 + PLATE_LOST_MS).state).toBe("pass");
+
+    const newest_frame_t_ms = 2 + PLATE_LOST_MS + 1;
+    expect(plates_at_pass(tables, newest_frame_t_ms)).toEqual([
+      { plate_id: pass.plate_id, unseen_ms: PLATE_LOST_MS + 1 },
+    ]);
+    expect(gate_view("live", "ok", tables, newest_frame_t_ms).state).toBe("idle");
+  });
+
+  it.each([-150, 200])("keeps a plate seen in every frame at the pass when health is %i ms off its rows", (lead_ms) => {
+    // Health read a moment before the newest rows landed (-150), or ahead of them by the entity store's sync (200).
+    const tables = kitchen(pass, "pass");
+    tables.entity_state.push(at(pass.plate_id, "pass", 5000));
+    expect(gate_view("live", "ok", tables, 5000 + lead_ms).state).toBe("pass");
+  });
+
+  it("uses the rows alone without a frame time", () => {
+    expect(gate_view("live", "not_used", kitchen(pass, "pass"), null).state).toBe("pass");
+  });
+});

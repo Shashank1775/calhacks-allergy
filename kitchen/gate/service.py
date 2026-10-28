@@ -110,18 +110,25 @@ def latest_verdict(verdicts: list[dict], plate_id: str) -> dict | None:
     return latest
 
 
-def plates_at_pass(state) -> list[tuple[dict, int]]:
+def plates_at_pass(state, newest_frame_t_ms: int | None = None) -> list[tuple[dict, int]]:
     """Each plate whose latest zone is a pass zone, with how long it had gone unseen at vision's newest sighting.
 
     A plate lifted out of view keeps a last row that says pass, and nothing writes another, so its last zone alone
     can't say it left. Vision ends a track once its object goes unseen for track_lost_ms and never revives it, so
     read_pass takes a plate unseen for over plate_lost_ms as gone from the pass, and one unseen for up to
-    lost_plate_crowds_ms as maybe still there. Unseen time is measured against the newest last_seen_t_ms of any entity
-    (vision's frame clock), not the gate's clock, so database or sync lag can't age out a plate vision still has.
+    lost_plate_crowds_ms as maybe still there.
+
+    Unseen time is measured on vision's frame clock, not the gate's, so database or sync lag can't age out a plate
+    vision still has. "Now" on that clock is the later of the newest last_seen_t_ms of any entity and
+    `newest_frame_t_ms`, vision's /health last_frame_t_ms (None: the rows alone). The rows alone can't advance while
+    vision sees nothing, so when frames resume on a scene without the plate, its last row would still count until
+    the first new rows landed; the frame time ages it out at once.
     """
     pass_zones = {zone.zone_id for zone in state.list_zones() if zone.kind == "pass"}
     entities = state.list_entities()
     newest_t_ms = max((entity["last_seen_t_ms"] for entity in entities), default=0)
+    if newest_frame_t_ms is not None:
+        newest_t_ms = max(newest_t_ms, newest_frame_t_ms)
     return [
         (entity, newest_t_ms - entity["last_seen_t_ms"])
         for entity in entities
@@ -129,11 +136,11 @@ def plates_at_pass(state) -> list[tuple[dict, int]]:
     ]
 
 
-def read_pass(state, settings: GateSettings) -> dict:
+def read_pass(state, settings: GateSettings, newest_frame_t_ms: int | None = None) -> dict:
     """What's at the pass right now, read from the database: plate, its latest verdict, and its ticket.
 
     Returns the GateInputs fields other than the ages. A plate with no ticket has no verdicts the gate can trust, so
-    it reads as no verdict (idle, closed).
+    it reads as no verdict (idle, closed). `newest_frame_t_ms` is vision's newest frame time (plates_at_pass).
 
     Two windows on how long a plate at the pass has gone unseen (plates_at_pass):
     - Up to plate_lost_ms (vision's track_lost_ms) it is at the pass, and only such a plate's verdict can drive the
@@ -146,7 +153,7 @@ def read_pass(state, settings: GateSettings) -> dict:
     that plate until the hidden one is seen again; the demo keeps one plate at the pass at a time. The cost: after a
     plate is lifted out, the next plate can't pass for up to lost_plate_crowds_ms. A stale camera is still fault.
     """
-    plates = plates_at_pass(state)
+    plates = plates_at_pass(state, newest_frame_t_ms)
     crowding = [plate for plate, unseen_ms in plates if unseen_ms <= settings.lost_plate_crowds_ms]
     at_pass = [plate for plate, unseen_ms in plates if unseen_ms <= settings.plate_lost_ms]
     view = {"plate_id": None, "verdict": None, "current_revision": None, "ticket_number": None, "crowded": False}
@@ -171,7 +178,8 @@ class GateService:
     """The gate loop: call tick() a few times a second. Each tick reads the pass, shows the state, and speaks holds.
 
     `read_health` returns vision's /health `last_frame_t_ms`. Vision's clock isn't ours, so health is judged by when
-    that value last changed, measured on our own clock.
+    that value last changed, measured on our own clock. The value itself is on the entity rows' clock (vision stamps
+    both with frame times), so it is also how far vision's frames have got when ageing out plates (read_pass).
     """
 
     def __init__(self, state, driver, speaker, clock, read_health, settings: GateSettings | None = None):
@@ -192,7 +200,7 @@ class GateService:
         now = self.clock.now_ms()
         self._check_health(now)
         try:
-            view = read_pass(self.state, self.settings)
+            view = read_pass(self.state, self.settings, self._last_frame_t_ms)
             self._state_ok_ms = now
             state_age = 0
         except Exception:  # fail closed: StateUnavailable or anything else shows fault this tick
@@ -236,7 +244,8 @@ def replay_scenario(name: str, tick_ms: int = 250, quiet: bool = False):
     """Run a golden scenario through the gate loop with FakeGate and FakeSpeaker, on scenario time. Returns the gate.
 
     Verdicts come from FakeVerdictFeed (the verdict team's fake), and plates are moved into a pass zone when the
-    scenario says they reach it.
+    scenario says they reach it. Vision's health is a frame every tick, and each frame sees every plate that has
+    reached the pass, as a camera would while it stays there.
     """
     from kitchen.gate.driver import FakeGate
     from kitchen.gate.voice import FakeSpeaker
@@ -256,6 +265,7 @@ def replay_scenario(name: str, tick_ms: int = 250, quiet: bool = False):
 
     timeline = scenario_timeline(scenario)
     end = max(item.t_ms for item in timeline) + tick_ms
+    plates_in_view = []
     for t in range(0, end + 1, tick_ms):
         clock.set(t)
         for item in timeline:
@@ -263,7 +273,9 @@ def replay_scenario(name: str, tick_ms: int = 250, quiet: bool = False):
                 if item.kind == "amendment":
                     state.put_ticket(item.record)
                 elif item.kind == "plate_at_pass":
-                    state.move_entity(EntityState(item.record["plate_id"], 1, t, "pass", None, {}, False))
+                    plates_in_view.append(item.record["plate_id"])
+        for plate_id in plates_in_view:
+            state.move_entity(EntityState(plate_id, 1, t, "pass", None, {}, False))
         feed.play_until(t)
         service.tick()
     return gate, speaker
