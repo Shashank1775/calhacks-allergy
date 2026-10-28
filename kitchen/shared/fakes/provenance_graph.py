@@ -49,7 +49,11 @@ class FakeProvenanceGraph:
         return reached
 
     def unknown_ancestors(self, plate_id: str, as_of_t_ms: int) -> list[str]:
-        """The scenario's unknown-history late entities seen by `as_of_t_ms`, if it expects an unknown_history hold."""
+        """The scenario's late entities of unknown origin seen by `as_of_t_ms`, if it expects an unknown_history hold.
+
+        Only a bin nobody declared can be one now (a tool, hand or plate of unknown origin starts clean), so no golden
+        scenario expects that hold.
+        """
         expected = self._expected_for(plate_id)
         if not any("unknown_history" in entry.get("reason_codes", []) for entry in expected):
             return []

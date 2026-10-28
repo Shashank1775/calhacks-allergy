@@ -1,0 +1,103 @@
+{
+  "scenario_id": "unknown-tool-carries-sesame",
+  "description": "A spoon first appears mid-shift with unknown origin, scoops sesame dressing and touches the plate. It started clean, but the graph shows a path from the sesame bin to the plate, so the plate holds on that evidence. Contrast with unknown-tool-mid-shift.",
+  "tags": [
+    "known-clean-source",
+    "basic-transfer"
+  ],
+  "bins": [
+    {
+      "entity_id": "bin-2",
+      "label": "sesame dressing",
+      "allergen_profile": {
+        "probabilities": {
+          "sesame": 0.97
+        },
+        "unknown": false,
+        "source": "manual"
+      }
+    }
+  ],
+  "late_entities": [
+    {
+      "entity_id": "tool-spoon-9",
+      "first_seen_t_ms": 1500,
+      "origin": "unknown"
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "t7",
+      "number": 7,
+      "revision": 1,
+      "created_t_ms": 0,
+      "source": "typed",
+      "note": "no sesame",
+      "pass_threshold": 0.95,
+      "forbidden": [
+        "sesame"
+      ]
+    }
+  ],
+  "plate_bindings": [
+    {
+      "plate_id": "plate-t7",
+      "ticket_id": "t7",
+      "t_ms": 500
+    }
+  ],
+  "events": [
+    {
+      "event_id": "e1",
+      "t_start_ms": 2000,
+      "t_end_ms": 2400,
+      "a_id": "tool-spoon-9",
+      "b_id": "bin-2",
+      "action": "transfer.scoop",
+      "probability": 0.95,
+      "direction": "b_to_a",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    },
+    {
+      "event_id": "e2",
+      "t_start_ms": 3000,
+      "t_end_ms": 3400,
+      "a_id": "tool-spoon-9",
+      "b_id": "plate-t7",
+      "action": "transfer.contact",
+      "probability": 0.9,
+      "direction": "both",
+      "classifier": {
+        "name": "sim_ground_truth",
+        "version": "0.1.0"
+      }
+    }
+  ],
+  "plates_at_pass": [
+    {
+      "plate_id": "plate-t7",
+      "ticket_id": "t7",
+      "t_ms": 4000
+    }
+  ],
+  "expected": [
+    {
+      "plate_id": "plate-t7",
+      "ticket_revision": 1,
+      "decision": "hold",
+      "allergens_reached": [
+        "sesame"
+      ],
+      "reason_codes": [
+        "forbidden_allergen"
+      ],
+      "chain_event_ids": [
+        "e1",
+        "e2"
+      ]
+    }
+  ]
+}

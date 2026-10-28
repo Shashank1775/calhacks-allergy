@@ -1,21 +1,34 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw/http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { example_zones } from "../api/mocks/handlers";
 import { server, TEST_VISION_URL } from "../api/mocks/server";
+import { STREAM_RETRY_MS } from "../camera_stream";
+import { StateSourceContext } from "../state/hooks";
 import { empty_tables, type StateSource, type Tables } from "../state/state_source";
 import { render_with_source } from "../test_utils";
+import type { VisionHealth } from "../vision_health";
 import { ZonesScreen } from "./zones_screen";
+
+// Vision's health, set by each test: "ok" while frames flow, "stale" once they stop.
+const vision = vi.hoisted(() => ({ health: "ok" as VisionHealth }));
+vi.mock("../vision_health", () => ({ useVisionHealth: () => vision.health }));
 
 // The frame is 1000 × 500 px, so a pointer at (100, 50) is the point (0.1, 0.1).
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 500));
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+  vision.health = "ok";
+});
+
 async function open_screen(source: StateSource | null = null) {
-  render_with_source(<ZonesScreen />, source);
+  const view = render_with_source(<ZonesScreen />, source);
   await screen.findByLabelText("zone slot-1");
+  return view;
 }
 
 function frame() {
@@ -212,13 +225,70 @@ describe("ZonesScreen", () => {
     expect(screen.getByRole("button", { name: "SAVE" })).toBeDisabled();
   });
 
+  it("draws on a picture it is given instead of the stream, and says when vision has the layout", async () => {
+    const user = userEvent.setup();
+    const on_ready = vi.fn();
+    const picture = { element: <video aria-label="Camera: overhead" />, aspect: 4 / 3 };
+    render_with_source(<ZonesScreen picture={picture} on_ready={on_ready} />, null);
+    await screen.findByLabelText("zone slot-1");
+
+    expect(screen.getByLabelText("Camera: overhead")).toBeInTheDocument();
+    expect(screen.queryByAltText("Live view of the counter")).toBeNull();
+    expect(frame()).toHaveStyle({ aspectRatio: String(4 / 3) });
+    expect(on_ready).toHaveBeenLastCalledWith(true);
+
+    await user.click(screen.getByRole("button", { name: "Delete wash" }));
+    expect(on_ready).toHaveBeenLastCalledWith(false);
+  });
+
   it("draws on a plain 16:9 frame when the camera is offline", async () => {
     await open_screen();
 
     fireEvent.error(screen.getByAltText("Live view of the counter"));
 
-    expect(screen.getByText(/Camera offline\. Zones are drawn on a plain 16:9 frame\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Camera offline, trying again\. Zones are drawn on a plain 16:9 frame\./),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("zone pass")).toBeInTheDocument();
+  });
+
+  it("asks for the camera again after STREAM_RETRY_MS, with no reload", async () => {
+    await open_screen();
+    vi.useFakeTimers();
+    fireEvent.error(screen.getByAltText("Live view of the counter"));
+    expect(screen.queryByAltText("Live view of the counter")).toBeNull();
+
+    act(() => vi.advanceTimersByTime(STREAM_RETRY_MS));
+    expect(screen.getByAltText("Live view of the counter")).toHaveAttribute("src", "http://vision.test/stream.mjpg");
+    expect(screen.queryByText(/Camera offline/)).toBeNull();
+  });
+
+  it("opens a new stream when vision's frames come back, without dropping a drag in progress", async () => {
+    const { rerender } = await open_screen();
+    // The same tree as open_screen's, so the screen keeps its state and only the health changes.
+    const same_screen = () => (
+      <StateSourceContext.Provider value={null}>
+        <ZonesScreen />
+      </StateSourceContext.Provider>
+    );
+    const frozen = screen.getByAltText("Live view of the counter");
+    fireEvent.pointerDown(screen.getByLabelText("zone slot-1"), {
+      clientX: 100,
+      clientY: 75,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+
+    vision.health = "stale";
+    rerender(same_screen());
+    vision.health = "ok";
+    rerender(same_screen());
+    expect(screen.getByAltText("Live view of the counter")).not.toBe(frozen);
+
+    fireEvent.pointerMove(frame(), { clientX: 200, clientY: 125, pointerId: 1, buttons: 1 });
+    fireEvent.pointerUp(frame(), { clientX: 200, clientY: 125, pointerId: 1, button: 0, buttons: 0 });
+    expect(points_of("slot-1")).toBe("0.14,0.15 0.3,0.15 0.3,0.35 0.14,0.35");
   });
 
   it("warns about a bin with no slot, but still saves", async () => {

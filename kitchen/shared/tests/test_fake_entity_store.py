@@ -26,20 +26,11 @@ def frame(t_ms, **knife_changes):
 
 
 @pytest.mark.safety
-@pytest.mark.parametrize(
-    ("kind", "origin", "unknown"),
-    [
-        ("tool", "shift_start", False),
-        ("plate", "clean_stack", False),
-        ("hand", "shift_start", False),
-        ("tool", "unknown", True),
-        ("plate", "unknown", True),
-        ("bin", "shift_start", True),
-    ],
-)
-def test_only_known_clean_tools_hands_and_plates_start_clean(kind, origin, unknown):
-    """Known-clean source; and a bin's contents are its bin profile's business, so the store never calls one clean."""
-    assert starting_profile(kind, origin)["unknown"] is unknown
+@pytest.mark.parametrize(("kind", "unknown"), [("tool", False), ("plate", False), ("hand", False), ("bin", True)])
+def test_tools_hands_and_plates_start_clean_and_bins_unknown(kind, unknown):
+    """Known-clean source: a tool, hand or plate starts clean whatever its origin, since only an edge gives it risk;
+    a bin's contents are its bin profile's business, so the store never calls one clean."""
+    assert starting_profile(kind)["unknown"] is unknown
 
 
 def test_sync_once_registers_then_moves_each_entity():

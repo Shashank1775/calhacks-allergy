@@ -66,12 +66,13 @@ def test_entities_a_scenario_only_mentions_start_clean_at_shift_start():
 
 @pytest.mark.safety
 def test_late_entities_keep_their_origin():
-    """Known-clean source: a mid-shift spoon has unknown history; a plate from the clean stack starts clean."""
+    """Known-clean source: a mid-shift spoon keeps its unknown origin and, like a plate from the clean stack, starts
+    clean: only an edge can give it risk."""
     spoon_state = FakeStateClient()
     load_scenario(spoon_state, SCENARIO_DIR / "unknown-tool-mid-shift.json")
     spoon = spoon_state.get_entity("tool-spoon-9")
     assert (spoon["origin"], spoon["first_seen_t_ms"]) == ("unknown", 1500)
-    assert spoon["allergen_profile"]["unknown"] is True
+    assert spoon["allergen_profile"]["unknown"] is False
 
     plate_state = FakeStateClient()
     load_scenario(plate_state, SCENARIO_DIR / "clean-plate-from-stack.json")

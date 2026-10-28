@@ -11,7 +11,7 @@ When a plate reaches the pass, or its ticket is amended, decide PASS or HOLD in 
   - An edge rechecks a plate only if it touches the plate or starts by that cutoff, so rechecks stop once nothing new can reach the plate.
   - A recheck that would say the same thing as the plate's latest recorded verdict (same decision and reasons) writes nothing, so a held plate isn't recorded and spoken again on every touch.
   - Entering and leaving the pass are read only from the entity store's newest row for the plate (#216). Rows the graph wrote (`caused_by` set) copy a zone forward, possibly a stale one. Rows older by `(t_ms, version)` than one already seen were written late. Both are skipped, so neither can take a judged plate out of the pass and have it judged, and its hold spoken, twice. A plate that really leaves and comes back is judged again.
-- It asks the partner's graph for exact reachability (`reach`), the plate's unknown-history ancestors (`unknown_ancestors`) and the plate's subgraph (`subgraph`).
+- It asks the partner's graph for exact reachability (`reach`), the plate's unknown ancestors (`unknown_ancestors`: a bin with no profile and unknown origin; a tool, hand or plate of unknown origin starts clean and is never one) and the plate's subgraph (`subgraph`).
 - **Laya's final plate check** (`laya_check.py`) reads that subgraph and gives P(reached the plate) for each forbidden allergen. Each one at P ≥ 1 − `pass_threshold` adds a `laya_flagged` reason; if Laya can't answer, `laya_unavailable`. Laya can only add holds, never remove one.
 - `decide()` combines that with the ticket: **HOLD** if a forbidden allergen is flagged (by the graph's numbers or by Laya), if an unknown ancestor exists, if clean-confidence is below the pass threshold, or if anything failed.
 - The verdict and its chain are written in one call (`record_verdict`), so the gate, voice and expo board can react.
@@ -20,7 +20,7 @@ When a plate reaches the pass, or its ticket is amended, decide PASS or HOLD in 
 
 ```
 confidence = max(0, 1 - sum(p[a] for a in forbidden))   # p[a] from reach; 0 if absent
-           = 0 if any input is unhealthy (error, missing input, stale plate, unknown history)
+           = 0 if any input is unhealthy (error, missing input, stale plate, unknown ancestor)
 flag a forbidden allergen when 1 - p[a] <= pass_threshold
 hold = not healthy or any flag or confidence < pass_threshold
 ```
@@ -43,7 +43,7 @@ The sum is the safe bound however the allergens depend on each other (one knife 
 | In | Ticket: forbidden allergens, `pass_threshold`, revision | `ticket` | orders, via `StateClient` |
 | In | Plate binding and plate zone (`pass` triggers a verdict) | `plate_binding`, `entity` | vision and the partner entity store, via `StateClient` |
 | In | Exact reachability with chains | `allergen_reach` via `ProvenanceGraph.reach` | partner graph |
-| In | Unknown-history ancestors | `ProvenanceGraph.unknown_ancestors` | partner graph |
+| In | Unknown ancestors | `ProvenanceGraph.unknown_ancestors` | partner graph |
 | In | The plate's subgraph | [`plate_subgraph`](../../contracts/schemas/plate_subgraph.schema.json) via `ProvenanceGraph.subgraph` | partner graph |
 | Uses | Laya's plate check | [`LayaPlateCheck`](../../contracts/apis.md#layaplatecheck) | the fine-tuned plate model ([decision](../../docs/decisions/laya-plate-check.md)) |
 | Out | Verdict and chain (`verdict` table) | `verdict`, `chain_step` | outputs (gate, voice, expo board) |
@@ -68,7 +68,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules). Every test below is marked `
 | Fail closed | An exception, timeout, `StateUnavailable`, `GraphUnavailable`, missing ticket or binding, or a stale plate reaches PASS; or a graph-written or late row moves a plate, so it is judged twice or a real return to the pass is missed | Fault injection at every `StateClient` and `ProvenanceGraph` call: the result is always HOLD with `error`, `missing_input` or `stale_track`, and confidence 0. In `test_service.py`, three pass-entry tests: a graph-written row, or a row older by `(t_ms, version)`, never judges a plate again, and a plate that really comes back is still judged |
 | Plain-code verdict | Anything but `decide()` makes the call, confidence rises with more evidence, or Laya removes a hold | `decide()` is pure; a property test checks that adding probability to a forbidden allergen never raises confidence; now: `laya_hold_reasons` only ever returns `laya_flagged` reasons for forbidden allergens, and every model failure raises `LayaCheckUnavailable`, an input laya still has to cut at the shortest window included; a property test that a shortened history never lowers any allergen's reach, at every window the check uses (and a mutation that does, such as merging repeated touches, fails it); with `decide()`: a property test that no Laya answer removes a reason and that a Laya failure holds |
 | Allergens, not contacts | The policy reads anything but the ticket's forbidden allergens | The policy reads only `ticket.forbidden` and the reach probabilities |
-| Known-clean source | An unknown ancestor is ignored | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` and `clean-plate-from-stack` |
+| Known-clean source | An unknown ancestor is ignored, or an unknown origin holds a plate with no path | Non-empty `unknown_ancestors` → HOLD `unknown_history`. Golden scenarios `unknown-tool-mid-shift` (no path: PASS), `unknown-tool-carries-sesame` (a path: HOLD) and `clean-plate-from-stack` |
 | Late changes recheck everything | An amendment reuses the previous verdict, or an edge written after the plate passed never reaches it | Every verdict is computed from scratch from full history. Golden scenario `late-amendment-adds-dairy`. Late-edge tests in `test_service.py`: a late edge, an edge at the pass, a refused write that's retried, rechecks in the same millisecond, no recheck once nothing can reach the plate, no repeat write when the answer hasn't changed, and a restarted service. The real graph end to end: `tests/e2e/test_late_edges.py` |
 
 Time running forward belongs to the partner's graph; we check it end to end by running the golden scenarios against the real graph once it lands (`needs-partner`). `trace_sensitive: false` is treated as `true` for now.

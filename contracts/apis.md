@@ -84,7 +84,8 @@ class ProvenanceGraph(Protocol):
     def reach(self, plate_id: str, as_of_t_ms: int) -> list[AllergenReach]: ...
         # exact reachability: every allergen unit with nonzero probability at the plate, each with its chain
     def unknown_ancestors(self, plate_id: str, as_of_t_ms: int) -> list[str]: ...
-        # entity IDs in the plate's ancestry with origin "unknown" and no wash since
+        # entity IDs in the plate's ancestry with origin "unknown" whose contents are unknown (a bin with no profile)
+        # and no wash since; a tool, hand or plate of unknown origin starts clean, so it is never one
     def subgraph(self, plate_id: str, as_of_t_ms: int) -> PlateSubgraph: ...
         # the plate's time-forward ancestry: entities, what each carried at the start, and the edges, in time order;
         # what Laya's final plate check reads (schemas/plate_subgraph.schema.json)

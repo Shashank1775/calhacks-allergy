@@ -7,9 +7,10 @@ Reads: a video file; a zones file (optional); VISION_ settings (the ONNX bundle 
        SUMMARY_MAX_FPS, SUMMARY_MAX_MB, SUMMARY_CORS_ORIGINS
 Emits: a Summary (below) as text or JSON on stdout, or over the HTTP API (--serve)
 Rules: fail closed in wording: this is information, not a verdict, so the text never says PASS, HOLD or "clean", names
-       unknown-history entities as "could carry any allergen", and says "no touch seen" where nothing was seen; a
-       failing interactions step, entity store or graph ends the job failed, never in a summary that looks complete;
-       known-clean source: objects first seen after shift_start_ms have unknown history, as live
+       what a bin of unknown contents touched as "could carry any allergen", and says "no touch seen" where nothing
+       was seen; a failing interactions step, entity store or graph ends the job failed, never in a summary that looks
+       complete; known-clean source: objects first seen after shift_start_ms have unknown origin, as live, and carry
+       only what a touch gave them
 
 It runs on the laptop (ONNX Runtime), never on the Pi, whose live loop holds the Hailo. The wiring is live mode's
 (tools/run_local.py, LiveRunner) on a fresh FakeStateClient: zones and the demo bins written first, then each frame
@@ -40,8 +41,9 @@ A Summary:
 Every t_ms in a Summary (entities' first and last seen, touches, chain steps) counts from the start of the video, by
 the file's own timestamps: the screens show t_start_ms directly as m:ss.s. shift_start_ms is a cutoff on that same
 timeline (what is first seen before it counts as there at shift start), not an offset. `touches` leaves out
-"unimportant" edges; each allergen's `chain` is the graph's ChainStep list; `unknown_history` is true when an
-unknown-history entity's state reached the entity (itself included).
+"unimportant" edges; each allergen's `chain` is the graph's ChainStep list; `unknown_history` is true when the
+state of an entity whose contents are unknown (a bin nobody declared) reached the entity. An entity of unknown origin
+starts clean: only a touch can give it an allergen.
 """
 
 import argparse
@@ -377,27 +379,32 @@ def touch_sentence(touch: dict, kinds: dict, bins: dict) -> str:
 
 
 def unknown_sentences(entities: list[dict], shift_start_ms: int) -> list[str]:
-    """The entities with unknown history, as live: first seen after the shift start, or seen again under a new ID."""
+    """The entities of unknown origin, as live: first seen after the shift start, or seen again under a new ID.
+
+    They start clean like everything else, so only a touch the camera saw can give one an allergen.
+    """
     unknown = [entity for entity in entities if entity["origin"] == "unknown"]
     late = [entity["entity_id"] for entity in unknown if entity["first_seen_t_ms"] >= shift_start_ms]
     early = [entity["entity_id"] for entity in unknown if entity["first_seen_t_ms"] < shift_start_ms]
     sentences = []
     if late:
-        their, they = ("its", "it") if len(late) == 1 else ("their", "they")
+        their, them = ("its", "it") if len(late) == 1 else ("their", "them")
         sentences.append(
             f"{join_words(late)} first appeared after the first {clock_text(shift_start_ms)} of video, so {their} "
-            f"history is unknown and {they} could carry any allergen."
+            f"origin is unknown; only a touch seen here can give {them} an allergen."
         )
     if early:
-        have, they = ("has", "it") if len(early) == 1 else ("have", "they")
-        sentences.append(f"{join_words(early)} {have} unknown history, so {they} could carry any allergen.")
+        have, them = ("has", "it") if len(early) == 1 else ("have", "them")
+        sentences.append(
+            f"{join_words(early)} {have} unknown origin; only a touch seen here can give {them} an allergen."
+        )
     return sentences
 
 
 def exposure_sentences(exposure: list[dict], unknown_ids: set[str], touched_ids: set[str]) -> list[str]:
     """What could have reached each tool, hand and plate. Never "clean": where nothing was seen, it says so.
 
-    Entities whose own history is unknown were named by unknown_sentences() already.
+    Entities of unknown origin were named by unknown_sentences() already.
     """
     sentences = []
     untouched, unreached = [], []
@@ -406,7 +413,7 @@ def exposure_sentences(exposure: list[dict], unknown_ids: set[str], touched_ids:
         if row["unknown_history"]:
             if entity_id not in unknown_ids:
                 sentences.append(
-                    f"{entity_id} could carry any allergen: something whose history is unknown touched it."
+                    f"{entity_id} could carry any allergen: something whose contents are unknown touched it."
                 )
         elif row["allergens"]:
             listed = sorted(row["allergens"], key=lambda reach: (-reach["probability"], reach["allergen_unit_id"]))

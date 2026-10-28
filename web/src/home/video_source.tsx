@@ -1,26 +1,19 @@
 /**
  * Source 01: a recorded video of prep.
- * Picks a file and previews it in the browser. Handing it to vision is not
- * built: vision has no upload endpoint yet (see web/SCOPE.md).
+ * Picks a file and previews it in the browser. USE THIS VIDEO takes it to the layout step; once started, this tab
+ * plays it once, in real time, and sends its frames to vision like a camera's.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Chit } from "../components/chit";
-import { ToBeImplemented } from "../components/to_be_implemented";
+import { useObjectUrl } from "./use_object_url";
 
-export function VideoSource() {
+/** What to say about a file this browser can't play (often MPEG-4 Part 2 or HEVC); it could send no frames. */
+export const UNPLAYABLE_VIDEO = "This browser can't play this video, so it can't send its frames. Use an H.264 MP4.";
+
+export function VideoSource({ on_use }: { on_use: (file: File) => void }) {
   const [file, set_file] = useState<File | null>(null);
-  const [preview_url, set_preview_url] = useState<string | null>(null);
-
-  useEffect(() => {
-    // jsdom has no createObjectURL; the preview is a nicety, not required.
-    if (!file || typeof URL.createObjectURL !== "function") {
-      set_preview_url(null);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    set_preview_url(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+  const [unplayable, set_unplayable] = useState(false);
+  const preview_url = useObjectUrl(file);
 
   return (
     <Chit label="Video source">
@@ -36,7 +29,10 @@ export function VideoSource() {
           type="file"
           accept="video/*"
           className="visually_hidden"
-          onChange={(event) => set_file(event.target.files?.[0] ?? null)}
+          onChange={(event) => {
+            set_file(event.target.files?.[0] ?? null);
+            set_unplayable(false);
+          }}
         />
         STAPLE VIDEO HERE →
       </label>
@@ -50,11 +46,25 @@ export function VideoSource() {
             <span>FILE</span>
             <span className="wrap">{file.name}</span>
           </p>
-          {preview_url && <video className="preview" src={preview_url} controls muted />}
+          {preview_url && (
+            <video
+              className="preview"
+              src={preview_url}
+              aria-label="Video preview"
+              controls
+              muted
+              onError={() => set_unplayable(true)}
+            />
+          )}
           <p className="bold center">** REPLAY · NOT A LIVE PLATE **</p>
-          <ToBeImplemented>
-            Sending the video to vision. Vision has no upload endpoint yet; for now run vision on the file locally.
-          </ToBeImplemented>
+          {unplayable && (
+            <p role="alert" className="error">
+              {UNPLAYABLE_VIDEO}
+            </p>
+          )}
+          <button type="button" className="btn" disabled={unplayable} onClick={() => on_use(file)}>
+            USE THIS VIDEO
+          </button>
         </>
       )}
     </Chit>

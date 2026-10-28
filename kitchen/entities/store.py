@@ -99,15 +99,15 @@ def new_entity(detection: dict, t_ms: int) -> Entity:
         "first_seen_t_ms": t_ms,
         "last_seen_t_ms": t_ms,
         "ticket_id": None,
-        "allergen_profile": starting_profile(detection["kind"], detection["origin"]),
+        "allergen_profile": starting_profile(detection["kind"]),
     }
 
 
 def apply_detection(entity: Entity, detection: dict, t_ms: int) -> None:
     """Update a known entity from a later detection: where it is and when it was last seen, nothing else.
 
-    A later detection's origin is ignored, so a frame that says shift_start can't make an unknown-history tool clean
-    (safety rule: known-clean source).
+    A later detection's origin is ignored: an entity keeps the origin it was first seen with (safety rule: known-clean
+    source).
     """
     entity["zone"] = detection.get("zone")
     entity["box"] = list(detection["box"])

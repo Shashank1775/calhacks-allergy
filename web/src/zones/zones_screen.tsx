@@ -7,6 +7,12 @@
  * Emits: PUT <WEB_VISION_URL>/zones with the whole layout; vision uses it from the next frame.
  * Rules: vision checks every layout. A refused one (422 bad_zones) shows vision's message and keeps every edit. Save
  * stays off until a layout has loaded, so a failed load can never overwrite the kitchen's zones with an empty list.
+ *
+ * The home page reuses this screen as its "box the kitchen" step, over its own camera or video picture, and starts the
+ * kitchen only once `on_ready` says vision has exactly the layout on screen.
+ *
+ * A screen opened while vision was down asks for the layout again every LAYOUT_RETRY_MS until it loads, but only while
+ * no layout has loaded and nothing is drawn, so it never replaces anything on screen.
  */
 import { useEffect, useState } from "react";
 import { vision_url } from "../api/http";
@@ -23,11 +29,21 @@ import {
   ZONE_KINDS,
   type ZoneKind,
 } from "./layout";
-import { ZoneCanvas } from "./zone_canvas";
+import { ZoneCanvas, type Picture } from "./zone_canvas";
 
 type Message = { tone: "error" | "ok"; text: string };
 
-export function ZonesScreen() {
+/** How often a layout that hasn't loaded yet is asked for again. */
+export const LAYOUT_RETRY_MS = 3000;
+
+type Props = {
+  /** Draw the zones on this picture instead of vision's stream. */
+  picture?: Picture;
+  /** Told whether vision has exactly the layout on screen: loaded or saved, with no edits since. */
+  on_ready?: (ready: boolean) => void;
+};
+
+export function ZonesScreen({ picture, on_ready }: Props = {}) {
   const base = vision_url();
   const entities = useTableRows("entity");
   const bin_profiles = useTableRows("bin_profile");
@@ -38,11 +54,16 @@ export function ZonesScreen() {
   const [adding, set_adding] = useState<ZoneKind | null>(null);
   const [busy, set_busy] = useState(false);
   const [message, set_message] = useState<Message | null>(null);
+  // Counts failed loads, so each failure schedules the next try while no layout has loaded.
+  const [failed_loads, set_failed_loads] = useState(0);
 
   const changed = saved_json !== null && JSON.stringify(zones) !== saved_json;
+  const ready = saved_json !== null && !changed;
   const selected = zones.find((zone) => zone.zone_id === selected_id) ?? null;
   // Until a layout loads there are no slots to compare with, so no warnings either.
   const unslotted = saved_json === null ? [] : bins_without_slot(zones, bin_profiles);
+
+  useEffect(() => on_ready?.(ready), [ready]);
 
   /** Loads the layout vision uses now, replacing any edits. */
   async function load(done_text?: string) {
@@ -51,6 +72,7 @@ export function ZonesScreen() {
     set_busy(false);
     if (!result.ok) {
       set_message({ tone: "error", text: `Couldn't load the layout from vision. ${result.message}` });
+      set_failed_loads((count) => count + 1);
       return;
     }
     set_zones(result.data.zones);
@@ -81,6 +103,15 @@ export function ZonesScreen() {
     // Load once, when the screen opens.
     if (base) void load();
   }, []);
+
+  // Still waiting for a first layout with an empty picture: keep asking. Anything drawn meanwhile is the person's, and
+  // only REVERT may replace it.
+  const awaiting_layout = Boolean(base) && saved_json === null && zones.length === 0;
+  useEffect(() => {
+    if (!awaiting_layout) return;
+    const timer = setTimeout(() => void load(), LAYOUT_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [awaiting_layout, failed_loads]);
 
   // Esc stops adding.
   useEffect(() => {
@@ -149,6 +180,7 @@ export function ZonesScreen() {
         {message?.tone === "error" && (
           <p role="alert" className="error zone_message">
             {message.text}
+            {awaiting_layout && " Trying again."}
           </p>
         )}
         {message?.tone === "ok" && (
@@ -176,6 +208,7 @@ export function ZonesScreen() {
 
       <div className="zone_layout">
         <ZoneCanvas
+          picture={picture}
           zones={zones}
           tags={tags}
           selected_id={selected_id}

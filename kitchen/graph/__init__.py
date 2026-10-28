@@ -5,7 +5,7 @@ Step:  provenance graph
 Reads: entity, bin_profile, interaction_event (StateClient)
 Emits: ProvenanceGraph (reach, subgraph, unknown_ancestors, version); LiveRisk (entity_state rows for the overlays)
 Rules: fail closed: failures raise GraphUnavailable; time runs forward: time-forward paths only; known-clean source:
-       unknown history is never clean
+       a tool, hand or plate of unknown origin starts clean, so only a path holds a plate
 
     from kitchen.graph import ProvenanceGraph
     graph = ProvenanceGraph(state)          # any StateClient
