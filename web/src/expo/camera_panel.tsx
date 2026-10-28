@@ -12,11 +12,12 @@
  * entities tracked now are counted and, in the entity view, drawn; a lost track keeps its row in
  * the database (and still matters to verdicts) but not its box here. A missing or broken stream
  * shows "camera offline" and changes no verdict; the gate panel's FAULT comes from vision health,
- * not from this picture.
+ * not from this picture. The picture comes back by itself once vision does, with no reload
+ * (camera_stream.ts).
  */
-import { useState } from "react";
 import { allergen_name } from "../allergens";
 import { vision_url } from "../api/http";
+import { useCameraStream } from "../camera_stream";
 import { latest_states } from "../gate";
 import { useTableRows } from "../state/hooks";
 import type { EntityState } from "../types/TEMPORARY";
@@ -59,7 +60,7 @@ export function risk_of(state: EntityState): Risk {
 export function CameraPanel() {
   const base = vision_url();
   const states = useTableRows("entity_state");
-  const [offline, set_offline] = useState(false);
+  const camera = useCameraStream();
   const boxes = tracked_now(states);
   const fast = fast_boxes();
   const stream = fast ? `${base}/stream.mjpg?boxes=true` : `${base}/stream.mjpg`;
@@ -76,10 +77,12 @@ export function CameraPanel() {
       </div>
       <div className="camera_box">
         {!base && <p className="muted">No camera set: start vision and set WEB_VISION_URL to see the counter.</p>}
-        {base && offline && <p className="error">Camera offline. Verdicts don't depend on this picture.</p>}
-        {base && !offline && (
-          <div className="camera_frame">
-            <img src={stream} alt="Live view of the counter" onError={() => set_offline(true)} />
+        {base && camera.offline && (
+          <p className="error">Camera offline, trying again. Verdicts don't depend on this picture.</p>
+        )}
+        {base && !camera.offline && (
+          <div className="camera_frame" key={camera.connection}>
+            <img src={stream} alt="Live view of the counter" onError={camera.on_error} />
             {/* Before the boxes, so they draw over the zones and stay readable. */}
             {show_zones && <ZonesOverlay />}
             {!fast && boxes.map((state) => <EntityBox key={state.entity_id} state={state} />)}
