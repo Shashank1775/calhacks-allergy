@@ -46,7 +46,7 @@ graph.set_unavailable(True)                     # reach() and unknown_ancestors(
 - **Fakes for partner parts do no domain math.** `FakeProvenanceGraph` answers from a scenario's ground truth (`expected`), never by propagating allergens. It reports each allergen with probability 1 and raises `GraphUnavailable` for a plate the scenario doesn't cover.
 - **Fail-closed hooks.** `FakeStateClient` and `FakeProvenanceGraph` can be told to raise their `*Unavailable` error; `FakeClassifier` raises `RuntimeError` (apis.md names no classifier exception).
 - **One implementation for training and live.** Nobody else writes change-mask or clip code. `clips.py` has no parameter for object pixels, classes or kinds.
-- **Known-clean source.** `FakeStateClient` and `FakeEntityStore` never delete entities and never change `first_seen_t_ms` or `origin`. Only a tool, hand or plate first seen with a clean origin starts clean; bins and unknown-origin entities start unknown.
+- **Known-clean source.** `FakeStateClient` and `FakeEntityStore` never delete entities and never change `first_seen_t_ms` or `origin`. A tool, hand or plate starts clean whatever its origin (only an edge gives it risk); a bin starts unknown until its bin profile joins in.
 
 ## Contract tests
 

@@ -18,7 +18,7 @@ Sim builds kitchens whose truth we know, so the partner's graph and the verdict 
 
 ## Consequences
 
-- A correct system misses some expected PASSes by design (for example, a clean tool that lost its track holds for unknown history).
+- A correct system misses some expected PASSes by design (for example, a tool that touched an allergen bin without picking anything up still carries the edge's probability, so its plate holds).
 - `FakeProvenanceGraph` answers from `expected`, so running generated scenarios through it checks nothing. Gating on generated corpora needs the partner's real graph.
 - Every rate is a placeholder until recorded live sessions calibrate it.
 - If a typo in a tag ever matters, add an optional `generation` field (generator version, seed, observation-complete) to the scenario schema in a contracts PR.

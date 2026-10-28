@@ -66,7 +66,7 @@ See [Safety rules](../../AGENTS.md#3-safety-rules).
 |---|---|---|
 | Time runs forward | A tool carries an allergen only after its true contact with the source | Planned with `world.py` (scenarios aren't built yet) |
 | Blind classifier | Clips contain only box masks, the change mask and timing: no allergens, no classes, no realistic utensils | Schema validation on every clip (`safety`); the renderer only draws plain bars, discs and ellipses |
-| Known-clean source | Track loss and late entities appear in `late_entities` with `origin: unknown`; fresh plates come from a `clean_stack` zone | Planned with `world.py` |
+| Known-clean source | Track loss and late entities appear in `late_entities` with `origin: unknown` (they start clean: only a true contact gives them an allergen); fresh plates come from a `clean_stack` zone | Planned with `world.py` |
 
 ## Tests
 

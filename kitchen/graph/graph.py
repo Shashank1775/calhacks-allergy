@@ -5,9 +5,9 @@ Step:  provenance graph
 Reads: entity (with bin profiles joined in) and interaction_event, through any StateClient
 Emits: ProvenanceGraph (reach, unknown_ancestors, subgraph, version), as contracts/apis.md promises
 Rules: fail closed: any failure raises GraphUnavailable; time runs forward: edges sorted by t_start_ms, t_end_ms,
-       washes first, event_id (OQ-17), and none after as_of; known-clean source: an entity's start comes from its
-       origin, so only shift_start and clean_stack entities start clean, and an edge to an entity the database
-       doesn't know treats it as unknown history
+       washes first, event_id (OQ-17), and none after as_of; known-clean source: a bin starts from its profile, and
+       a tool, hand or plate starts clean whatever its origin (unknown included), so a plate holds only on a path;
+       an edge to an entity the database doesn't know yet treats it the same way
 
 Every query reads the shift from the database again, so the answer always matches what's stored, with no cache to
 go stale. A shift's few thousand edges take milliseconds.
@@ -31,26 +31,32 @@ def time_order(edge: InteractionEvent) -> tuple:
 def start_profile(entity: Entity) -> dict:
     """What the entity carried when it was first seen.
 
-    Unknown origin is never clean. A bin starts with its profile (a bin with none is unknown, which the StateClient
-    already reports). Tools, hands and plates from shift start or the clean stack start clean.
+    A bin starts with its profile (a bin with none is unknown, which the StateClient already reports). Tools, hands
+    and plates start clean whatever their origin: only an edge can give one risk, so a plate holds on what the graph
+    shows, never on an unknown origin alone (the owner's call, 2026-10-24). Their database rows, which LiveRisk
+    writes, are never read back as a start.
     """
-    if entity["origin"] == "unknown" or entity["allergen_profile"]["unknown"]:
-        return {"probabilities": {}, "unknown": True, "source": "unknown_history"}
     if entity["kind"] == "bin":
         return entity["allergen_profile"]
     return {"probabilities": {}, "unknown": False, "source": "shift_start_clean"}
 
 
-def unknown_entity(entity_id: str) -> Entity:
-    """An entity an edge names but the database doesn't hold. Nothing is known about it, so it may carry anything."""
+def missing_entity(entity_id: str) -> Entity:
+    """An entity an edge names but the database doesn't hold yet (the edge landed before the entity synced).
+
+    It starts like any entity of unknown origin (start_profile): a tool, hand or plate clean, and a bin unknown, since
+    nothing declares what it holds.
+    """
     kind = entity_id.split("-", 1)[0]
-    return {
+    entity = {
         "entity_id": entity_id,
         "kind": kind if kind in KINDS else "tool",
         "label": entity_id,
         "origin": "unknown",
         "allergen_profile": {"probabilities": {}, "unknown": True, "source": "unknown_history"},
     }
+    entity["allergen_profile"] = start_profile(entity)
+    return entity
 
 
 def read_shift(state: StateClient, as_of_t_ms: int) -> tuple[dict[str, Entity], list[InteractionEvent]]:
@@ -65,7 +71,7 @@ def read_shift(state: StateClient, as_of_t_ms: int) -> tuple[dict[str, Entity], 
     for edge in edges:
         for entity_id in (edge["a_id"], edge["b_id"]):
             if entity_id not in entities:
-                entities[entity_id] = unknown_entity(entity_id)
+                entities[entity_id] = missing_entity(entity_id)
     return entities, sorted(edges, key=time_order)
 
 

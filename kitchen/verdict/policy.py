@@ -12,7 +12,7 @@ Rules: fail closed: any error or doubt holds and sets confidence to 0; plain-cod
 
 The policy, from kitchen/verdict/README.md:
     confidence = max(0, 1 - sum(p[a] for a in forbidden))    p[a] from reach; 0 if absent
-               = 0 if any input is unhealthy (error, missing input, stale plate, unknown history)
+               = 0 if any input is unhealthy (error, missing input, stale plate, unknown ancestor)
     flag a forbidden allergen when 1 - p[a] <= pass_threshold
     hold = not healthy or any flag or confidence < pass_threshold
 Every hold carries all its reasons, and decision is "pass" exactly when there are none. decide() needs no constants of

@@ -3,10 +3,11 @@
 Owner: partner (human). First version written by an agent at the owner's request (2026-10-24).
 Step:  provenance graph
 Reads: start profiles and time-ordered edges (graph.py); contracts/allergen_units.json
-Emits: Carried: per entity, each allergen's probability, the strongest chain from a bin, and the unknown-history
-       entities whose unwashed state flowed into it
+Emits: Carried: per entity, each allergen's probability, the strongest chain from a bin, and the entities of unknown
+       origin and unknown contents (a bin with no profile) whose unwashed state flowed into it
 Rules: time runs forward: edges are applied one at a time in time order, washes first on a tie (OQ-17);
-       known-clean source: an unknown-history entity carries every allergen at probability 1 (OQ-13) until a wash;
+       known-clean source: an entity whose start is unknown (graph.py gives only a bin with no profile one) carries
+       every allergen at probability 1 until a wash;
        a wash is a self-loop edge and only ever lowers a probability
 
 Math (AGENTS.md, Graph math), per transfer edge src -> dst with edge probability p and action efficiency k:
@@ -34,8 +35,8 @@ class Carried:
     probabilities: entity -> allergen -> P(carries it).
     chains: entity -> allergen -> (strength, steps), the most likely single path from a bin that holds the allergen.
         A step is (edge, from_id, to_id). A wash ends the washed entity's chains: what survives a wash is residue,
-        and residue, like unknown history, has no source to point at. Its risk still counts in `probabilities`.
-    unknown_from: entity -> the unknown-history entities whose unwashed state reached it.
+        and residue, like unknown contents, has no source to point at. Its risk still counts in `probabilities`.
+    unknown_from: entity -> the entities of unknown origin and unknown start whose unwashed state reached it.
     """
 
     probabilities: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -55,7 +56,7 @@ def is_wash(edge: InteractionEvent) -> bool:
 
 
 def start(entities: dict[str, Entity]) -> Carried:
-    """Each entity as the shift starts it: unknown history carries everything, a bin its profile, the rest nothing."""
+    """Each entity as the shift starts it: an unknown start carries everything, a bin its profile, the rest nothing."""
     carried = Carried()
     for entity_id, entity in entities.items():
         profile = entity["allergen_profile"]
@@ -72,7 +73,7 @@ def start(entities: dict[str, Entity]) -> Carried:
 
 
 def wash(carried: Carried, edge: InteractionEvent) -> None:
-    """A wash keeps (1 - p) of everything the entity carried, and resets its chains and unknown history."""
+    """A wash keeps (1 - p) of everything the entity carried, and resets its chains and unknown ancestors."""
     entity_id, p = edge["a_id"], edge["probability"]
     carried.probabilities[entity_id] = {unit: (1.0 - p) * q for unit, q in carried.probabilities[entity_id].items()}
     carried.chains[entity_id] = {}

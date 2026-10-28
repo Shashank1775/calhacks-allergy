@@ -83,7 +83,8 @@ def test_a_bins_zone_rows_carry_its_bin_profile():
 
 @pytest.mark.safety
 def test_an_unknown_origin_stays_unknown_in_the_store_and_the_database():
-    """Known-clean source: a knife first seen with unknown history stays unknown, whatever later frames say."""
+    """Known-clean source: a knife first seen with unknown origin keeps that origin, whatever later frames say. It
+    starts clean all the same: only an edge in the graph can give it risk."""
     store = EntityStore(FakeClock())
     state = FakeStateClient()
     rows = state_rows(state)
@@ -91,10 +92,10 @@ def test_an_unknown_origin_stays_unknown_in_the_store_and_the_database():
     store.ingest(frame(6000, knife(origin="shift_start", zone="plating-spot")))
     store.sync_once(state)
 
-    assert store.get("tool-knife-17")["allergen_profile"]["unknown"] is True
+    assert store.get("tool-knife-17")["allergen_profile"]["unknown"] is False
     synced = state.get_entity("tool-knife-17")
     assert (synced["origin"], synced["first_seen_t_ms"]) == ("unknown", 5000)
-    assert rows[-1].unknown is True
+    assert rows[-1].unknown is False
 
 
 @pytest.mark.safety
@@ -108,7 +109,7 @@ def test_a_reacquired_track_is_a_new_unknown_entity():
     old = store.get("tool-knife-17")
     assert (old["origin"], old["last_seen_t_ms"], old["allergen_profile"]["unknown"]) == ("shift_start", 1000, False)
     new = store.get("tool-knife-18")
-    assert (new["origin"], new["first_seen_t_ms"], new["allergen_profile"]["unknown"]) == ("unknown", 3000, True)
+    assert (new["origin"], new["first_seen_t_ms"], new["allergen_profile"]["unknown"]) == ("unknown", 3000, False)
 
 
 @pytest.mark.safety

@@ -14,7 +14,7 @@
       "additionalProperties": { "$ref": "common.schema.json#/$defs/probability" }
     },
     "unknown": {
-      "description": "True when the entity's history is unknown (appeared mid-shift, re-acquired track). Treated as possibly carrying every allergen (safety rule: known-clean source).",
+      "description": "True when nothing says what the entity holds: a bin with no profile. Treated as possibly carrying every allergen. A tool, hand or plate starts clean (false) whatever its origin, unknown included: only an edge gives it risk (safety rule: known-clean source).",
       "type": "boolean"
     },
     "source": {
