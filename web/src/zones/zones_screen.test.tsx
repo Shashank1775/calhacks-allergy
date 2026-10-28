@@ -212,6 +212,22 @@ describe("ZonesScreen", () => {
     expect(screen.getByRole("button", { name: "SAVE" })).toBeDisabled();
   });
 
+  it("draws on a picture it is given instead of the stream, and says when vision has the layout", async () => {
+    const user = userEvent.setup();
+    const on_ready = vi.fn();
+    const picture = { element: <video aria-label="Camera: overhead" />, aspect: 4 / 3 };
+    render_with_source(<ZonesScreen picture={picture} on_ready={on_ready} />, null);
+    await screen.findByLabelText("zone slot-1");
+
+    expect(screen.getByLabelText("Camera: overhead")).toBeInTheDocument();
+    expect(screen.queryByAltText("Live view of the counter")).toBeNull();
+    expect(frame()).toHaveStyle({ aspectRatio: String(4 / 3) });
+    expect(on_ready).toHaveBeenLastCalledWith(true);
+
+    await user.click(screen.getByRole("button", { name: "Delete wash" }));
+    expect(on_ready).toHaveBeenLastCalledWith(false);
+  });
+
   it("draws on a plain 16:9 frame when the camera is offline", async () => {
     await open_screen();
 

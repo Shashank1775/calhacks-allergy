@@ -1,8 +1,11 @@
-/** Source 02: the live kitchen camera. 86'd until the Pi and Hailo are connected. */
+/** Source 02: a camera on this computer, opened by the browser, whose frames this tab sends to vision. */
+import { useState } from "react";
 import { Chit } from "../components/chit";
-import { ToBeImplemented } from "../components/to_be_implemented";
+import { CameraDialog } from "./camera_dialog";
 
-export function CameraSource() {
+export function CameraSource({ on_use }: { on_use: (stream: MediaStream, label: string) => void }) {
+  const [adding, set_adding] = useState(false);
+
   return (
     <Chit label="Live camera source">
       <div className="chit_row bold">
@@ -11,14 +14,19 @@ export function CameraSource() {
       </div>
       <hr className="dashed" />
       <h3 className="display chit_title">1× live camera</h3>
-      <p className="muted">Pi Camera Module 3 · Hailo-8</p>
-      <div className="stamp_box">
-        <span className="stamp stamp_blue">86'D</span>
-      </div>
-      <button type="button" className="btn" disabled>
-        CONNECT CAMERA
+      <p className="muted">a camera on this computer, through the browser · looking straight down at the counter</p>
+      <button type="button" className="btn" onClick={() => set_adding(true)}>
+        ADD CAMERA
       </button>
-      <ToBeImplemented>Live camera feed. It comes back once the Pi camera and Hailo are wired up.</ToBeImplemented>
+      {adding && (
+        <CameraDialog
+          on_use={(stream, label) => {
+            set_adding(false);
+            on_use(stream, label);
+          }}
+          on_cancel={() => set_adding(false)}
+        />
+      )}
     </Chit>
   );
 }

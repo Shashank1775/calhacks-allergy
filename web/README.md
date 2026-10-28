@@ -32,7 +32,7 @@ web/
                kitchen/orders/fakes/http/ (orders), the vision API table and the summary API (#198)
     types/     TEMPORARY.ts: hand-written contract types until platform generates src/generated/ (never hand-edit that)
     components/ chit, rail, stamp, banner, "to be implemented" marker
-    home/      the / page: video source, live camera source (to be implemented)
+    home/      the / page: video source, the add-a-camera popup, the layout step, the frame sender and its camera worker
     tablet/    ticket entry, one-tap questions, send gate, changing a sent ticket
     expo/      the gate panel, tickets, plates, hold reasons and chains, start-plate button, the live camera
     summary/   upload a recorded video, poll its job, show the scene summary
@@ -83,6 +83,12 @@ The screens poll the runner's `GET /state` twice a second and show REPLAY, since
 
 ```bash
 uv run python tools/run_local.py --live --webcam 0 --zones zones.json
+```
+
+**Live, from this browser's camera or a video file** (no camera access needed for Python): run the runner with `--live --from-web` and set `WEB_VISION_URL`, then open http://localhost:5173/. Pick a video (USE THIS VIDEO) or ADD CAMERA, box the kitchen over its picture, SAVE, then START. That tab sends the frames to vision (`POST /frames`) and must stay open; its OPEN EXPO WINDOW and OPEN TABLET WINDOW buttons open the stations in windows of their own. A camera keeps its pace with that tab in the background: Chromium browsers (Chrome, Edge, Brave) read its track in a worker. A video file, or a camera in a browser without `MediaStreamTrackProcessor`, is drawn from the page's `<video>` on a timer in a Web Worker, and in a hidden tab Chrome still slows that to about a frame a second (measured for a camera and a video file): keep that tab in front, with `/expo` in its own window side by side. The run screen warns once that tab has been hidden. The shift starts at the first frame, so put the props in view before START. The browser opens a camera only on `http://localhost` or HTTPS.
+
+```bash
+uv run python tools/run_local.py --live --from-web
 ```
 
 **With vision running**, add `WEB_VISION_URL` (for example `http://localhost:8002`): `/expo` shows the live camera with boxes, and the gate panel shows FAULT whenever vision's frames stop. The boxes come one of two ways, set by `WEB_FAST_BOXES` (restart `npm run dev` after changing it):
