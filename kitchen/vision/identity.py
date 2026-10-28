@@ -138,6 +138,16 @@ class IdentityBook:
         self._by_track[track_id] = identity
         return identity
 
+    def kind_of(self, track_id: int) -> str | None:
+        """The kind of entity a track carries, or None for a track with no identity yet (one started this frame)."""
+        identity = self._by_track.get(track_id)
+        return identity.kind if identity is not None else None
+
+    def is_free_bin_slot(self, zone: Zone | None) -> bool:
+        """Whether a new bowl or plate first seen in `zone` would be a bin: a bin slot no live track holds."""
+        number = slot_number(zone)
+        return number is not None and f"bin-{number}" not in self._bin_holders
+
     def person_label(self, track_id: int) -> str:
         """The person ID p<k> of a pose track. A new pose track is always a new person, so a re-acquired person gets
         new hand IDs."""

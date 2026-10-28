@@ -94,6 +94,9 @@ def test_a_carried_knife_keeps_one_identity_in_motion_mode():
 
 def test_a_carried_plate_keeps_one_identity_in_motion_mode():
     assert len(carried_ids(MOTION, 1.6, size=(0.15, 0.15), class_name="bowl")) == 1
+    # The default tracker keeps a lone plate's track too (tracking.py), but only until the plate reaches the rack: a
+    # newcomer in a clean stack always starts a new track there.
+    assert len(carried_ids(IOU, 1.6, size=(0.15, 0.15), class_name="bowl", seconds=0.66)) == 1
     assert len(carried_ids(IOU, 1.6, size=(0.15, 0.15), class_name="bowl")) > 1
 
 
