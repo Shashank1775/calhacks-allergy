@@ -1,9 +1,15 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { StateSourceContext } from "../state/hooks";
 import { empty_tables, type StateSource, type Tables } from "../state/state_source";
 import { render_with_source } from "../test_utils";
 import type { EntityState } from "../types/TEMPORARY";
-import { CameraPanel, fast_boxes, risk_of, TRACK_LOST_MS, tracked_now } from "./camera_panel";
+import type { VisionHealth } from "../vision_health";
+import { CameraPanel, fast_boxes, risk_of, STREAM_RETRY_MS, TRACK_LOST_MS, tracked_now } from "./camera_panel";
+
+// Vision's health, set by each test: "ok" while frames flow, "stale" once they stop.
+const vision = vi.hoisted(() => ({ health: "ok" as VisionHealth }));
+vi.mock("../vision_health", () => ({ useVisionHealth: () => vision.health }));
 
 function state(
   entity_id: string,
@@ -38,7 +44,20 @@ function source_with(states: EntityState[]): StateSource {
   };
 }
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+  vision.health = "ok";
+});
+
+/** The camera panel again, after the test changed vision's health. */
+function panel_on(source: StateSource) {
+  return (
+    <StateSourceContext.Provider value={source}>
+      <CameraPanel />
+    </StateSourceContext.Provider>
+  );
+}
 
 describe("CameraPanel", () => {
   it("in the fast view shows vision's stream with the detector's boxes drawn in, and no entity boxes", () => {
@@ -89,6 +108,32 @@ describe("CameraPanel", () => {
     expect(screen.getByText(/Camera offline/)).toBeInTheDocument();
   });
 
+  it("asks for the stream again after STREAM_RETRY_MS, so the picture comes back with no reload", () => {
+    vi.useFakeTimers();
+    render_with_source(<CameraPanel />, source_with([]));
+    fireEvent.error(screen.getByAltText("Live view of the counter"));
+    expect(screen.queryByAltText("Live view of the counter")).toBeNull();
+
+    act(() => vi.advanceTimersByTime(STREAM_RETRY_MS - 1));
+    expect(screen.getByText(/Camera offline/)).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByText(/Camera offline/)).toBeNull();
+    expect(screen.getByAltText("Live view of the counter")).toHaveAttribute("src", "http://vision.test/stream.mjpg");
+  });
+
+  it("keeps trying while the stream keeps failing", () => {
+    vi.useFakeTimers();
+    render_with_source(<CameraPanel />, source_with([]));
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      fireEvent.error(screen.getByAltText("Live view of the counter"));
+      expect(screen.getByText(/Camera offline/)).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(STREAM_RETRY_MS));
+    }
+    expect(screen.getByAltText("Live view of the counter")).toBeInTheDocument();
+  });
+
   it("lists and draws only entities tracked now, and counts them", () => {
     const { container } = render_with_source(
       <CameraPanel />,
@@ -112,6 +157,33 @@ describe("CameraPanel", () => {
     expect(screen.getByText("CAM-01 · 0 tracked")).toBeInTheDocument();
     expect(screen.getByAltText("Live view of the counter")).toBeInTheDocument();
     expect(container.querySelectorAll(".entity_box")).toHaveLength(0);
+  });
+
+  it("opens a new stream when vision's frames come back after stopping, since a cut stream just freezes", () => {
+    const source = source_with([]);
+    const { rerender } = render_with_source(<CameraPanel />, source);
+    const frozen = screen.getByAltText("Live view of the counter");
+
+    vision.health = "stale";
+    rerender(panel_on(source));
+    expect(screen.getByAltText("Live view of the counter")).toBe(frozen);
+
+    vision.health = "ok";
+    rerender(panel_on(source));
+    const fresh = screen.getByAltText("Live view of the counter");
+    expect(fresh).not.toBe(frozen);
+    expect(fresh).toHaveAttribute("src", "http://vision.test/stream.mjpg");
+  });
+
+  it("keeps the stream it opened when vision's first good health arrives", () => {
+    vision.health = "stale";
+    const source = source_with([]);
+    const { rerender } = render_with_source(<CameraPanel />, source);
+    const opened = screen.getByAltText("Live view of the counter");
+
+    vision.health = "ok";
+    rerender(panel_on(source));
+    expect(screen.getByAltText("Live view of the counter")).toBe(opened);
   });
 
   it("treats unknown history as the highest risk", () => {
